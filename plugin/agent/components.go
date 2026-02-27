@@ -4,19 +4,21 @@ import (
 	"context"
 	"fmt"
 
-	"ryn.dev/ryn"
+	"ryn.dev/ryn/component"
+	"ryn.dev/ryn/registry"
+	"ryn.dev/ryn/tools"
 )
 
 // ToolingComponent enables Toolset-based tool execution in agent runtime.
 type ToolingComponent struct {
-	Toolset *ryn.Toolset
-	Options ryn.ToolStreamOptions
+	Toolset *tools.Toolset
+	Options tools.ToolStreamOptions
 }
 
 func (c *ToolingComponent) Name() string { return "agent.tooling" }
 
-func (c *ToolingComponent) Capabilities() []ryn.Capability {
-	return []ryn.Capability{ryn.CapabilityAgentTool}
+func (c *ToolingComponent) Capabilities() []component.Capability {
+	return []component.Capability{component.CapabilityAgentTool}
 }
 
 func (c *ToolingComponent) Start(ctx context.Context) error {
@@ -32,20 +34,20 @@ func (c *ToolingComponent) Apply(rt *Runtime) error {
 	}
 	set := c.Toolset
 	if set == nil {
-		set = ryn.NewToolset()
+		set = tools.NewToolset()
 	}
-	rt.provider = ryn.NewToolingProvider(rt.provider, set, c.Options)
+	rt.provider = tools.NewToolingProvider(rt.provider, set, c.Options)
 	return nil
 }
 
 // MultiTenantComponent enables runtime client selection via core router.
 type MultiTenantComponent struct {
-	Router *ryn.MultiTenantProvider
+	Router *registry.MultiTenantProvider
 }
 
 func (c *MultiTenantComponent) Name() string { return "agent.multitenancy" }
 
-func (c *MultiTenantComponent) Capabilities() []ryn.Capability {
+func (c *MultiTenantComponent) Capabilities() []component.Capability {
 	return nil
 }
 

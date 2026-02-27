@@ -6,17 +6,18 @@ import (
 	"time"
 
 	"ryn.dev/ryn"
+	"ryn.dev/ryn/tools"
 )
 
 // Orchestrator executes a declarative agent definition using a Runtime
 // and optional Toolset for direct tool invocation.
 type Orchestrator struct {
 	Runtime *Runtime
-	Toolset *ryn.Toolset
+	Toolset *tools.Toolset
 }
 
 // NewOrchestrator creates an orchestrator bound to an agent runtime.
-func NewOrchestrator(rt *Runtime, ts *ryn.Toolset) *Orchestrator {
+func NewOrchestrator(rt *Runtime, ts *tools.Toolset) *Orchestrator {
 	return &Orchestrator{Runtime: rt, Toolset: ts}
 }
 

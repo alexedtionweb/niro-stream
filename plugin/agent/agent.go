@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"ryn.dev/ryn"
+	"ryn.dev/ryn/component"
 )
 
 // Memory stores conversation state by session ID.
@@ -29,7 +30,7 @@ type Peer interface {
 
 // Component is an agent plugin component mounted into Runtime.
 type Component interface {
-	ryn.Component
+	component.Component
 	Apply(rt *Runtime) error
 }
 
@@ -79,7 +80,7 @@ type Runtime struct {
 	memory     Memory
 	peers      map[string]Peer
 	components []Component
-	host       *ryn.ComponentHost
+	host       *component.Host
 }
 
 // TurnResult contains response text and metadata.
@@ -97,7 +98,7 @@ func New(provider ryn.Provider, opts ...Option) (*Runtime, error) {
 	rt := &Runtime{
 		provider: provider,
 		peers:    make(map[string]Peer),
-		host:     ryn.NewComponentHost(),
+		host:     component.NewHost(),
 	}
 	for _, o := range opts {
 		o(rt)
