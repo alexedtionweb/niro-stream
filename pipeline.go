@@ -62,7 +62,6 @@ func (p *Pipeline) Run(ctx context.Context, in *Stream) *Stream {
 	wg.Add(len(p.procs))
 
 	for i, proc := range p.procs {
-		// Determine input for this stage
 		input := in
 		if i > 0 {
 			input = streams[i-1]
@@ -74,12 +73,11 @@ func (p *Pipeline) Run(ctx context.Context, in *Stream) *Stream {
 			defer output.Close()
 			if err := proc.Process(ctx, input, output); err != nil {
 				output.Error(err)
-				cancel() // tear down entire pipeline
+				cancel()
 			}
 		}()
 	}
 
-	// Release context resources after all goroutines complete
 	go func() {
 		wg.Wait()
 		cancel()

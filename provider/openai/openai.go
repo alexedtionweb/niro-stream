@@ -1,374 +1,334 @@
-// Package openai implements a Ryn Provider for OpenAI-compatible APIs.
+// Package openai implements a Ryn Provider backed by the official
+// OpenAI Go SDK (github.com/openai/openai-go).
 //
-// It uses only the Go standard library (net/http, encoding/json) and
-// the internal SSE reader. No external dependencies.
+// This provider:
+//   - Uses the official SDK for auth, retries, and API compatibility
+//   - Streams text tokens and tool calls
+//   - Supports multimodal input (text, image, audio)
+//   - Reports token usage via KindUsage frames
+//   - Sets ResponseMeta with model, finish reason, and response ID
+//   - Works with any OpenAI-compatible endpoint (Azure, Ollama, vLLM)
 //
-// Supports:
-//   - Streaming text generation
-//   - Streaming tool calls (accumulated and emitted as complete ToolCallFrames)
-//   - Multimodal input (text, image, audio)
-//   - Any OpenAI-compatible endpoint (OpenAI, Azure OpenAI, Ollama, vLLM, etc.)
+// Usage:
+//
+//	llm := openai.New(os.Getenv("OPENAI_API_KEY"))
+//	stream, err := llm.Generate(ctx, &ryn.Request{
+//	    Model: "gpt-4o",
+//	    Messages: []ryn.Message{ryn.UserText("Hello")},
+//	})
 package openai
 
 import (
-	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
-	"strings"
+
+	oai "github.com/openai/openai-go"
+	"github.com/openai/openai-go/option"
+	"github.com/openai/openai-go/packages/ssestream"
+	"github.com/openai/openai-go/shared"
 
 	"ryn.dev/ryn"
-	"ryn.dev/ryn/internal/sse"
 )
 
-// Provider implements ryn.Provider for OpenAI-compatible APIs.
+// Provider implements ryn.Provider using the official OpenAI SDK.
 type Provider struct {
-	apiKey  string
-	baseURL string
-	client  *http.Client
-	model   string
+	client oai.Client
+	model  string
 }
 
-// Verify interface compliance at compile time.
 var _ ryn.Provider = (*Provider)(nil)
 
 // Option configures a Provider.
-type Option func(*Provider)
+type Option func(*providerConfig)
 
-// WithBaseURL overrides the API base URL.
-// Default: "https://api.openai.com/v1"
-//
-// Use this for Azure OpenAI, Ollama, vLLM, or any compatible endpoint.
-func WithBaseURL(url string) Option {
-	return func(p *Provider) { p.baseURL = strings.TrimRight(url, "/") }
+type providerConfig struct {
+	opts  []option.RequestOption
+	model string
 }
 
-// WithClient sets a custom HTTP client.
-func WithClient(c *http.Client) Option {
-	return func(p *Provider) { p.client = c }
+// WithBaseURL overrides the API base URL.
+// Use for Azure OpenAI, Ollama, vLLM, or any compatible endpoint.
+func WithBaseURL(url string) Option {
+	return func(c *providerConfig) {
+		c.opts = append(c.opts, option.WithBaseURL(url))
+	}
 }
 
 // WithModel sets the default model.
-// Can be overridden per-request via Request.Model.
 func WithModel(model string) Option {
-	return func(p *Provider) { p.model = model }
+	return func(c *providerConfig) { c.model = model }
+}
+
+// WithRequestOption appends a raw SDK request option.
+// Use for custom headers, timeouts, middleware, etc.
+func WithRequestOption(opt option.RequestOption) Option {
+	return func(c *providerConfig) {
+		c.opts = append(c.opts, opt)
+	}
 }
 
 // New creates an OpenAI provider.
 func New(apiKey string, opts ...Option) *Provider {
-	p := &Provider{
-		apiKey:  apiKey,
-		baseURL: "https://api.openai.com/v1",
-		client:  http.DefaultClient,
-		model:   "gpt-4o",
-	}
+	cfg := &providerConfig{model: "gpt-4o"}
 	for _, o := range opts {
-		o(p)
+		o(cfg)
 	}
-	return p
+	clientOpts := append([]option.RequestOption{option.WithAPIKey(apiKey)}, cfg.opts...)
+	return &Provider{
+		client: oai.NewClient(clientOpts...),
+		model:  cfg.model,
+	}
+}
+
+// NewFromClient creates a provider from an existing OpenAI SDK client.
+// Use when you need full control over client construction.
+func NewFromClient(client oai.Client, model string) *Provider {
+	return &Provider{client: client, model: model}
 }
 
 // Generate implements ryn.Provider.
-// It opens an SSE connection and streams Frames as they arrive.
 func (p *Provider) Generate(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
 	model := req.Model
 	if model == "" {
 		model = p.model
 	}
 
-	body, err := json.Marshal(buildRequest(model, req))
-	if err != nil {
-		return nil, fmt.Errorf("ryn/openai: marshal: %w", err)
-	}
-
-	httpReq, err := http.NewRequestWithContext(ctx, "POST",
-		p.baseURL+"/chat/completions", bytes.NewReader(body))
-	if err != nil {
-		return nil, fmt.Errorf("ryn/openai: request: %w", err)
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Authorization", "Bearer "+p.apiKey)
-	httpReq.Header.Set("Accept", "text/event-stream")
-
-	resp, err := p.client.Do(httpReq)
-	if err != nil {
-		return nil, fmt.Errorf("ryn/openai: do: %w", err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		defer resp.Body.Close()
-		b, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("ryn/openai: status %d: %s", resp.StatusCode, b)
-	}
+	params := buildParams(model, req)
+	sdk := p.client.Chat.Completions.NewStreaming(ctx, params)
 
 	stream, emitter := ryn.NewStream(32)
-	go p.consume(ctx, resp.Body, emitter)
+	go consume(ctx, sdk, emitter)
 	return stream, nil
 }
 
-// consume reads SSE events from the response body, parses them,
-// and emits Frames to the stream. Runs in its own goroutine.
-func (p *Provider) consume(ctx context.Context, body io.ReadCloser, out *ryn.Emitter) {
+// consume reads from the SDK stream and emits ryn Frames.
+func consume(ctx context.Context, sdk *ssestream.Stream[oai.ChatCompletionChunk], out *ryn.Emitter) {
 	defer out.Close()
-	defer body.Close()
+	defer sdk.Close()
 
-	reader := sse.NewReader(body)
-	var tools []toolAccum
+	acc := oai.ChatCompletionAccumulator{}
 
-	for {
-		ev, err := reader.Next()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			out.Error(fmt.Errorf("ryn/openai: sse: %w", err))
-			return
-		}
+	for sdk.Next() {
+		chunk := sdk.Current()
+		acc.AddChunk(chunk)
 
-		var c chunk
-		if err := json.Unmarshal(ev.Data, &c); err != nil {
-			out.Error(fmt.Errorf("ryn/openai: decode: %w", err))
-			return
+		// Text token delta
+		if len(chunk.Choices) > 0 {
+			delta := chunk.Choices[0].Delta
+			if delta.Content != "" {
+				if err := out.Emit(ctx, ryn.TextFrame(delta.Content)); err != nil {
+					return
+				}
+			}
 		}
 
-		if len(c.Choices) == 0 {
-			continue
-		}
-		choice := c.Choices[0]
-
-		// --- Text tokens ---
-		if choice.Delta.Content != "" {
-			if err := out.Emit(ctx, ryn.TextFrame(choice.Delta.Content)); err != nil {
+		// Complete tool call detection via accumulator
+		if tool, ok := acc.JustFinishedToolCall(); ok {
+			tc := &ryn.ToolCall{
+				ID:   tool.Id,
+				Name: tool.Name,
+				Args: json.RawMessage(tool.Arguments),
+			}
+			if err := out.Emit(ctx, ryn.ToolCallFrame(tc)); err != nil {
 				return
 			}
 		}
 
-		// --- Tool calls (accumulated across chunks) ---
-		for _, tc := range choice.Delta.ToolCalls {
-			// Grow accumulator slice as needed
-			for tc.Index >= len(tools) {
-				tools = append(tools, toolAccum{})
+		// Token usage (present in the final chunk when StreamOptions.IncludeUsage is set)
+		if chunk.Usage.TotalTokens > 0 {
+			usage := &ryn.Usage{
+				InputTokens:  int(chunk.Usage.PromptTokens),
+				OutputTokens: int(chunk.Usage.CompletionTokens),
+				TotalTokens:  int(chunk.Usage.TotalTokens),
 			}
-			if tc.ID != "" {
-				tools[tc.Index].ID = tc.ID
+			if err := out.Emit(ctx, ryn.UsageFrame(usage)); err != nil {
+				return
 			}
-			if tc.Function.Name != "" {
-				tools[tc.Index].Name = tc.Function.Name
-			}
-			tools[tc.Index].Args.WriteString(tc.Function.Arguments)
-		}
-
-		// Emit complete tool calls when the model signals it's done
-		if choice.FinishReason != nil && *choice.FinishReason == "tool_calls" {
-			for i := range tools {
-				frame := ryn.ToolCallFrame(&ryn.ToolCall{
-					ID:   tools[i].ID,
-					Name: tools[i].Name,
-					Args: json.RawMessage(tools[i].Args.String()),
-				})
-				if err := out.Emit(ctx, frame); err != nil {
-					return
-				}
-			}
-			tools = tools[:0]
 		}
 	}
 
-	// Emit end-of-turn signal
-	_ = out.Emit(ctx, ryn.ControlFrame(ryn.SignalEOT))
+	if err := sdk.Err(); err != nil {
+		out.Error(fmt.Errorf("ryn/openai: stream: %w", err))
+		return
+	}
+
+	// Set response metadata from accumulated completion
+	completion := acc.ChatCompletion
+	meta := &ryn.ResponseMeta{
+		ID:    completion.ID,
+		Model: completion.Model,
+		Usage: ryn.Usage{
+			InputTokens:  int(completion.Usage.PromptTokens),
+			OutputTokens: int(completion.Usage.CompletionTokens),
+			TotalTokens:  int(completion.Usage.TotalTokens),
+		},
+	}
+	if len(completion.Choices) > 0 {
+		meta.FinishReason = string(completion.Choices[0].FinishReason)
+	}
+	out.SetResponse(meta)
 }
 
-// ──────────────────────────────────────────────────────────
-// Request building — converts ryn types to OpenAI JSON format
-// ──────────────────────────────────────────────────────────
+// --- Request building ---
 
-func buildRequest(model string, req *ryn.Request) chatRequest {
-	cr := chatRequest{
-		Model:       model,
-		Stream:      true,
-		MaxTokens:   req.Options.MaxTokens,
-		Temperature: req.Options.Temperature,
-		TopP:        req.Options.TopP,
-		Stop:        req.Options.Stop,
+func buildParams(model string, req *ryn.Request) oai.ChatCompletionNewParams {
+	params := oai.ChatCompletionNewParams{
+		Model: model,
+		StreamOptions: oai.ChatCompletionStreamOptionsParam{
+			IncludeUsage: oai.Bool(true),
+		},
 	}
 
-	for _, msg := range req.Messages {
-		cr.Messages = append(cr.Messages, convertMessage(msg))
+	// Messages
+	msgs := req.EffectiveMessages()
+	for _, msg := range msgs {
+		params.Messages = append(params.Messages, convertMessage(msg))
 	}
 
+	// Options
+	if req.Options.MaxTokens > 0 {
+		params.MaxCompletionTokens = oai.Int(int64(req.Options.MaxTokens))
+	}
+	if req.Options.Temperature != nil {
+		params.Temperature = oai.Float(*req.Options.Temperature)
+	}
+	if req.Options.TopP != nil {
+		params.TopP = oai.Float(*req.Options.TopP)
+	}
+	if req.Options.FrequencyPenalty != nil {
+		params.FrequencyPenalty = oai.Float(*req.Options.FrequencyPenalty)
+	}
+	if req.Options.PresencePenalty != nil {
+		params.PresencePenalty = oai.Float(*req.Options.PresencePenalty)
+	}
+	if len(req.Options.Stop) > 0 {
+		params.Stop = oai.ChatCompletionNewParamsStopUnion{
+			OfChatCompletionNewsStopArray: req.Options.Stop,
+		}
+	}
+
+	// Tools
 	for _, tool := range req.Tools {
-		ct := chatTool{Type: "function"}
-		ct.Function.Name = tool.Name
-		ct.Function.Description = tool.Description
-		ct.Function.Parameters = tool.Parameters
-		cr.Tools = append(cr.Tools, ct)
+		params.Tools = append(params.Tools, oai.ChatCompletionToolParam{
+			Function: shared.FunctionDefinitionParam{
+				Name:        tool.Name,
+				Description: oai.String(tool.Description),
+				Parameters:  shared.FunctionParameters(rawToMap(tool.Parameters)),
+			},
+		})
 	}
 
-	return cr
-}
-
-func convertMessage(msg ryn.Message) chatMessage {
-	cm := chatMessage{Role: string(msg.Role)}
-
-	// Tool result message
-	if msg.Role == ryn.RoleTool && len(msg.Parts) > 0 && msg.Parts[0].Result != nil {
-		r := msg.Parts[0].Result
-		cm.ToolCallID = r.CallID
-		cm.Content = r.Content
-		return cm
-	}
-
-	// Simple text-only message (most common)
-	if len(msg.Parts) == 1 && msg.Parts[0].Kind == ryn.KindText {
-		cm.Content = msg.Parts[0].Text
-		return cm
-	}
-
-	// Multimodal message — convert each part
-	var parts []chatContent
-	for _, p := range msg.Parts {
-		switch p.Kind {
-		case ryn.KindText:
-			parts = append(parts, chatContent{
-				Type: "text",
-				Text: p.Text,
-			})
-
-		case ryn.KindImage:
-			dataURL := "data:" + p.Mime + ";base64," + base64.StdEncoding.EncodeToString(p.Data)
-			parts = append(parts, chatContent{
-				Type:     "image_url",
-				ImageURL: &chatImageURL{URL: dataURL},
-			})
-
-		case ryn.KindAudio:
-			format := audioFormat(p.Mime)
-			parts = append(parts, chatContent{
-				Type: "input_audio",
-				InputAudio: &chatAudio{
-					Data:   base64.StdEncoding.EncodeToString(p.Data),
-					Format: format,
-				},
-			})
-		}
-	}
-	cm.Content = parts
-
-	// Attach tool calls from assistant messages
-	if msg.Role == ryn.RoleAssistant {
-		for _, p := range msg.Parts {
-			if p.Kind == ryn.KindToolCall && p.Tool != nil {
-				tc := chatToolCall{
-					ID:   p.Tool.ID,
-					Type: "function",
-				}
-				tc.Function.Name = p.Tool.Name
-				tc.Function.Arguments = string(p.Tool.Args)
-				cm.ToolCalls = append(cm.ToolCalls, tc)
+	// Tool choice
+	if req.ToolChoice != "" {
+		switch req.ToolChoice {
+		case ryn.ToolChoiceAuto:
+			params.ToolChoice = oai.ChatCompletionToolChoiceOptionUnionParam{
+				OfAuto: oai.String(string(oai.ChatCompletionToolChoiceOptionAutoAuto)),
+			}
+		case ryn.ToolChoiceNone:
+			params.ToolChoice = oai.ChatCompletionToolChoiceOptionUnionParam{
+				OfAuto: oai.String(string(oai.ChatCompletionToolChoiceOptionAutoNone)),
+			}
+		case ryn.ToolChoiceRequired:
+			params.ToolChoice = oai.ChatCompletionToolChoiceOptionUnionParam{
+				OfAuto: oai.String(string(oai.ChatCompletionToolChoiceOptionAutoRequired)),
+			}
+		default:
+			// Check for func:name pattern
+			if len(req.ToolChoice) > 5 && req.ToolChoice[:5] == "func:" {
+				name := string(req.ToolChoice[5:])
+				params.ToolChoice = oai.ChatCompletionToolChoiceOptionParamOfChatCompletionNamedToolChoice(
+					oai.ChatCompletionNamedToolChoiceFunctionParam{Name: name},
+				)
 			}
 		}
 	}
 
-	return cm
+	return params
 }
 
-func audioFormat(mime string) string {
-	switch {
-	case strings.Contains(mime, "mp3"):
-		return "mp3"
-	case strings.Contains(mime, "opus"):
-		return "opus"
-	case strings.Contains(mime, "flac"):
-		return "flac"
+func convertMessage(msg ryn.Message) oai.ChatCompletionMessageParamUnion {
+	switch msg.Role {
+	case ryn.RoleSystem:
+		return oai.SystemMessage(extractText(msg))
+
+	case ryn.RoleUser:
+		// Single text part — use simple constructor
+		if len(msg.Parts) == 1 && msg.Parts[0].Kind == ryn.KindText {
+			return oai.UserMessage(msg.Parts[0].Text)
+		}
+		// Multimodal — build content parts
+		var parts []oai.ChatCompletionContentPartUnionParam
+		for _, p := range msg.Parts {
+			switch p.Kind {
+			case ryn.KindText:
+				parts = append(parts, oai.TextContentPart(p.Text))
+			case ryn.KindImage:
+				url := p.URL
+				if url == "" && len(p.Data) > 0 {
+					url = dataURI(p.Data, p.Mime)
+				}
+				parts = append(parts, oai.ImageContentPart(oai.ChatCompletionContentPartImageImageURLParam{
+					URL: url,
+				}))
+			}
+		}
+		return oai.UserMessage(parts)
+
+	case ryn.RoleAssistant:
+		text := extractText(msg)
+		m := oai.AssistantMessage(text)
+		// Attach tool calls if present
+		if m.OfAssistant != nil {
+			for _, p := range msg.Parts {
+				if p.Kind == ryn.KindToolCall && p.Tool != nil {
+					tc := oai.ChatCompletionMessageToolCallParam{
+						ID: p.Tool.ID,
+						Function: oai.ChatCompletionMessageToolCallFunctionParam{
+							Name:      p.Tool.Name,
+							Arguments: string(p.Tool.Args),
+						},
+					}
+					m.OfAssistant.ToolCalls = append(m.OfAssistant.ToolCalls, tc)
+				}
+			}
+		}
+		return m
+
+	case ryn.RoleTool:
+		if len(msg.Parts) > 0 && msg.Parts[0].Result != nil {
+			r := msg.Parts[0].Result
+			return oai.ToolMessage(r.Content, r.CallID)
+		}
+		return oai.ToolMessage(extractText(msg), "")
+
 	default:
-		return "wav"
+		return oai.UserMessage(extractText(msg))
 	}
 }
 
-// ──────────────────────────────────────────────────────────
-// OpenAI API JSON types (internal)
-// ──────────────────────────────────────────────────────────
-
-type chatRequest struct {
-	Model       string        `json:"model"`
-	Messages    []chatMessage `json:"messages"`
-	Stream      bool          `json:"stream"`
-	Tools       []chatTool    `json:"tools,omitempty"`
-	MaxTokens   int           `json:"max_tokens,omitempty"`
-	Temperature *float64      `json:"temperature,omitempty"`
-	TopP        *float64      `json:"top_p,omitempty"`
-	Stop        []string      `json:"stop,omitempty"`
+func extractText(msg ryn.Message) string {
+	for _, p := range msg.Parts {
+		if p.Kind == ryn.KindText {
+			return p.Text
+		}
+	}
+	return ""
 }
 
-type chatMessage struct {
-	Role       string         `json:"role"`
-	Content    any            `json:"content"`
-	ToolCalls  []chatToolCall `json:"tool_calls,omitempty"`
-	ToolCallID string         `json:"tool_call_id,omitempty"`
+func dataURI(data []byte, mime string) string {
+	if mime == "" {
+		mime = "application/octet-stream"
+	}
+	return "data:" + mime + ";base64," + encodeBase64(data)
 }
 
-type chatContent struct {
-	Type       string        `json:"type"`
-	Text       string        `json:"text,omitempty"`
-	ImageURL   *chatImageURL `json:"image_url,omitempty"`
-	InputAudio *chatAudio    `json:"input_audio,omitempty"`
-}
-
-type chatImageURL struct {
-	URL string `json:"url"`
-}
-
-type chatAudio struct {
-	Data   string `json:"data"`
-	Format string `json:"format"`
-}
-
-type chatToolCall struct {
-	ID       string `json:"id"`
-	Type     string `json:"type"`
-	Function struct {
-		Name      string `json:"name"`
-		Arguments string `json:"arguments"`
-	} `json:"function"`
-}
-
-type chatTool struct {
-	Type     string `json:"type"`
-	Function struct {
-		Name        string          `json:"name"`
-		Description string          `json:"description"`
-		Parameters  json.RawMessage `json:"parameters"`
-	} `json:"function"`
-}
-
-// --- Streaming response types ---
-
-type chunk struct {
-	Choices []chunkChoice `json:"choices"`
-}
-
-type chunkChoice struct {
-	Delta struct {
-		Content   string      `json:"content"`
-		ToolCalls []toolDelta `json:"tool_calls"`
-	} `json:"delta"`
-	FinishReason *string `json:"finish_reason"`
-}
-
-type toolDelta struct {
-	Index    int    `json:"index"`
-	ID       string `json:"id"`
-	Function struct {
-		Name      string `json:"name"`
-		Arguments string `json:"arguments"`
-	} `json:"function"`
-}
-
-// toolAccum accumulates streaming tool call data across SSE chunks.
-type toolAccum struct {
-	ID   string
-	Name string
-	Args strings.Builder
+func rawToMap(raw json.RawMessage) map[string]any {
+	if len(raw) == 0 {
+		return nil
+	}
+	var m map[string]any
+	_ = json.Unmarshal(raw, &m)
+	return m
 }

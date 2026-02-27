@@ -1,13 +1,8 @@
-// Tool calling example — LLM invokes tools via streaming.
-//
-// Demonstrates streaming tool calls: the LLM decides to call a tool,
-// Ryn emits a ToolCallFrame, you execute the tool, and feed the result
-// back for a final response.
+// Command tools demonstrates tool calling with automatic round-trip.
 //
 // Usage:
 //
-//	export OPENAI_API_KEY=sk-...
-//	go run ./examples/tools
+//	OPENAI_API_KEY=sk-... go run ./examples/tools
 package main
 
 import (
@@ -15,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"time"
 
 	"ryn.dev/ryn"
 	"ryn.dev/ryn/provider/openai"
@@ -23,18 +19,12 @@ import (
 func main() {
 	ctx := context.Background()
 
-	key := os.Getenv("OPENAI_API_KEY")
-	if key == "" {
-		fmt.Fprintln(os.Stderr, "OPENAI_API_KEY not set")
-		os.Exit(1)
-	}
+	llm := openai.New(os.Getenv("OPENAI_API_KEY"))
 
-	llm := openai.New(key)
-
-	// Define a tool
+	// Define a weather tool
 	weatherTool := ryn.Tool{
 		Name:        "get_weather",
-		Description: "Get the current weather for a city.",
+		Description: "Get the current weather for a city",
 		Parameters: json.RawMessage(`{
 			"type": "object",
 			"properties": {
@@ -44,88 +34,94 @@ func main() {
 		}`),
 	}
 
-	// First request: let the LLM decide to call the tool
+	// First turn: ask about weather
 	messages := []ryn.Message{
-		ryn.Text(ryn.RoleUser, "What's the weather in Tokyo?"),
+		ryn.UserText("What's the weather in San Francisco and Tokyo?"),
 	}
 
-	stream, err := llm.Generate(ctx, &ryn.Request{
-		Model:    "gpt-4o",
-		Messages: messages,
-		Tools:    []ryn.Tool{weatherTool},
-	})
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
-	}
+	fmt.Println("User: What's the weather in San Francisco and Tokyo?")
+	fmt.Println()
 
-	// Collect tool calls and text from the stream
-	var toolCalls []*ryn.ToolCall
-	for stream.Next(ctx) {
-		f := stream.Frame()
-		switch f.Kind {
-		case ryn.KindText:
-			fmt.Print(f.Text)
-		case ryn.KindToolCall:
-			fmt.Fprintf(os.Stderr, "[tool_call] %s(%s)\n", f.Tool.Name, f.Tool.Args)
-			toolCalls = append(toolCalls, f.Tool)
-		}
-	}
-	if err := stream.Err(); err != nil {
-		fmt.Fprintf(os.Stderr, "stream error: %v\n", err)
-		os.Exit(1)
-	}
-
-	// If the LLM called tools, execute them and continue the conversation
-	if len(toolCalls) > 0 {
-		// Build assistant message with tool calls
-		var assistantParts []ryn.Part
-		for _, tc := range toolCalls {
-			assistantParts = append(assistantParts, ryn.ToolCallPart(tc))
-		}
-		messages = append(messages, ryn.Multi(ryn.RoleAssistant, assistantParts...))
-
-		// Execute each tool and add results
-		for _, tc := range toolCalls {
-			result := executeWeatherTool(tc)
-			messages = append(messages, ryn.Multi(ryn.RoleTool, ryn.ToolResultPart(result)))
-		}
-
-		// Second request: get the final response with tool results
-		stream, err = llm.Generate(ctx, &ryn.Request{
+	// Tool loop — keep generating until we get a non-tool-call response
+	for {
+		stream, err := llm.Generate(ctx, &ryn.Request{
 			Model:    "gpt-4o",
 			Messages: messages,
 			Tools:    []ryn.Tool{weatherTool},
+			Options:  ryn.Options{MaxTokens: 512},
 		})
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			fmt.Fprintf(os.Stderr, "generate: %v\n", err)
 			os.Exit(1)
 		}
+
+		// Collect all frames
+		var (
+			textBuf   []byte
+			toolCalls []*ryn.ToolCall
+		)
 
 		for stream.Next(ctx) {
 			f := stream.Frame()
-			if f.Kind == ryn.KindText {
+			switch f.Kind {
+			case ryn.KindText:
 				fmt.Print(f.Text)
+				textBuf = append(textBuf, f.Text...)
+			case ryn.KindToolCall:
+				toolCalls = append(toolCalls, f.Tool)
+				fmt.Fprintf(os.Stderr, "\n[Tool Call] %s(%s)\n", f.Tool.Name, f.Tool.Args)
 			}
 		}
-		fmt.Println()
-
 		if err := stream.Err(); err != nil {
-			fmt.Fprintf(os.Stderr, "stream error: %v\n", err)
+			fmt.Fprintf(os.Stderr, "stream: %v\n", err)
 			os.Exit(1)
 		}
+
+		// No tool calls → done
+		if len(toolCalls) == 0 {
+			fmt.Println()
+			break
+		}
+
+		// Build assistant message with both text and tool calls
+		var parts []ryn.Part
+		if len(textBuf) > 0 {
+			parts = append(parts, ryn.TextPart(string(textBuf)))
+		}
+		for _, tc := range toolCalls {
+			parts = append(parts, ryn.ToolCallPart(tc))
+		}
+		messages = append(messages, ryn.Multi(ryn.RoleAssistant, parts...))
+
+		// Execute tool calls and add results
+		for _, tc := range toolCalls {
+			result := executeTool(tc)
+			fmt.Fprintf(os.Stderr, "[Tool Result] %s → %s\n", tc.Name, result)
+			messages = append(messages, ryn.ToolMessage(tc.ID, result))
+		}
 	}
+
+	fmt.Fprintf(os.Stderr, "\nDone.\n")
 }
 
-// executeWeatherTool simulates a tool execution.
-func executeWeatherTool(tc *ryn.ToolCall) *ryn.ToolResult {
+// executeTool simulates tool execution
+func executeTool(tc *ryn.ToolCall) string {
+	// Simulate network delay
+	time.Sleep(50 * time.Millisecond)
+
 	var args struct {
 		City string `json:"city"`
 	}
 	json.Unmarshal(tc.Args, &args)
 
-	return &ryn.ToolResult{
-		CallID:  tc.ID,
-		Content: fmt.Sprintf(`{"city": %q, "temp_c": 22, "condition": "partly cloudy"}`, args.City),
+	// Fake weather data
+	weather := map[string]string{
+		"San Francisco": `{"temp": 68, "condition": "foggy", "humidity": 80}`,
+		"Tokyo":         `{"temp": 82, "condition": "sunny", "humidity": 60}`,
 	}
+
+	if w, ok := weather[args.City]; ok {
+		return w
+	}
+	return fmt.Sprintf(`{"error": "unknown city: %s"}`, args.City)
 }

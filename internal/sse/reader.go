@@ -41,9 +41,8 @@ func (r *Reader) Next() (Event, error) {
 		if !bytes.HasPrefix(line, dataPrefix) {
 			continue
 		}
-		// Extract payload: "data: ..." or "data:..."
 		payload := bytes.TrimPrefix(line, dataPrefix)
-		payload = bytes.TrimPrefix(payload, space) // optional space per SSE spec
+		payload = bytes.TrimPrefix(payload, space)
 
 		if bytes.Equal(payload, doneMarker) {
 			return Event{}, io.EOF

@@ -6,12 +6,13 @@ import "encoding/json"
 type Kind uint8
 
 const (
-	KindText       Kind = iota + 1 // Text token
+	KindText       Kind = iota + 1 // Text token (the hot path)
 	KindAudio                      // Audio chunk (PCM, opus, etc.)
 	KindImage                      // Image data (PNG, JPEG, etc.)
 	KindVideo                      // Video frame
 	KindToolCall                   // Tool invocation request from LLM
 	KindToolResult                 // Tool invocation result
+	KindUsage                      // Token usage report
 	KindControl                    // Pipeline control signal
 )
 
@@ -30,6 +31,8 @@ func (k Kind) String() string {
 		return "tool_call"
 	case KindToolResult:
 		return "tool_result"
+	case KindUsage:
+		return "usage"
 	case KindControl:
 		return "control"
 	default:
@@ -40,12 +43,12 @@ func (k Kind) String() string {
 // Frame is the fundamental unit of data flowing through a Ryn pipeline.
 //
 // Frame is a tagged union optimized for the common case: text tokens.
-// For text, only Kind and Text are populated — no allocations beyond
+// For text, only Kind and Text are populated — zero allocations beyond
 // the string header. Binary payloads (audio, image, video) use the
 // Data and Mime fields. Tool interactions use Tool and Result.
 //
-// Frames are passed by value through channels. They are small (~80 bytes)
-// and most fields are zero for any given Kind.
+// Frames are passed by value through channels. They are small and
+// most fields are zero for any given Kind.
 type Frame struct {
 	Kind   Kind        // Discriminator — always check this first
 	Text   string      // Token text (KindText)
@@ -53,6 +56,7 @@ type Frame struct {
 	Mime   string      // MIME type for Data (e.g. "audio/pcm", "image/png")
 	Tool   *ToolCall   // Tool call request (KindToolCall)
 	Result *ToolResult // Tool call result (KindToolResult)
+	Usage  *Usage      // Token usage (KindUsage) — emitted by providers at end of stream
 	Signal Signal      // Control signal (KindControl)
 }
 
@@ -81,8 +85,6 @@ func (s Signal) String() string {
 }
 
 // --- Frame constructors ---
-// These are the idiomatic way to create Frames. Each constructor
-// sets only the fields relevant to the Kind.
 
 // TextFrame creates a Frame carrying a text token.
 func TextFrame(s string) Frame {
@@ -114,6 +116,11 @@ func ToolResultFrame(result *ToolResult) Frame {
 	return Frame{Kind: KindToolResult, Result: result}
 }
 
+// UsageFrame creates a Frame carrying token usage data.
+func UsageFrame(u *Usage) Frame {
+	return Frame{Kind: KindUsage, Usage: u}
+}
+
 // ControlFrame creates a Frame carrying a control signal.
 func ControlFrame(sig Signal) Frame {
 	return Frame{Kind: KindControl, Signal: sig}
@@ -131,8 +138,8 @@ type ToolCall struct {
 // ToolResult represents the outcome of a tool invocation.
 type ToolResult struct {
 	CallID  string // Matches ToolCall.ID
-	Content string // Result content
-	Err     string // Error message, if any
+	Content string // Result content (may be JSON or plain text)
+	IsError bool   // Whether this result represents an error
 }
 
 // Tool defines a tool that can be provided to an LLM.
@@ -140,4 +147,69 @@ type Tool struct {
 	Name        string          // Function name
 	Description string          // Human-readable description
 	Parameters  json.RawMessage // JSON Schema for parameters
+}
+
+// ToolChoice controls how the model selects tools.
+type ToolChoice string
+
+const (
+	ToolChoiceAuto     ToolChoice = "auto"     // Model decides (default)
+	ToolChoiceNone     ToolChoice = "none"     // Never call tools
+	ToolChoiceRequired ToolChoice = "required" // Must call at least one tool
+)
+
+// ToolChoiceFunc forces the model to call a specific tool.
+func ToolChoiceFunc(name string) ToolChoice {
+	return ToolChoice("func:" + name)
+}
+
+// --- Usage types ---
+
+// Usage tracks token consumption for a generation.
+type Usage struct {
+	InputTokens  int // Prompt tokens
+	OutputTokens int // Completion tokens
+	TotalTokens  int // InputTokens + OutputTokens (some providers report directly)
+
+	// Provider-specific detail (optional).
+	// E.g. cached tokens, audio tokens, reasoning tokens.
+	Detail map[string]int
+}
+
+// Add accumulates usage from another Usage into this one.
+func (u *Usage) Add(other *Usage) {
+	if other == nil {
+		return
+	}
+	u.InputTokens += other.InputTokens
+	u.OutputTokens += other.OutputTokens
+	u.TotalTokens += other.TotalTokens
+	if len(other.Detail) > 0 {
+		if u.Detail == nil {
+			u.Detail = make(map[string]int, len(other.Detail))
+		}
+		for k, v := range other.Detail {
+			u.Detail[k] += v
+		}
+	}
+}
+
+// ResponseMeta carries metadata about a completed generation.
+// Available after the stream is fully consumed via Stream.Response().
+type ResponseMeta struct {
+	// Model actually used (may differ from requested if provider aliases).
+	Model string
+
+	// FinishReason indicates why generation stopped.
+	// Common values: "stop", "length", "tool_calls", "content_filter".
+	FinishReason string
+
+	// ID is the provider-assigned response ID.
+	ID string
+
+	// Usage is the token usage for this generation.
+	Usage Usage
+
+	// Provider-specific metadata (opaque).
+	ProviderMeta map[string]any
 }

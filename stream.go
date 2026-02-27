@@ -16,6 +16,7 @@ type pipe struct {
 	err    atomic.Pointer[error]
 	once   sync.Once
 	closed atomic.Bool
+	resp   atomic.Pointer[ResponseMeta]
 }
 
 // Stream reads Frames from a pipeline stage.
@@ -29,33 +30,45 @@ type pipe struct {
 //	if err := stream.Err(); err != nil {
 //	    // handle error
 //	}
+//	usage := stream.Usage()
 //
 // Streams respect context cancellation and propagate errors
-// from the writing side (Emitter).
+// from the writing side (Emitter). Usage data is accumulated
+// automatically from KindUsage frames.
 type Stream struct {
 	p     *pipe
 	frame Frame
 	err   error
+	usage Usage
 }
 
 // Next advances the Stream to the next Frame.
 // Returns false when the stream is exhausted, an error occurs,
 // or the context is canceled.
+//
+// KindUsage frames are consumed automatically and accumulated
+// in the Usage — they are not returned to the caller.
 func (s *Stream) Next(ctx context.Context) bool {
-	select {
-	case <-ctx.Done():
-		s.err = ctx.Err()
-		return false
-	case f, ok := <-s.p.ch:
-		if !ok {
-			// Channel closed — check for writer error
-			if ep := s.p.err.Load(); ep != nil {
-				s.err = *ep
-			}
+	for {
+		select {
+		case <-ctx.Done():
+			s.err = ctx.Err()
 			return false
+		case f, ok := <-s.p.ch:
+			if !ok {
+				if ep := s.p.err.Load(); ep != nil {
+					s.err = *ep
+				}
+				return false
+			}
+			// Silently accumulate usage frames
+			if f.Kind == KindUsage && f.Usage != nil {
+				s.usage.Add(f.Usage)
+				continue
+			}
+			s.frame = f
+			return true
 		}
-		s.frame = f
-		return true
 	}
 }
 
@@ -66,6 +79,16 @@ func (s *Stream) Frame() Frame { return s.frame }
 // Err returns the first error encountered during iteration.
 // Returns nil on clean end-of-stream.
 func (s *Stream) Err() error { return s.err }
+
+// Usage returns the accumulated token usage.
+// Fully populated after the stream is exhausted.
+func (s *Stream) Usage() Usage { return s.usage }
+
+// Response returns provider metadata set by the Emitter.
+// Available after the stream is fully consumed.
+func (s *Stream) Response() *ResponseMeta {
+	return s.p.resp.Load()
+}
 
 // Chan exposes the underlying channel for use in select statements.
 // Advanced use only — prefer Next for standard iteration.
@@ -93,6 +116,12 @@ func (e *Emitter) Emit(ctx context.Context, f Frame) error {
 	case e.p.ch <- f:
 		return nil
 	}
+}
+
+// SetResponse stores provider metadata on the stream.
+// Call this before Close, typically after all frames are emitted.
+func (e *Emitter) SetResponse(meta *ResponseMeta) {
+	e.p.resp.Store(meta)
 }
 
 // Error sets an error on the stream and closes it.
@@ -136,7 +165,7 @@ func NewStream(bufSize int) (*Stream, *Emitter) {
 func StreamFromSlice(frames []Frame) *Stream {
 	s, e := NewStream(len(frames))
 	for _, f := range frames {
-		e.p.ch <- f // safe: buffer is exactly len(frames)
+		e.p.ch <- f
 	}
 	e.Close()
 	return s

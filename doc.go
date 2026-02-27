@@ -7,10 +7,11 @@
 // # Core Concepts
 //
 //   - [Frame]: Universal unit of data (text tokens, audio, image, video, tool calls)
-//   - [Stream]: Backpressure-aware, cancellable sequence of Frames
+//   - [Stream]: Backpressure-aware, cancellable sequence of Frames with usage tracking
 //   - [Processor]: Composable stream transformer (the building block)
 //   - [Pipeline]: Concurrent chain of Processors with automatic lifecycle
-//   - [Provider]: LLM backend interface — bring OpenAI, Anthropic, Ollama, or your own
+//   - [Provider]: LLM backend interface (OpenAI, Anthropic, Google, Bedrock, or custom)
+//   - [Hook]: Telemetry / observability interface for tracing every generation
 //
 // # Quick Start
 //
@@ -19,7 +20,7 @@
 //	stream, err := provider.Generate(ctx, &ryn.Request{
 //	    Model: "gpt-4o",
 //	    Messages: []ryn.Message{
-//	        ryn.Text(ryn.RoleUser, "Hello!"),
+//	        ryn.UserText("Hello!"),
 //	    },
 //	})
 //	if err != nil {
@@ -29,6 +30,8 @@
 //	for stream.Next(ctx) {
 //	    fmt.Print(stream.Frame().Text)
 //	}
+//	usage := stream.Usage()
+//	fmt.Printf("tokens: %d in, %d out\n", usage.InputTokens, usage.OutputTokens)
 //
 // # Design Principles
 //

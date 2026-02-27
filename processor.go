@@ -73,7 +73,33 @@ func Tap(fn func(Frame)) Processor {
 }
 
 // TextOnly creates a Processor that only forwards KindText frames.
-// A convenience shorthand for Filter(func(f Frame) bool { return f.Kind == KindText }).
 func TextOnly() Processor {
 	return Filter(func(f Frame) bool { return f.Kind == KindText })
+}
+
+// Accumulate creates a Processor that collects all text into a single
+// frame emitted at the end of the stream. Useful for converting a
+// token stream into a complete response.
+func Accumulate() Processor {
+	return ProcessorFunc(func(ctx context.Context, in *Stream, out *Emitter) error {
+		var buf []byte
+		for in.Next(ctx) {
+			f := in.Frame()
+			if f.Kind == KindText {
+				buf = append(buf, f.Text...)
+			} else {
+				// Non-text frames pass through immediately
+				if err := out.Emit(ctx, f); err != nil {
+					return err
+				}
+			}
+		}
+		if err := in.Err(); err != nil {
+			return err
+		}
+		if len(buf) > 0 {
+			return out.Emit(ctx, TextFrame(string(buf)))
+		}
+		return nil
+	})
 }

@@ -7,33 +7,35 @@
 
 ---
 
-Ryn is a high-performance, streaming-native runtime for building real-time AI systems in Go. Voice agents, telephony pipelines, streaming chat, tool calling, multimodal — with millisecond-level control over every frame of data.
+Ryn is a high-performance, streaming-native runtime for building real-time AI systems in Go. Voice agents, telephony pipelines, streaming chat, tool calling, multimodal, parallel orchestration — with millisecond-level control over every frame of data.
 
 **This is not LangChain for Go.** There are no chains, no prompt templates, no document loaders, no vector store abstractions. Ryn is a runtime for continuous intelligence — closer to `net/http` than a notebook framework.
 
 ## Why Ryn
 
-Most LLM frameworks treat streaming as an afterthought — a compatibility layer on top of request/response. Ryn inverts this: **streaming is the primitive**.
+Most LLM frameworks treat streaming as an afterthought. Ryn inverts this: **streaming is the primitive**. Concurrency is a first-class design goal, not an addon.
 
-|               | LangChain-style   | Ryn                 |
-| ------------- | ----------------- | ------------------- |
-| Primary model | Request/Response  | Streaming           |
-| Data unit     | String / Document | Frame (multimodal)  |
-| Composition   | Chain of calls    | Pipeline of streams |
-| Backpressure  | None              | Built-in            |
-| Allocations   | Heavy             | Minimal             |
-| Target        | Notebooks         | Production systems  |
+|               | LangChain-style   | Ryn                            |
+| ------------- | ----------------- | ------------------------------ |
+| Primary model | Request/Response  | Streaming                      |
+| Data unit     | String / Document | Frame (multimodal)             |
+| Composition   | Chain of calls    | Pipeline of streams            |
+| Concurrency   | None              | Fan / Race / Sequence built-in |
+| Backpressure  | None              | Bounded channels               |
+| Telemetry     | Plugin            | Hook interface (core)          |
+| Providers     | HTTP wrappers     | Official SDK-backed            |
+| Target        | Notebooks         | Production systems             |
 
 ### Design Principles
 
 1. **Streaming-first** — not streaming-compatible
-2. **Minimal abstractions** — maximum control
-3. **Zero magic** — no reflection, no hidden state, no globals
-4. **Composable pipelines** — goroutine-per-stage, channel-connected
-5. **Backpressure-aware** — bounded channels, context cancellation
-6. **Low allocations** — value types, no interface boxing on the hot path
-7. **Go idiomatic** — `context.Context`, interfaces, channels
-8. **Production-first** — not notebook-first
+2. **Concurrency as core strength** — Fan, Race, Sequence out of the box
+3. **SDK-backed providers** — OpenAI, Anthropic, Google, Bedrock via official SDKs
+4. **Observable by default** — Hook interface for telemetry at every stage
+5. **Minimal abstractions** — maximum control
+6. **Zero magic** — no reflection, no hidden state, no globals
+7. **Low allocations** — tagged-union Frame, value types on the hot path
+8. **Go idiomatic** — `context.Context`, interfaces, channels
 
 ## Quick Start
 
@@ -54,10 +56,10 @@ func main() {
     llm := openai.New(os.Getenv("OPENAI_API_KEY"))
 
     stream, err := llm.Generate(ctx, &ryn.Request{
-        Model: "gpt-4o",
-        Messages: []ryn.Message{
-            ryn.Text(ryn.RoleUser, "Explain streaming in three sentences."),
-        },
+        Model:        "gpt-4o",
+        SystemPrompt: "You are a helpful assistant. Be concise.",
+        Messages:     []ryn.Message{ryn.UserText("Explain Go channels in 3 sentences.")},
+        Options:      ryn.Options{MaxTokens: 256, Temperature: ryn.Temp(0.7)},
     })
     if err != nil {
         fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -68,27 +70,71 @@ func main() {
         fmt.Print(stream.Frame().Text)
     }
     fmt.Println()
+
+    // Usage is accumulated automatically from the stream
+    usage := stream.Usage()
+    fmt.Fprintf(os.Stderr, "tokens: in=%d out=%d\n", usage.InputTokens, usage.OutputTokens)
 }
 ```
 
-Tokens arrive as they're generated. No buffering. No callbacks. Just a stream.
+Tokens arrive as they're generated. Usage is tracked silently. No buffering. No callbacks. Just a stream.
+
+## Providers
+
+Ryn ships with five provider implementations backed by official SDKs:
+
+| Provider          | Package              | SDK                                                                           |
+| ----------------- | -------------------- | ----------------------------------------------------------------------------- |
+| OpenAI            | `provider/openai`    | [openai/openai-go](https://github.com/openai/openai-go)                       |
+| Anthropic         | `provider/anthropic` | [anthropics/anthropic-sdk-go](https://github.com/anthropics/anthropic-sdk-go) |
+| Google Gemini     | `provider/google`    | [google/generative-ai-go](https://github.com/google/generative-ai-go)         |
+| AWS Bedrock       | `provider/bedrock`   | [aws-sdk-go-v2](https://github.com/aws/aws-sdk-go-v2)                         |
+| OpenAI-compatible | `provider/compat`    | stdlib HTTP + SSE (no SDK)                                                    |
+
+```go
+// OpenAI
+llm := openai.New(os.Getenv("OPENAI_API_KEY"))
+
+// Anthropic
+llm := anthropic.New(os.Getenv("ANTHROPIC_API_KEY"))
+
+// Google Gemini
+llm := google.New(ctx, os.Getenv("GOOGLE_API_KEY"))
+
+// AWS Bedrock
+llm := bedrock.New(cfg) // from aws-sdk-go-v2 config
+
+// Any OpenAI-compatible endpoint (Ollama, vLLM, LiteLLM, etc.)
+llm := compat.New("http://localhost:11434/v1", "")
+```
+
+All providers implement the same `ryn.Provider` interface. Swap providers by changing one line.
+
+### Custom Providers
+
+```go
+mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+    s, e := ryn.NewStream(0)
+    go func() {
+        defer e.Close()
+        e.Emit(ctx, ryn.TextFrame("hello from mock"))
+    }()
+    return s, nil
+})
+```
 
 ## Core Concepts
 
 ### Frame
 
-The universal unit of data. A `Frame` carries one of: text token, audio chunk, image, video frame, tool call, tool result, or control signal.
+The universal unit of data. A `Frame` is a tagged union — a single struct with a `Kind` discriminator. Zero allocations on the text hot path.
 
 ```go
-// Text token (the hot path — zero allocations beyond the string)
-ryn.TextFrame("Hello")
-
-// Multimodal
-ryn.ImageFrame(pngBytes, "image/png")
-ryn.AudioFrame(pcmChunk, "audio/pcm")
-
-// Tool calling
-ryn.ToolCallFrame(&ryn.ToolCall{ID: "1", Name: "search", Args: args})
+ryn.TextFrame("Hello")                                           // text token
+ryn.AudioFrame(pcmChunk, "audio/pcm")                           // audio
+ryn.ImageFrame(pngBytes, "image/png")                            // image
+ryn.ToolCallFrame(&ryn.ToolCall{ID: "1", Name: "fn", Args: j})  // tool call
+ryn.UsageFrame(&ryn.Usage{InputTokens: 10, OutputTokens: 50})   // usage report
 ```
 
 ### Stream & Emitter
@@ -96,7 +142,7 @@ ryn.ToolCallFrame(&ryn.ToolCall{ID: "1", Name: "search", Args: args})
 A `Stream` is a backpressure-aware, cancellable sequence of Frames. An `Emitter` is the write side.
 
 ```go
-stream, emitter := ryn.NewStream(16) // buffered
+stream, emitter := ryn.NewStream(16) // buffered channel
 
 go func() {
     defer emitter.Close()
@@ -109,76 +155,85 @@ for stream.Next(ctx) {
 }
 ```
 
-Buffer size controls backpressure:
+**Usage auto-accumulation**: KindUsage frames are consumed silently by `stream.Next()` and accumulated in `stream.Usage()`. Providers emit them; your application reads the totals after streaming.
 
-- `0` — unbuffered, minimum latency (telephony)
-- `16` — good default for streaming
-- `64+` — batch throughput
+**ResponseMeta**: Providers set model name, finish reason, and response ID via `Emitter.SetResponse()`. Access it after streaming with `stream.Response()`.
 
-### Processor
+### Processor & Pipeline
 
-A function that reads from one stream and writes to another. The composable building block.
-
-```go
-upper := ryn.Map(func(f ryn.Frame) ryn.Frame {
-    f.Text = strings.ToUpper(f.Text)
-    return f
-})
-```
-
-Built-in: `Map`, `Filter`, `Tap`, `TextOnly`, `PassThrough`. Or implement `Processor` directly:
-
-```go
-type Processor interface {
-    Process(ctx context.Context, in *Stream, out *Emitter) error
-}
-```
-
-### Pipeline
-
-Chains Processors with goroutine-per-stage execution:
+Transform streams with composable stages:
 
 ```go
 pipeline := ryn.Pipe(
     ryn.TextOnly(),
+    ryn.Map(func(f ryn.Frame) ryn.Frame {
+        f.Text = strings.ToUpper(f.Text)
+        return f
+    }),
     ryn.Tap(func(f ryn.Frame) { log.Printf("token: %q", f.Text) }),
-    ryn.Map(transform),
-)
+).WithBuffer(32)
+
 out := pipeline.Run(ctx, inputStream)
 ```
 
-### Provider
+Built-in: `Map`, `Filter`, `Tap`, `TextOnly`, `PassThrough`, `Accumulate`. Or implement `Processor` directly.
 
-The LLM backend interface. Bring OpenAI, Anthropic, Ollama, or your own.
+Each stage runs in its own goroutine, connected by bounded channels. Backpressure propagates naturally.
 
-```go
-type Provider interface {
-    Generate(ctx context.Context, req *Request) (*Stream, error)
-}
-```
+## Orchestration
 
-Custom provider in 5 lines:
+The core differentiator: concurrent LLM workflow primitives.
 
-```go
-mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
-    s, e := ryn.NewStream(0)
-    go func() { defer e.Close(); e.Emit(ctx, ryn.TextFrame("hello")) }()
-    return s, nil
-})
-```
+### Fan — Parallel Merge
 
-## Multimodal
-
-Ryn is multimodal-native. Messages can carry text, images, and audio in a single request:
+Run N generations concurrently, merge all frames into one stream:
 
 ```go
-msg := ryn.Multi(ryn.RoleUser,
-    ryn.TextPart("What's in this image?"),
-    ryn.ImagePart(pngBytes, "image/png"),
+stream := ryn.Fan(ctx,
+    func(ctx context.Context) (*ryn.Stream, error) {
+        return llm.Generate(ctx, &ryn.Request{Messages: []ryn.Message{ryn.UserText("What is Go?")}})
+    },
+    func(ctx context.Context) (*ryn.Stream, error) {
+        return llm.Generate(ctx, &ryn.Request{Messages: []ryn.Message{ryn.UserText("What is Rust?")}})
+    },
 )
 ```
 
-Streams carry mixed frame types — text tokens alongside audio chunks, tool calls, and control signals. No separate APIs for different modalities.
+Use cases: parallel tool calls, multi-model ensembles, scatter-gather.
+
+### Race — First Wins
+
+Send the same request to multiple providers; take the fastest response:
+
+```go
+text, usage, err := ryn.Race(ctx,
+    func(ctx context.Context) (*ryn.Stream, error) {
+        return openaiLLM.Generate(ctx, req)
+    },
+    func(ctx context.Context) (*ryn.Stream, error) {
+        return anthropicLLM.Generate(ctx, req)
+    },
+)
+```
+
+Losers are canceled immediately. Use for latency hedging and speculative execution.
+
+### Sequence — Chained Generations
+
+Each step receives the text output of the previous:
+
+```go
+stream, err := ryn.Sequence(ctx,
+    func(ctx context.Context, _ string) (*ryn.Stream, error) {
+        return llm.Generate(ctx, &ryn.Request{Messages: []ryn.Message{ryn.UserText("Write a haiku about Go")}})
+    },
+    func(ctx context.Context, haiku string) (*ryn.Stream, error) {
+        return llm.Generate(ctx, &ryn.Request{Messages: []ryn.Message{ryn.UserText("Critique this: " + haiku)}})
+    },
+)
+```
+
+Build multi-step refinement pipelines with zero boilerplate.
 
 ## Tool Calling
 
@@ -187,7 +242,11 @@ Tool calls are first-class streaming citizens:
 ```go
 stream, _ := llm.Generate(ctx, &ryn.Request{
     Messages: messages,
-    Tools:    []ryn.Tool{weatherTool},
+    Tools: []ryn.Tool{{
+        Name:        "get_weather",
+        Description: "Get current weather",
+        Parameters:  json.RawMessage(`{"type":"object","properties":{"city":{"type":"string"}}}`),
+    }},
 })
 
 for stream.Next(ctx) {
@@ -197,73 +256,91 @@ for stream.Next(ctx) {
         fmt.Print(f.Text)
     case ryn.KindToolCall:
         result := executeTool(f.Tool)
-        // Feed result back for next turn
+        messages = append(messages, ryn.ToolMessage(f.Tool.ID, result))
     }
 }
 ```
 
-See [examples/tools](examples/tools/main.go) for a complete example.
+See [examples/tools](examples/tools/main.go) for a complete tool-calling loop.
 
-## OpenAI Provider
+## Hooks — Telemetry & Observability
 
-The built-in OpenAI provider works with any OpenAI-compatible API:
+Every generation is observable through the `Hook` interface:
 
 ```go
-// OpenAI
-llm := openai.New(apiKey)
-
-// Azure OpenAI
-llm := openai.New(apiKey, openai.WithBaseURL("https://your-resource.openai.azure.com/openai/deployments/gpt-4o"))
-
-// Ollama
-llm := openai.New("", openai.WithBaseURL("http://localhost:11434/v1"))
-
-// Any OpenAI-compatible endpoint
-llm := openai.New(apiKey, openai.WithBaseURL("https://your-endpoint/v1"))
+type Hook interface {
+    OnGenerateStart(ctx context.Context, info GenerateStartInfo) context.Context
+    OnGenerateEnd(ctx context.Context, info GenerateEndInfo)
+    OnFrame(ctx context.Context, f Frame) error
+    OnToolCall(ctx context.Context, call ToolCall)
+    OnToolResult(ctx context.Context, result ToolResult, elapsed time.Duration)
+    OnError(ctx context.Context, err error)
+}
 ```
 
-stdlib-only. No external dependencies. ~300 lines.
+Implement for Langfuse, Datadog, OpenTelemetry, cost tracking, or custom logging. Embed `ryn.NoOpHook` to implement only the methods you care about. Compose multiple hooks with `ryn.Hooks(h1, h2, h3)`.
+
+Wire it via Runtime:
+
+```go
+rt := ryn.NewRuntime(llm).
+    WithHook(myHook).
+    WithPipeline(myPipeline)
+
+stream, err := rt.Generate(ctx, req)
+```
+
+## Multimodal
+
+Messages carry mixed content — text, images, audio, URLs:
+
+```go
+msg := ryn.Multi(ryn.RoleUser,
+    ryn.TextPart("What's in this image?"),
+    ryn.ImagePart(pngBytes, "image/png"),
+    ryn.ImageURLPart("https://example.com/photo.jpg", "image/jpeg"),
+)
+```
+
+Streams carry interleaved text, tool calls, usage, and control signals. No separate APIs for different modalities.
 
 ## Performance
 
-Ryn is designed to feel like `net/http`, not like a framework:
-
-- **Frame**: ~80 bytes value type. Text tokens use only `Kind` + `Text` (no heap allocation beyond the string).
-- **Stream**: `chan Frame` with atomic error propagation. No mutexes on the read path.
-- **Pipeline**: One goroutine per stage, bounded channels for backpressure. No coordination overhead.
-- **Provider**: Direct `net/http` + SSE parsing. No intermediate buffering.
-
-Target: **first token in <100ms** over the full pipeline (network permitting).
+- **Frame**: Tagged union (~80B value type). Text tokens: only `Kind` + `Text` populated — no heap allocation beyond the string.
+- **Stream**: `chan Frame` with `sync/atomic` error propagation. No mutexes on the read path.
+- **Pipeline**: One goroutine per stage, bounded channels for backpressure.
+- **Providers**: Official SDKs with streaming APIs. No intermediate buffering.
+- **Target**: First token in <100ms over the full pipeline (network permitting).
 
 ## Examples
 
-| Example                               | Description                              |
-| ------------------------------------- | ---------------------------------------- |
-| [chat](examples/chat/main.go)         | Basic streaming chat                     |
-| [pipeline](examples/pipeline/main.go) | LLM output through a processing pipeline |
-| [tools](examples/tools/main.go)       | Streaming tool calls                     |
+| Example                               | Description                                 |
+| ------------------------------------- | ------------------------------------------- |
+| [chat](examples/chat/main.go)         | Streaming chat with provider selection      |
+| [tools](examples/tools/main.go)       | Tool-calling loop with automatic round-trip |
+| [parallel](examples/parallel/main.go) | Fan, Race, Sequence orchestration           |
+| [pipeline](examples/pipeline/main.go) | Processing pipeline with hooks              |
 
 ## Requirements
 
 - Go 1.22+
-- No external dependencies (stdlib only)
 
 ## Architecture
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for the full design document.
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the full design document covering Frame internals, Stream lifecycle, provider adapter patterns, orchestration execution model, and Hook integration.
 
 ## Roadmap
 
-Designed for forward compatibility. Extension points exist for:
+Designed for forward compatibility:
 
-- [ ] Audio streaming (STT → LLM → TTS)
-- [ ] Duplex pipelines (bidirectional)
-- [ ] Tool execution graphs
-- [ ] Realtime agent loops
-- [ ] WASM edge runtimes
-- [ ] Anthropic / Bedrock / Ollama providers
+- [ ] Audio streaming pipelines (STT → LLM → TTS)
+- [ ] Duplex pipelines (bidirectional streams)
+- [ ] Tool execution graphs (automatic dispatch + re-invoke)
+- [ ] Realtime agent loops with interruption
+- [ ] Structured output helpers (JSON schema → typed response)
+- [ ] WASM edge runtime support
 
-None of these require breaking changes to the core.
+None require breaking changes to the core.
 
 ## License
 
