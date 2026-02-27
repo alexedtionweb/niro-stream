@@ -11,6 +11,7 @@ import (
 	"os"
 
 	"ryn.dev/ryn"
+	"ryn.dev/ryn/orchestrate"
 	"ryn.dev/ryn/provider/openai"
 )
 
@@ -31,7 +32,7 @@ func main() {
 
 func fanDemo(ctx context.Context, llm ryn.Provider) {
 	// Generate two responses in parallel and merge them
-	stream := ryn.Fan(ctx,
+	stream := orchestrate.Fan(ctx,
 		func(ctx context.Context) (*ryn.Stream, error) {
 			return llm.Generate(ctx, &ryn.Request{
 				SystemPrompt: "Respond in exactly one sentence.",
@@ -67,7 +68,7 @@ func raceDemo(ctx context.Context, llm ryn.Provider) {
 		}
 	}
 
-	text, usage, err := ryn.Race(ctx, gen(0.2), gen(0.8), gen(1.0))
+	text, usage, err := orchestrate.Race(ctx, gen(0.2), gen(0.8), gen(1.0))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "race: %v\n", err)
 		return
@@ -77,7 +78,7 @@ func raceDemo(ctx context.Context, llm ryn.Provider) {
 }
 
 func sequenceDemo(ctx context.Context, llm ryn.Provider) {
-	stream, err := ryn.Sequence(ctx,
+	stream, err := orchestrate.Sequence(ctx,
 		// Step 1: generate a haiku
 		func(ctx context.Context, _ string) (*ryn.Stream, error) {
 			return llm.Generate(ctx, &ryn.Request{

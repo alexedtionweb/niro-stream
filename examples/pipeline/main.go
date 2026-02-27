@@ -2,7 +2,7 @@
 //
 // Usage:
 //
-//	OPENAI_API_KEY=sk-... go run ./examples/pipeline
+// OPENAI_API_KEY=sk-... go run ./examples/pipeline
 package main
 
 import (
@@ -13,7 +13,10 @@ import (
 	"time"
 
 	"ryn.dev/ryn"
+	"ryn.dev/ryn/hook"
+	"ryn.dev/ryn/pipe"
 	"ryn.dev/ryn/provider/openai"
+	"ryn.dev/ryn/runtime"
 )
 
 func main() {
@@ -22,23 +25,23 @@ func main() {
 	llm := openai.New(os.Getenv("OPENAI_API_KEY"))
 
 	// Build a processing pipeline
-	pipeline := ryn.Pipe(
+	pipeline := pipe.New(
 		// Stage 1: filter to text only
-		ryn.TextOnly(),
+		pipe.TextOnly(),
 		// Stage 2: transform tokens
-		ryn.Map(func(f ryn.Frame) ryn.Frame {
+		pipe.Map(func(f ryn.Frame) ryn.Frame {
 			f.Text = strings.ToUpper(f.Text)
 			return f
 		}),
 	).WithBuffer(32)
 
 	// Create a logging hook
-	hook := &logHook{}
+	h := &logHook{}
 
 	// Wire everything together via Runtime
-	rt := ryn.NewRuntime(llm).
+	rt := runtime.New(llm).
 		WithPipeline(pipeline).
-		WithHook(hook)
+		WithHook(h)
 
 	stream, err := rt.Generate(ctx, &ryn.Request{
 		Model:        "gpt-4o",
@@ -63,16 +66,16 @@ func main() {
 
 // logHook logs telemetry events to stderr.
 type logHook struct {
-	ryn.NoOpHook
+	hook.NoOpHook
 }
 
-func (h *logHook) OnGenerateStart(ctx context.Context, info ryn.GenerateStartInfo) context.Context {
+func (h *logHook) OnGenerateStart(ctx context.Context, info hook.GenerateStartInfo) context.Context {
 	fmt.Fprintf(os.Stderr, "[hook] generate start: model=%s messages=%d tools=%d\n",
 		info.Model, info.Messages, info.Tools)
 	return ctx
 }
 
-func (h *logHook) OnGenerateEnd(ctx context.Context, info ryn.GenerateEndInfo) {
+func (h *logHook) OnGenerateEnd(ctx context.Context, info hook.GenerateEndInfo) {
 	fmt.Fprintf(os.Stderr, "[hook] generate end: model=%s duration=%s tokens=%d finish=%s\n",
 		info.Model, info.Duration.Round(time.Millisecond), info.Usage.TotalTokens, info.FinishReason)
 }
