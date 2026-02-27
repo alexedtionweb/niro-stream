@@ -43,6 +43,16 @@ func (f ProviderFunc) Generate(ctx context.Context, req *Request) (*Stream, erro
 
 // Request contains everything needed to call an LLM.
 type Request struct {
+	// Client selects a logical provider/client at runtime.
+	//
+	// This is used by multi-tenant routers (e.g. MultiTenantProvider)
+	// to pick the underlying SDK client/provider for this request.
+	//
+	// Example values: "tenant-a-openai", "enterprise-bedrock-usw2".
+	//
+	// If empty, router-specific fallbacks apply (context/default client).
+	Client string
+
 	// Model identifier (e.g. "gpt-4o", "claude-sonnet-4-5", "gemini-2.0-flash").
 	// If empty, the provider's default model is used.
 	Model string

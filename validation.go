@@ -130,6 +130,9 @@ func (t *Tool) Validate() error {
 	if t.Description == "" {
 		return fmt.Errorf("Tool.Description is required")
 	}
+	if len(t.Parameters) > 0 && !JSONValid(t.Parameters) {
+		return fmt.Errorf("Tool.Parameters must be valid JSON schema")
+	}
 	return nil
 }
 
@@ -141,7 +144,9 @@ func (tc *ToolCall) Validate() error {
 	if tc.Name == "" {
 		return fmt.Errorf("ToolCall.Name is required")
 	}
-	// Args can be any JSON, including empty
+	if len(tc.Args) > 0 && !JSONValid(tc.Args) {
+		return fmt.Errorf("ToolCall.Args must be valid JSON")
+	}
 	return nil
 }
 
@@ -157,9 +162,13 @@ func (tr *ToolResult) Validate() error {
 // Validate checks if ToolChoice is valid when tools are present.
 func (tc ToolChoice) Validate() error {
 	switch tc {
-	case ToolChoiceAuto, ToolChoiceRequired, ToolChoiceNone:
+	case "", ToolChoiceAuto, ToolChoiceRequired, ToolChoiceNone:
 		return nil
 	default:
+		// Accept func:name pattern created by ToolChoiceFunc()
+		if len(tc) > 5 && tc[:5] == "func:" {
+			return nil
+		}
 		return fmt.Errorf("unknown ToolChoice %q", tc)
 	}
 }

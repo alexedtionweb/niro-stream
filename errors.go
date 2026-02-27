@@ -10,25 +10,25 @@ type ErrorCode int
 
 const (
 	// Client errors (4xx)
-	ErrCodeInvalidRequest ErrorCode = 400 + iota
-	ErrCodeAuthenticationFailed
-	ErrCodeModelNotFound
-	ErrCodeInvalidModel
-	ErrCodeInsufficientQuota
+	ErrCodeInvalidRequest       ErrorCode = 400
+	ErrCodeAuthenticationFailed ErrorCode = 401
+	ErrCodeModelNotFound        ErrorCode = 404
+	ErrCodeInvalidModel         ErrorCode = 422
+	ErrCodeInsufficientQuota    ErrorCode = 429
 
 	// Server errors (5xx)
-	ErrCodeProviderError = 500 + iota
-	ErrCodeServiceUnavailable
-	ErrCodeRateLimited
-	ErrCodeTimeout
-	ErrCodeInternalError
+	ErrCodeProviderError      ErrorCode = 500
+	ErrCodeServiceUnavailable ErrorCode = 503
+	ErrCodeRateLimited        ErrorCode = 509
+	ErrCodeTimeout            ErrorCode = 504
+	ErrCodeInternalError      ErrorCode = 510
 
-	// Ryn-specific errors
-	ErrCodeStreamClosed = 600 + iota
-	ErrCodeNoStructuredOutput
-	ErrCodeInvalidSchema
-	ErrCodeContextCancelled
-	ErrCodeStreamError
+	// Ryn-specific errors (6xx)
+	ErrCodeStreamClosed       ErrorCode = 600
+	ErrCodeNoStructuredOutput ErrorCode = 601
+	ErrCodeInvalidSchema      ErrorCode = 602
+	ErrCodeContextCancelled   ErrorCode = 603
+	ErrCodeStreamError        ErrorCode = 604
 )
 
 // Error represents a detailed error from Ryn or a provider.

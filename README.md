@@ -90,6 +90,7 @@ Ryn uses a **plugin model**: the core (`ryn.dev/ryn`) has **zero external depend
 | Google Gemini     | `ryn.dev/ryn/provider/google`    | `go get ryn.dev/ryn/provider/google`    | [google/generative-ai-go](https://github.com/google/generative-ai-go)         |
 | AWS Bedrock       | `ryn.dev/ryn/provider/bedrock`   | `go get ryn.dev/ryn/provider/bedrock`   | [aws-sdk-go-v2](https://github.com/aws/aws-sdk-go-v2)                         |
 | OpenAI-compatible | `ryn.dev/ryn/provider/compat`    | included in core (zero deps)            | stdlib HTTP + SSE                                                             |
+| Agent plugin      | `ryn.dev/ryn/plugin/agent`       | `go get ryn.dev/ryn/plugin/agent`       | optional component-based agent runtime                                        |
 
 ```go
 // OpenAI — go get ryn.dev/ryn/provider/openai
@@ -153,6 +154,12 @@ stream, err := llm.Generate(ctx, &ryn.Request{
 ```
 
 Each provider defines its own `RequestHook` type with the appropriate SDK parameter struct. See the provider packages for details.
+
+For auth/custom transport customization per SDK:
+
+- OpenAI / Anthropic: `WithRequestOption(...)`
+- Google: `WithClientOption(...)`
+- Bedrock: pass AWS `aws.Config` (credentials/region/retries) into `bedrock.New(cfg, ...)`
 
 ## Core Concepts
 
@@ -292,7 +299,7 @@ for stream.Next(ctx) {
 }
 ```
 
-See [examples/tools](examples/tools/main.go) for a complete tool-calling loop.
+See [examples/tools/main.go](examples/tools/main.go) for a complete tool-calling loop.
 
 ## Structured Output (JSON Schema → Typed)
 
@@ -535,6 +542,59 @@ stream, err := provider.Generate(ctx, req)
 // Tool calls handled automatically
 ```
 
+### Smart Tooling Abstraction (Toolset)
+
+For Genkit-style tool definition + validation + hooks, use `Toolset`:
+
+```go
+type sumArgs struct {
+    A int `json:"a"`
+    B int `json:"b"`
+}
+
+toolset := ryn.NewToolset()
+
+sumTool, err := ryn.NewToolDefinitionAny(
+    "sum",
+    "Add two integers",
+    map[string]any{
+        "type": "object",
+        "properties": map[string]any{
+            "a": map[string]any{"type": "integer"},
+            "b": map[string]any{"type": "integer"},
+        },
+        "required": []string{"a", "b"},
+    },
+    func(ctx context.Context, raw json.RawMessage) (any, error) {
+        var in sumArgs
+        if err := ryn.JSONUnmarshal(raw, &in); err != nil {
+            return nil, err
+        }
+        return map[string]int{"sum": in.A + in.B}, nil
+    },
+)
+if err != nil { /* handle */ }
+
+toolset.MustRegister(sumTool)
+
+provider := ryn.NewToolingProvider(
+    llm,
+    toolset,
+    ryn.DefaultToolStreamOptions(),
+)
+
+stream, err := provider.Generate(ctx, &ryn.Request{
+    Messages: []ryn.Message{ryn.UserText("What is 20+22?")},
+})
+```
+
+What this adds automatically:
+
+- Tool schema validation for call arguments
+- Tool execution lifecycle hooks (`OnToolValidate`, `OnToolExecuteStart`, `OnToolExecuteEnd`)
+- Tool definitions mapped to provider-native `Request.Tools`
+- Tool results fed back into subsequent turns inside the loop
+
 ## Production Composition
 
 Combine multiple wrappers for a production-ready provider:
@@ -653,6 +713,94 @@ names := reg.Names()  // ["anthropic", "fast", "openai"]
 
 Benchmark: **0 allocs, ~34ns** per lookup. RWMutex-protected, safe for concurrent registration and lookup.
 
+### Multi-Tenancy — Runtime Client Selection
+
+Use `MultiTenantProvider` to select provider/client at request time.
+
+```go
+reg := ryn.NewRegistry()
+reg.Register("tenant-a-openai", openaiA)
+reg.Register("tenant-b-openai", openaiB)
+reg.Register("tenant-c-bedrock", bedrockC)
+
+router := ryn.NewMultiTenantProvider(
+    reg,
+    ryn.WithDefaultClient("tenant-a-openai"),
+)
+
+// Per-request selection
+stream, err := router.Generate(ctx, &ryn.Request{
+    Client:   "tenant-c-bedrock",
+    Messages: []ryn.Message{ryn.UserText("hello")},
+})
+```
+
+You can also set the client in context:
+
+```go
+ctx = ryn.WithClient(ctx, "tenant-b-openai")
+stream, err := router.Generate(ctx, &ryn.Request{Messages: msgs})
+```
+
+Per-client customization is supported via mutators:
+
+```go
+router := ryn.NewMultiTenantProvider(reg,
+    ryn.WithClientMutator("tenant-c-bedrock", func(ctx context.Context, req *ryn.Request) error {
+        req.Extra = bedrock.Extras{
+            InferenceProfile: "arn:aws:bedrock:us-west-2:123456789012:inference-profile/my-profile",
+        }
+        return nil
+    }),
+)
+```
+
+### AWS Bedrock Inference Profiles
+
+Bedrock supports default and per-request inference profile targeting.
+
+```go
+llm := bedrock.New(cfg,
+    bedrock.WithInferenceProfile("arn:aws:bedrock:us-west-2:123456789012:inference-profile/team-prod"),
+)
+
+// Override per request:
+stream, err := llm.Generate(ctx, &ryn.Request{
+    Messages: []ryn.Message{ryn.UserText("status summary")},
+    Extra: bedrock.Extras{
+        InferenceProfile: "arn:aws:bedrock:us-west-2:123456789012:inference-profile/team-blue",
+        Hook: func(in *bedrockruntime.ConverseStreamInput) {
+            // Optional raw SDK customization
+        },
+    },
+})
+```
+
+## Agent Plugin (Optional Module)
+
+Core stays agent-agnostic. Agent behavior (agent-to-agent, memory, MCP memory adapters) lives in the optional plugin module.
+
+```go
+import "ryn.dev/ryn/plugin/agent"
+
+mem := agent.NewInMemoryMemory()
+
+rt, err := agent.New(
+    llm,
+    agent.WithMemory(mem),
+    agent.WithComponent(&agent.ToolingComponent{Toolset: toolset}),
+)
+if err != nil { /* handle */ }
+
+_ = rt.Start(ctx)
+defer rt.Close()
+
+out, err := rt.Run(ctx, "session-1", "plan trip to tokyo")
+fmt.Println(out.Text)
+```
+
+`agent.Runtime` also supports peer calls via `WithPeer(...)` and `CallPeer(...)` for agent-to-agent workflows.
+
 ### Object Pools
 
 `sync.Pool`-backed pools for hot-path objects:
@@ -691,12 +839,12 @@ ryn.SetJSON(&ryn.JSONLibrary{
 
 ## Examples
 
-| Example                                | Description                                 |
-| -------------------------------------- | ------------------------------------------- |
-| [chat](_examples/chat/main.go)         | Streaming chat with provider selection      |
-| [tools](_examples/tools/main.go)       | Tool-calling loop with automatic round-trip |
-| [parallel](_examples/parallel/main.go) | Fan, Race, Sequence orchestration           |
-| [pipeline](_examples/pipeline/main.go) | Processing pipeline with hooks              |
+| Example                               | Description                                 |
+| ------------------------------------- | ------------------------------------------- |
+| [chat](examples/chat/main.go)         | Streaming chat with provider selection      |
+| [tools](examples/tools/main.go)       | Tool-calling loop with automatic round-trip |
+| [parallel](examples/parallel/main.go) | Fan, Race, Sequence orchestration           |
+| [pipeline](examples/pipeline/main.go) | Processing pipeline with hooks              |
 
 ## Requirements
 

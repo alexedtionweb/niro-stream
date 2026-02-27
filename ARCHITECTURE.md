@@ -546,7 +546,7 @@ performs a fast `JSONValid` check before attempting to unmarshal partial data.
 
 Ryn uses a **multi-module** layout. The core module (`ryn.dev/ryn`) has **zero external dependencies**. Each SDK provider is a separate Go module with its own `go.mod` — users only pull the SDKs they need.
 
-```
+```text
 ryn.dev/ryn                          ← root module (zero external deps)
 ├── go.mod                           module ryn.dev/ryn
 ├── go.work                          workspace linking all sub-modules (dev only)
@@ -564,16 +564,44 @@ ryn.dev/ryn                          ← root module (zero external deps)
 ├── transport.go                     Transport(), HTTPClient(), DefaultTransport, DefaultHTTPClient
 ├── cache.go                         Cache — sharded LRU response cache with TTL
 ├── registry.go                      Registry — named provider routing
+├── components.go                    Component interface, ComponentHost — plugin lifecycle
+├── multitenancy.go                  MultiTenantProvider — client-scoped provider routing
 ├── json.go                          Configurable JSON backend (Fiber-compatible list)
 ├── structured.go                    Structured output helpers (JSON Schema → typed)
 ├── errors.go                        Error type, ErrorCode, semantic error checkers, error helpers
-├── validation.go                    Request.Validate(), Message.Validate(), Tool.Validate()
-├── retry.go                         RetryProvider, BackoffStrategy, ExponentialBackoff, ConstantBackoff
+├── validation.go                    Request.Validate(), Message.Validate(), Tool.Validate(), ToolCall.Validate()
+├── retry.go                         RetryProvider, BackoffStrategy, smart retry hints
 ├── cost.go                          Cost tracking, ModelPricing, PricingRegistry, pricing for known models
 ├── timeout.go                       Timeout enforcement, request tracing, RequestID generation, TraceContext
+├── input_stream.go                  Native + fallback input streaming adapter
 ├── tools.go                         Tool execution loop, automatic tool calling, ToolExecutor interface
-├── bench_test.go                    42 benchmarks for core primitives + infrastructure
-├── ryn_test.go                      81 tests covering core, infrastructure, validation, retry, cost, tracing, tools
+├── tooling.go                       ToolDefinition, Toolset, schema validator, runtime hooks, ToolingProvider
+├── bench_test.go                    Benchmarks for core primitives + infrastructure
+├── helpers_test.go                  Shared test helpers, mocks, assertions
+├── frame_test.go                    Tests for Frame, Kind, Signal, Usage, ToolChoice
+├── message_test.go                  Tests for Message constructors
+├── stream_test.go                   Tests for Stream, Emitter, CollectText, Forward
+├── processor_test.go                Tests for Map, Filter, Tap, TextOnly, Accumulate
+├── pipeline_test.go                 Tests for Pipeline stages
+├── provider_test.go                 Tests for ProviderFunc, Request.EffectiveMessages
+├── hook_test.go                     Tests for NoOpHook, Hooks() composition
+├── orchestrate_test.go              Tests for Fan, Race, Sequence
+├── runtime_test.go                  Tests for Runtime lifecycle
+├── pool_test.go                     Tests for BytePool, pooled constructors, Usage pool
+├── cache_test.go                    Tests for Cache hit/miss, TTL, LRU, concurrency
+├── registry_test.go                 Tests for Registry CRUD, Generate, concurrency
+├── components_test.go               Tests for ComponentHost lifecycle
+├── multitenancy_test.go             Tests for MultiTenantProvider routing
+├── transport_test.go                Tests for Transport, HTTPClient defaults
+├── json_test.go                     Tests for configurable JSON backend
+├── structured_test.go               Tests for GenerateStructured, StreamStructured
+├── errors_test.go                   Tests for Error type, checkers, wrapping
+├── validation_test.go               Tests for Request/Message/Tool validation
+├── retry_test.go                    Tests for RetryProvider, backoff strategies
+├── cost_test.go                     Tests for cost calculation, PricingRegistry
+├── tracing_test.go                  Tests for RequestID, TraceContext, TracingProvider
+├── tools_test.go                    Tests for ToolLoop, Toolset, ToolingProvider
+├── input_stream_test.go             Tests for input streaming (native + fallback)
 │
 ├── internal/
 │   └── sse/
@@ -584,34 +612,24 @@ ryn.dev/ryn                          ← root module (zero external deps)
 │   ├── compat/                      OpenAI-compatible HTTP+SSE (in root module, stdlib-only)
 │   │   ├── compat.go
 │   │   └── compat_test.go
-```
-
-│ │
-│ ├── openai/ ← separate module: ryn.dev/ryn/provider/openai
-│ │ ├── go.mod
-│ │ ├── openai.go Provider + Client() + RequestHook + WithRequestHook()
-│ │ └── encode.go
-│ │
-│ ├── anthropic/ ← separate module: ryn.dev/ryn/provider/anthropic
-│ │ ├── go.mod
-│ │ └── anthropic.go Provider + Client() + RequestHook + WithRequestHook()
-│ │
-│ ├── google/ ← separate module: ryn.dev/ryn/provider/google
-│ │ ├── go.mod
-│ │ └── google.go Provider + Client() + RequestHook + WithRequestHook()
-│ │
-│ └── bedrock/ ← separate module: ryn.dev/ryn/provider/bedrock
-│ ├── go.mod
-│ └── bedrock.go Provider + Client() + RequestHook + WithRequestHook()
+│   ├── openai/                      separate module: ryn.dev/ryn/provider/openai
+│   ├── anthropic/                   separate module: ryn.dev/ryn/provider/anthropic
+│   ├── google/                      separate module: ryn.dev/ryn/provider/google
+│   └── bedrock/                     separate module: ryn.dev/ryn/provider/bedrock
 │
-└── \_examples/ ← separate module: ryn.dev/ryn/\_examples
-├── go.mod
-├── chat/main.go
-├── tools/main.go
-├── parallel/main.go
-└── pipeline/main.go
-
-````
+├── plugin/
+│   └── agent/                       separate module: ryn.dev/ryn/plugin/agent
+│       ├── agent.go                 Declarative agent with memory + routing
+│       ├── orchestrator.go          Step-based orchestrator (tool, llm, condition, etc.)
+│       ├── components.go            Agent-specific components
+│       └── decl.go                  YAML/JSON agent declaration types
+│
+└── examples/                        separate module: ryn.dev/ryn/examples
+    ├── chat/main.go
+    ├── tools/main.go
+    ├── parallel/main.go
+    └── pipeline/main.go
+```
 
 ### Multi-Module Design
 
@@ -627,7 +645,7 @@ go get ryn.dev/ryn
 
 # Only the provider you need
 go get ryn.dev/ryn/provider/openai
-````
+```
 
 Your binary contains only the SDK you actually import. The compat provider (stdlib HTTP+SSE) stays in the root module since it has zero external deps.
 
@@ -813,6 +831,8 @@ Request.Validate() checks: non-empty messages, valid ResponseFormat, JSON Schema
 
 **RetryProvider** wraps Provider with configurable retry logic. Only retries errors marked retryable. Respects context cancellation.
 
+**Smart retry path**: when a provider exposes retry capability hints, `WrapWithSmartRetry` can skip outer retries if SDK/client retries are already enabled, preventing redundant retry multiplication.
+
 ## Cost Tracking (`cost.go`)
 
 **ModelPricing** + **PricingRegistry** for per-model cost tracking. Default pricing for OpenAI, Anthropic, Google, AWS Bedrock (2025).
@@ -829,6 +849,25 @@ Request.Validate() checks: non-empty messages, valid ResponseFormat, JSON Schema
 
 **ToolLoop**: Multi-turn tool calling (Generate → Execute → Generate → ... until no tools or max rounds).
 
+Tool results are fed back into the same request as `ToolResult` parts before the next model turn.
+
+## Tool Abstraction Layer (`tooling.go`)
+
+`ToolDefinition` + `Toolset` provide a higher-level, Genkit-like authoring model:
+
+- Define tools from raw JSON Schema
+- Validate tool args before execution
+- Register runtime hooks for validation and execution lifecycle
+- Convert definitions to `Request.Tools` automatically
+- Wrap a base provider with `ToolingProvider` for integrated tool execution loop
+
+## Input Streaming (`input_stream.go`)
+
+`GenerateInputStream` supports:
+
+- Native provider input streaming (if implemented)
+- Fallback mode that aggregates input stream into a standard request and runs regular generation
+
 ## Future Extension Points
 
 The architecture is designed for forward compatibility:
@@ -843,8 +882,8 @@ The Pipeline already supports this. Frame already has `KindAudio` and `Mime`.
 
 ### Tool Execution Graphs
 
-Current: tool calls emitted as frames, user executes them.
-Future: `ToolExecutor` processor that automatically dispatches, feeds results back, and re-invokes the provider. Requires a looping primitive in the Pipeline.
+Current implementation supports iterative tool loops with execution + feedback.
+Future work can add DAG-style dependency scheduling and speculative parallel branches across tool nodes.
 
 ### Realtime Agents
 

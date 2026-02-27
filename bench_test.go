@@ -6,6 +6,13 @@ import (
 	"testing"
 
 	"ryn.dev/ryn"
+	"ryn.dev/ryn/hook"
+	"ryn.dev/ryn/middleware"
+	"ryn.dev/ryn/orchestrate"
+	"ryn.dev/ryn/pipe"
+	"ryn.dev/ryn/registry"
+	"ryn.dev/ryn/runtime"
+	"ryn.dev/ryn/structured"
 )
 
 // ─── Frame Construction ─────────────────────────────────────
@@ -171,13 +178,13 @@ func BenchmarkPipelinePassthrough(b *testing.B) {
 	for i := range frames {
 		frames[i] = ryn.TextFrame("tok")
 	}
-	pipe := ryn.Pipe(ryn.PassThrough())
+	p := pipe.New(pipe.PassThrough())
 	b.ReportAllocs()
 	b.ResetTimer()
 
 	for b.Loop() {
 		in := ryn.StreamFromSlice(frames)
-		out := pipe.Run(ctx, in)
+		out := p.Run(ctx, in)
 		for out.Next(ctx) {
 		}
 	}
@@ -193,13 +200,13 @@ func BenchmarkPipelineFilter(b *testing.B) {
 			frames[i] = ryn.ControlFrame(ryn.SignalFlush)
 		}
 	}
-	pipe := ryn.Pipe(ryn.TextOnly())
+	p := pipe.New(pipe.TextOnly())
 	b.ReportAllocs()
 	b.ResetTimer()
 
 	for b.Loop() {
 		in := ryn.StreamFromSlice(frames)
-		out := pipe.Run(ctx, in)
+		out := p.Run(ctx, in)
 		for out.Next(ctx) {
 		}
 	}
@@ -211,19 +218,19 @@ func BenchmarkPipelineMap(b *testing.B) {
 	for i := range frames {
 		frames[i] = ryn.TextFrame("tok")
 	}
-	upper := ryn.Map(func(f ryn.Frame) ryn.Frame {
+	upper := pipe.Map(func(f ryn.Frame) ryn.Frame {
 		if f.Kind == ryn.KindText {
 			f.Text = "[" + f.Text + "]"
 		}
 		return f
 	})
-	pipe := ryn.Pipe(upper)
+	p := pipe.New(upper)
 	b.ReportAllocs()
 	b.ResetTimer()
 
 	for b.Loop() {
 		in := ryn.StreamFromSlice(frames)
-		out := pipe.Run(ctx, in)
+		out := p.Run(ctx, in)
 		for out.Next(ctx) {
 		}
 	}
@@ -235,13 +242,13 @@ func BenchmarkPipelineAccumulate(b *testing.B) {
 	for i := range frames {
 		frames[i] = ryn.TextFrame("a")
 	}
-	pipe := ryn.Pipe(ryn.Accumulate())
+	p := pipe.New(pipe.Accumulate())
 	b.ReportAllocs()
 	b.ResetTimer()
 
 	for b.Loop() {
 		in := ryn.StreamFromSlice(frames)
-		out := pipe.Run(ctx, in)
+		out := p.Run(ctx, in)
 		for out.Next(ctx) {
 		}
 	}
@@ -253,17 +260,17 @@ func BenchmarkPipelineThreeStages(b *testing.B) {
 	for i := range frames {
 		frames[i] = ryn.TextFrame("tok")
 	}
-	pipe := ryn.Pipe(
-		ryn.PassThrough(),
-		ryn.Map(func(f ryn.Frame) ryn.Frame { return f }),
-		ryn.PassThrough(),
+	p := pipe.New(
+		pipe.PassThrough(),
+		pipe.Map(func(f ryn.Frame) ryn.Frame { return f }),
+		pipe.PassThrough(),
 	)
 	b.ReportAllocs()
 	b.ResetTimer()
 
 	for b.Loop() {
 		in := ryn.StreamFromSlice(frames)
-		out := pipe.Run(ctx, in)
+		out := p.Run(ctx, in)
 		for out.Next(ctx) {
 		}
 	}
@@ -309,7 +316,7 @@ func BenchmarkFan(b *testing.B) {
 	b.ResetTimer()
 
 	for b.Loop() {
-		s := ryn.Fan(ctx, makeGen(50), makeGen(50), makeGen(50))
+		s := orchestrate.Fan(ctx, makeGen(50), makeGen(50), makeGen(50))
 		for s.Next(ctx) {
 		}
 	}
@@ -330,7 +337,7 @@ func BenchmarkRace(b *testing.B) {
 	b.ResetTimer()
 
 	for b.Loop() {
-		_, _, _ = ryn.Race(ctx, makeGen(20), makeGen(20), makeGen(20))
+		_, _, _ = orchestrate.Race(ctx, makeGen(20), makeGen(20), makeGen(20))
 	}
 }
 
@@ -344,7 +351,7 @@ func BenchmarkSequence(b *testing.B) {
 	b.ResetTimer()
 
 	for b.Loop() {
-		s, _ := ryn.Sequence(ctx, step, step, step)
+		s, _ := orchestrate.Sequence(ctx, step, step, step)
 		for s.Next(ctx) {
 		}
 	}
@@ -388,7 +395,7 @@ func BenchmarkEffectiveMessages(b *testing.B) {
 // ─── Hook Composition ───────────────────────────────────────
 
 func BenchmarkHooksComposite(b *testing.B) {
-	h := ryn.Hooks(ryn.NoOpHook{}, ryn.NoOpHook{}, ryn.NoOpHook{})
+	h := hook.Compose(hook.NoOpHook{}, hook.NoOpHook{}, hook.NoOpHook{})
 	ctx := context.Background()
 	f := ryn.TextFrame("tok")
 	b.ReportAllocs()
@@ -400,9 +407,9 @@ func BenchmarkHooksComposite(b *testing.B) {
 }
 
 func BenchmarkHookOnGenerateStart(b *testing.B) {
-	h := ryn.Hooks(ryn.NoOpHook{}, ryn.NoOpHook{})
+	h := hook.Compose(hook.NoOpHook{}, hook.NoOpHook{})
 	ctx := context.Background()
-	info := ryn.GenerateStartInfo{Model: "test", Messages: 3}
+	info := hook.GenerateStartInfo{Model: "test", Messages: 3}
 	b.ReportAllocs()
 	b.ResetTimer()
 
@@ -423,7 +430,7 @@ func BenchmarkRuntimeGenerate(b *testing.B) {
 		s := ryn.StreamFromSlice(frames)
 		return s, nil
 	})
-	rt := ryn.NewRuntime(mock)
+	rt := runtime.New(mock)
 	req := &ryn.Request{Messages: []ryn.Message{ryn.UserText("hi")}}
 	b.ReportAllocs()
 	b.ResetTimer()
@@ -444,7 +451,7 @@ func BenchmarkRuntimeWithHook(b *testing.B) {
 		}
 		return ryn.StreamFromSlice(frames), nil
 	})
-	rt := ryn.NewRuntime(mock).WithHook(ryn.NoOpHook{})
+	rt := runtime.New(mock).WithHook(hook.NoOpHook{})
 	req := &ryn.Request{Messages: []ryn.Message{ryn.UserText("hi")}}
 	b.ReportAllocs()
 	b.ResetTimer()
@@ -465,8 +472,8 @@ func BenchmarkRuntimeWithPipeline(b *testing.B) {
 		}
 		return ryn.StreamFromSlice(frames), nil
 	})
-	pipe := ryn.Pipe(ryn.PassThrough(), ryn.Map(func(f ryn.Frame) ryn.Frame { return f }))
-	rt := ryn.NewRuntime(mock).WithPipeline(pipe)
+	p := pipe.New(pipe.PassThrough(), pipe.Map(func(f ryn.Frame) ryn.Frame { return f }))
+	rt := runtime.New(mock).WithPipeline(p)
 	req := &ryn.Request{Messages: []ryn.Message{ryn.UserText("hi")}}
 	b.ReportAllocs()
 	b.ResetTimer()
@@ -488,8 +495,8 @@ func BenchmarkRuntimeFullStack(b *testing.B) {
 		frames = append(frames, ryn.UsageFrame(&ryn.Usage{InputTokens: 10, OutputTokens: 50, TotalTokens: 60}))
 		return ryn.StreamFromSlice(frames), nil
 	})
-	pipe := ryn.Pipe(ryn.PassThrough())
-	rt := ryn.NewRuntime(mock).WithHook(ryn.NoOpHook{}).WithPipeline(pipe)
+	p := pipe.New(pipe.PassThrough())
+	rt := runtime.New(mock).WithHook(hook.NoOpHook{}).WithPipeline(p)
 	req := &ryn.Request{
 		SystemPrompt: "You are helpful.",
 		Messages:     []ryn.Message{ryn.UserText("hi")},
@@ -581,8 +588,8 @@ func BenchmarkCacheHit(b *testing.B) {
 	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
 		return ryn.StreamFromSlice([]ryn.Frame{ryn.TextFrame("cached")}), nil
 	})
-	cache := ryn.NewCache(ryn.CacheOptions{MaxEntries: 10000})
-	provider := cache.Wrap(mock)
+	c := middleware.NewCache(middleware.CacheOptions{MaxEntries: 10000})
+	provider := c.Wrap(mock)
 	req := &ryn.Request{Model: "bench", Messages: []ryn.Message{ryn.UserText("hello")}}
 
 	// Prime cache
@@ -602,8 +609,8 @@ func BenchmarkCacheHitParallel(b *testing.B) {
 	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
 		return ryn.StreamFromSlice([]ryn.Frame{ryn.TextFrame("cached")}), nil
 	})
-	cache := ryn.NewCache(ryn.CacheOptions{MaxEntries: 10000})
-	provider := cache.Wrap(mock)
+	c := middleware.NewCache(middleware.CacheOptions{MaxEntries: 10000})
+	provider := c.Wrap(mock)
 	req := &ryn.Request{Model: "bench", Messages: []ryn.Message{ryn.UserText("hello")}}
 
 	// Prime cache
@@ -623,7 +630,7 @@ func BenchmarkCacheHitParallel(b *testing.B) {
 // ─── Registry ───────────────────────────────────────────────
 
 func BenchmarkRegistryGet(b *testing.B) {
-	reg := ryn.NewRegistry()
+	reg := registry.New()
 	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
 		return nil, nil
 	})
@@ -635,7 +642,7 @@ func BenchmarkRegistryGet(b *testing.B) {
 }
 
 func BenchmarkRegistryGetParallel(b *testing.B) {
-	reg := ryn.NewRegistry()
+	reg := registry.New()
 	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
 		return nil, nil
 	})
@@ -664,7 +671,7 @@ func BenchmarkGenerateStructured(b *testing.B) {
 
 	b.ReportAllocs()
 	for b.Loop() {
-		_, _, _, _ = ryn.GenerateStructured[out](ctx, mock, req, schema)
+		_, _, _, _ = structured.GenerateStructured[out](ctx, mock, req, schema)
 	}
 }
 
@@ -688,7 +695,7 @@ func BenchmarkStreamStructured(b *testing.B) {
 
 	b.ReportAllocs()
 	for b.Loop() {
-		ss, _ := ryn.StreamStructured[out](ctx, mock, req, schema)
+		ss, _ := structured.StreamStructured[out](ctx, mock, req, schema)
 		for ss.Next(ctx) {
 		}
 	}

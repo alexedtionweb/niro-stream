@@ -25,7 +25,6 @@ package google
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"github.com/google/generative-ai-go/genai"
 	"google.golang.org/api/iterator"
@@ -364,14 +363,4 @@ func convertParts(msg ryn.Message) []genai.Part {
 		parts = append(parts, genai.Text(""))
 	}
 	return parts
-}
-
-// roleName converts a ryn Role to a Google AI role string.
-func roleName(r ryn.Role) string {
-	switch r {
-	case ryn.RoleAssistant:
-		return "model"
-	default:
-		return strings.ToLower(string(r))
-	}
 }

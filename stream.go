@@ -102,10 +102,20 @@ type Emitter struct {
 // Emit sends a Frame into the stream.
 // Blocks if the stream buffer is full (backpressure).
 // Returns an error if the context is canceled or the stream is closed.
-func (e *Emitter) Emit(ctx context.Context, f Frame) error {
+//
+// Emit is safe to call concurrently with Close — a concurrent close
+// returns ErrClosed instead of panicking.
+func (e *Emitter) Emit(ctx context.Context, f Frame) (err error) {
 	if e.p.closed.Load() {
 		return ErrClosed
 	}
+	// Recover from send-on-closed-channel if Close() races between
+	// the check above and the channel send below (TOCTOU).
+	defer func() {
+		if r := recover(); r != nil {
+			err = ErrClosed
+		}
+	}()
 	select {
 	case <-ctx.Done():
 		return ctx.Err()

@@ -31,6 +31,7 @@ import (
 
 	"ryn.dev/ryn"
 	"ryn.dev/ryn/internal/sse"
+	"ryn.dev/ryn/transport"
 )
 
 // Provider implements ryn.Provider using raw HTTP + SSE.
@@ -75,7 +76,7 @@ func New(baseURL, apiKey string, opts ...Option) *Provider {
 	p := &Provider{
 		baseURL: strings.TrimRight(baseURL, "/"),
 		apiKey:  apiKey,
-		client:  ryn.DefaultHTTPClient,
+		client:  transport.DefaultHTTPClient,
 		model:   "gpt-4o",
 		headers: make(map[string]string),
 	}

@@ -53,11 +53,27 @@ import (
 //	})
 type RequestHook func(input *bedrockruntime.ConverseStreamInput)
 
+// Extras enables combining Bedrock-specific request customizations in Request.Extra.
+//
+// This is useful when you need both a RequestHook and an inference profile
+// override on the same request.
+type Extras struct {
+	// InferenceProfile sets ConverseStreamInput.ModelId for this request.
+	// Accepts inference profile ID or ARN.
+	InferenceProfile string
+
+	// Hook is an optional per-request Bedrock RequestHook.
+	Hook RequestHook
+}
+
 // Provider implements ryn.Provider using AWS Bedrock ConverseStream.
 type Provider struct {
 	client *bedrockruntime.Client
 	model  string
 	hooks  []RequestHook
+	// inferenceProfile, when set, is used as default target in ModelId
+	// when Request.Model is empty.
+	inferenceProfile string
 }
 
 var _ ryn.Provider = (*Provider)(nil)
@@ -66,8 +82,9 @@ var _ ryn.Provider = (*Provider)(nil)
 type Option func(*providerConfig)
 
 type providerConfig struct {
-	model string
-	hooks []RequestHook
+	model            string
+	hooks            []RequestHook
+	inferenceProfile string
 }
 
 // WithModel sets the default model ID.
@@ -83,6 +100,15 @@ func WithRequestHook(fn RequestHook) Option {
 	}
 }
 
+// WithInferenceProfile sets a default Bedrock inference profile ID/ARN.
+//
+// If Request.Model is empty, this value is sent as ConverseStreamInput.ModelId.
+func WithInferenceProfile(profile string) Option {
+	return func(c *providerConfig) {
+		c.inferenceProfile = profile
+	}
+}
+
 // New creates a Bedrock provider from an AWS config.
 func New(cfg aws.Config, opts ...Option) *Provider {
 	pc := &providerConfig{model: "anthropic.claude-sonnet-4-5-20250514-v1:0"}
@@ -90,9 +116,10 @@ func New(cfg aws.Config, opts ...Option) *Provider {
 		o(pc)
 	}
 	return &Provider{
-		client: bedrockruntime.NewFromConfig(cfg),
-		model:  pc.model,
-		hooks:  pc.hooks,
+		client:           bedrockruntime.NewFromConfig(cfg),
+		model:            pc.model,
+		hooks:            pc.hooks,
+		inferenceProfile: pc.inferenceProfile,
 	}
 }
 
@@ -108,8 +135,25 @@ func (p *Provider) Client() *bedrockruntime.Client { return p.client }
 // Generate implements ryn.Provider.
 func (p *Provider) Generate(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
 	model := req.Model
+	if model == "" && p.inferenceProfile != "" {
+		model = p.inferenceProfile
+	}
 	if model == "" {
 		model = p.model
+	}
+
+	var extraHook RequestHook
+	if extra, ok := req.Extra.(Extras); ok {
+		if extra.InferenceProfile != "" {
+			model = extra.InferenceProfile
+		}
+		extraHook = extra.Hook
+	}
+	if extra, ok := req.Extra.(*Extras); ok && extra != nil {
+		if extra.InferenceProfile != "" {
+			model = extra.InferenceProfile
+		}
+		extraHook = extra.Hook
 	}
 
 	input := p.buildInput(model, req)
@@ -121,6 +165,9 @@ func (p *Provider) Generate(ctx context.Context, req *ryn.Request) (*ryn.Stream,
 	// Per-request hook via Extra
 	if hook, ok := req.Extra.(RequestHook); ok {
 		hook(input)
+	}
+	if extraHook != nil {
+		extraHook(input)
 	}
 
 	resp, err := p.client.ConverseStream(ctx, input)
