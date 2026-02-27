@@ -1,16 +1,21 @@
 // Package google implements a Ryn Provider backed by the official
 // Google Generative AI Go SDK (github.com/google/generative-ai-go).
 //
-// This provider:
-//   - Uses the official SDK for auth, retries, and API compatibility
-//   - Streams text tokens and tool calls from Gemini models
-//   - Supports multimodal input (text, image, audio, video)
-//   - Reports token usage via KindUsage frames
-//   - Sets ResponseMeta with model, finish reason, and response ID
+// This is an opt-in provider module. Import it only when you need
+// Google Gemini models:
 //
-// Usage:
+//	go get ryn.dev/ryn/provider/google
 //
-//	llm := google.New(os.Getenv("GOOGLE_API_KEY"))
+// # SDK Access
+//
+// Use [Provider.Client] to access the underlying SDK client directly.
+// Use [WithRequestHook] or pass a [RequestHook] as Request.Extra to
+// modify the GenerativeModel before each request.
+//
+// # Usage
+//
+//	llm, _ := google.New(os.Getenv("GOOGLE_API_KEY"))
+//	defer llm.Close()
 //	stream, err := llm.Generate(ctx, &ryn.Request{
 //	    Model: "gemini-2.0-flash",
 //	    Messages: []ryn.Message{ryn.UserText("Hello")},
@@ -19,7 +24,6 @@ package google
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -30,10 +34,28 @@ import (
 	"ryn.dev/ryn"
 )
 
+// RequestHook allows modifying the GenerativeModel before each request.
+// Use this to set SDK-specific parameters not exposed by ryn.Request.
+//
+// Provider-level:
+//
+//	google.New(key, google.WithRequestHook(func(m *genai.GenerativeModel) {
+//	    m.SafetySettings = []*genai.SafetySetting{...}
+//	}))
+//
+// Per-request (via Request.Extra):
+//
+//	stream, _ := llm.Generate(ctx, &ryn.Request{
+//	    Messages: msgs,
+//	    Extra: google.RequestHook(func(m *genai.GenerativeModel) { ... }),
+//	})
+type RequestHook func(model *genai.GenerativeModel)
+
 // Provider implements ryn.Provider using the Google Generative AI SDK.
 type Provider struct {
 	client *genai.Client
 	model  string
+	hooks  []RequestHook
 }
 
 var _ ryn.Provider = (*Provider)(nil)
@@ -44,6 +66,7 @@ type Option func(*providerConfig)
 type providerConfig struct {
 	model   string
 	apiOpts []goption.ClientOption
+	hooks   []RequestHook
 }
 
 // WithModel sets the default model.
@@ -55,6 +78,14 @@ func WithModel(model string) Option {
 func WithClientOption(opt goption.ClientOption) Option {
 	return func(c *providerConfig) {
 		c.apiOpts = append(c.apiOpts, opt)
+	}
+}
+
+// WithRequestHook registers a function called with the GenerativeModel
+// before each request. Multiple hooks are called in registration order.
+func WithRequestHook(fn RequestHook) Option {
+	return func(c *providerConfig) {
+		c.hooks = append(c.hooks, fn)
 	}
 }
 
@@ -71,13 +102,17 @@ func New(apiKey string, opts ...Option) (*Provider, error) {
 		return nil, fmt.Errorf("ryn/google: new client: %w", err)
 	}
 
-	return &Provider{client: client, model: cfg.model}, nil
+	return &Provider{client: client, model: cfg.model, hooks: cfg.hooks}, nil
 }
 
 // NewFromClient creates a provider from an existing Google AI client.
 func NewFromClient(client *genai.Client, model string) *Provider {
 	return &Provider{client: client, model: model}
 }
+
+// Client returns the underlying Google Generative AI client.
+// Use for direct SDK access when the ryn abstraction is insufficient.
+func (p *Provider) Client() *genai.Client { return p.client }
 
 // Close releases resources held by the provider.
 func (p *Provider) Close() error {
@@ -93,6 +128,15 @@ func (p *Provider) Generate(ctx context.Context, req *ryn.Request) (*ryn.Stream,
 
 	model := p.client.GenerativeModel(modelName)
 	configureModel(model, req)
+
+	// Provider-level hooks
+	for _, h := range p.hooks {
+		h(model)
+	}
+	// Per-request hook via Extra
+	if hook, ok := req.Extra.(RequestHook); ok {
+		hook(model)
+	}
 
 	// Prepare content from messages
 	content, history := buildContent(req)
@@ -145,7 +189,7 @@ func consume(ctx context.Context, iter *genai.GenerateContentResponseIterator, o
 				}
 
 			case genai.FunctionCall:
-				args, _ := json.Marshal(v.Args)
+				args, _ := ryn.JSONMarshal(v.Args)
 				tc := &ryn.ToolCall{
 					Name: v.Name,
 					Args: args,
@@ -213,7 +257,7 @@ func configureModel(model *genai.GenerativeModel, req *ryn.Request) {
 			}
 			if len(tool.Parameters) > 0 {
 				var schema genai.Schema
-				json.Unmarshal(tool.Parameters, &schema)
+				_ = ryn.JSONUnmarshal(tool.Parameters, &schema)
 				fd.Parameters = &schema
 			}
 			funcDecls = append(funcDecls, fd)
@@ -298,7 +342,6 @@ func convertParts(msg ryn.Message) []genai.Part {
 
 		case ryn.KindToolResult:
 			if p.Result != nil {
-				// Extract function name from CallID if available
 				name := p.Result.CallID
 				parts = append(parts, genai.FunctionResponse{
 					Name:     name,
@@ -309,7 +352,7 @@ func convertParts(msg ryn.Message) []genai.Part {
 		case ryn.KindToolCall:
 			if p.Tool != nil {
 				var args map[string]any
-				json.Unmarshal(p.Tool.Args, &args)
+				_ = ryn.JSONUnmarshal(p.Tool.Args, &args)
 				parts = append(parts, genai.FunctionCall{
 					Name: p.Tool.Name,
 					Args: args,
@@ -318,13 +361,12 @@ func convertParts(msg ryn.Message) []genai.Part {
 		}
 	}
 	if len(parts) == 0 {
-		// Google SDK requires at least one part
 		parts = append(parts, genai.Text(""))
 	}
 	return parts
 }
 
-// roleName is unused but kept for documentation
+// roleName converts a ryn Role to a Google AI role string.
 func roleName(r ryn.Role) string {
 	switch r {
 	case ryn.RoleAssistant:

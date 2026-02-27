@@ -1,15 +1,21 @@
 // Package openai implements a Ryn Provider backed by the official
 // OpenAI Go SDK (github.com/openai/openai-go).
 //
-// This provider:
-//   - Uses the official SDK for auth, retries, and API compatibility
-//   - Streams text tokens and tool calls
-//   - Supports multimodal input (text, image, audio)
-//   - Reports token usage via KindUsage frames
-//   - Sets ResponseMeta with model, finish reason, and response ID
-//   - Works with any OpenAI-compatible endpoint (Azure, Ollama, vLLM)
+// This is an opt-in provider module. Import it only when you need
+// OpenAI (or Azure OpenAI, or any OpenAI-compatible endpoint):
 //
-// Usage:
+//	go get ryn.dev/ryn/provider/openai
+//
+// # SDK Access
+//
+// Use [Provider.Client] to access the underlying SDK client directly
+// for operations not covered by the ryn abstraction.
+//
+// Use [WithRequestHook] (provider-level) or pass a [RequestHook] as
+// Request.Extra (per-request) to modify the raw SDK params before
+// each API call.
+//
+// # Usage
 //
 //	llm := openai.New(os.Getenv("OPENAI_API_KEY"))
 //	stream, err := llm.Generate(ctx, &ryn.Request{
@@ -31,10 +37,30 @@ import (
 	"ryn.dev/ryn"
 )
 
+// RequestHook allows modifying the raw SDK params before the request is sent.
+// Use this to set SDK-specific parameters not exposed by ryn.Request.
+//
+// Provider-level (every request):
+//
+//	openai.New(key, openai.WithRequestHook(func(p *oai.ChatCompletionNewParams) {
+//	    p.LogProbs = oai.Bool(true)
+//	}))
+//
+// Per-request (via Request.Extra):
+//
+//	stream, _ := llm.Generate(ctx, &ryn.Request{
+//	    Messages: msgs,
+//	    Extra: openai.RequestHook(func(p *oai.ChatCompletionNewParams) {
+//	        p.LogProbs = oai.Bool(true)
+//	    }),
+//	})
+type RequestHook func(params *oai.ChatCompletionNewParams)
+
 // Provider implements ryn.Provider using the official OpenAI SDK.
 type Provider struct {
 	client oai.Client
 	model  string
+	hooks  []RequestHook
 }
 
 var _ ryn.Provider = (*Provider)(nil)
@@ -45,6 +71,7 @@ type Option func(*providerConfig)
 type providerConfig struct {
 	opts  []option.RequestOption
 	model string
+	hooks []RequestHook
 }
 
 // WithBaseURL overrides the API base URL.
@@ -68,6 +95,14 @@ func WithRequestOption(opt option.RequestOption) Option {
 	}
 }
 
+// WithRequestHook registers a function called with the raw SDK params
+// before each request. Multiple hooks are called in registration order.
+func WithRequestHook(fn RequestHook) Option {
+	return func(c *providerConfig) {
+		c.hooks = append(c.hooks, fn)
+	}
+}
+
 // New creates an OpenAI provider.
 func New(apiKey string, opts ...Option) *Provider {
 	cfg := &providerConfig{model: "gpt-4o"}
@@ -78,6 +113,7 @@ func New(apiKey string, opts ...Option) *Provider {
 	return &Provider{
 		client: oai.NewClient(clientOpts...),
 		model:  cfg.model,
+		hooks:  cfg.hooks,
 	}
 }
 
@@ -87,6 +123,10 @@ func NewFromClient(client oai.Client, model string) *Provider {
 	return &Provider{client: client, model: model}
 }
 
+// Client returns the underlying OpenAI SDK client.
+// Use for direct SDK access when the ryn abstraction is insufficient.
+func (p *Provider) Client() oai.Client { return p.client }
+
 // Generate implements ryn.Provider.
 func (p *Provider) Generate(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
 	model := req.Model
@@ -95,6 +135,16 @@ func (p *Provider) Generate(ctx context.Context, req *ryn.Request) (*ryn.Stream,
 	}
 
 	params := buildParams(model, req)
+
+	// Provider-level hooks
+	for _, h := range p.hooks {
+		h(&params)
+	}
+	// Per-request hook via Extra
+	if hook, ok := req.Extra.(RequestHook); ok {
+		hook(&params)
+	}
+
 	sdk := p.client.Chat.Completions.NewStreaming(ctx, params)
 
 	stream, emitter := ryn.NewStream(32)
@@ -329,6 +379,6 @@ func rawToMap(raw json.RawMessage) map[string]any {
 		return nil
 	}
 	var m map[string]any
-	_ = json.Unmarshal(raw, &m)
+	_ = ryn.JSONUnmarshal(raw, &m)
 	return m
 }

@@ -1,14 +1,18 @@
 // Package bedrock implements a Ryn Provider backed by the AWS SDK v2
 // for Amazon Bedrock Runtime (ConverseStream API).
 //
-// This provider:
-//   - Uses the official AWS SDK v2 for auth, retries, and API compatibility
-//   - Streams text tokens and tool calls from any Bedrock-hosted model
-//   - Supports tool use with automatic argument/result marshaling
-//   - Reports token usage via KindUsage frames
-//   - Works with Claude, Llama, Mistral, Titan, and other Bedrock models
+// This is an opt-in provider module. Import it only when you need
+// AWS Bedrock models:
 //
-// Usage:
+//	go get ryn.dev/ryn/provider/bedrock
+//
+// # SDK Access
+//
+// Use [Provider.Client] to access the underlying Bedrock SDK client.
+// Use [WithRequestHook] or pass a [RequestHook] as Request.Extra to
+// modify the raw ConverseStreamInput before each request.
+//
+// # Usage
 //
 //	cfg, _ := config.LoadDefaultConfig(ctx)
 //	llm := bedrock.New(cfg)
@@ -31,10 +35,29 @@ import (
 	"ryn.dev/ryn"
 )
 
+// RequestHook allows modifying the raw ConverseStreamInput before the
+// request is sent. Use this to set SDK-specific parameters not exposed
+// by ryn.Request (guardrails, additional model fields, etc.).
+//
+// Provider-level:
+//
+//	bedrock.New(cfg, bedrock.WithRequestHook(func(in *bedrockruntime.ConverseStreamInput) {
+//	    in.GuardrailConfig = &types.GuardrailConfiguration{...}
+//	}))
+//
+// Per-request (via Request.Extra):
+//
+//	stream, _ := llm.Generate(ctx, &ryn.Request{
+//	    Messages: msgs,
+//	    Extra: bedrock.RequestHook(func(in *bedrockruntime.ConverseStreamInput) { ... }),
+//	})
+type RequestHook func(input *bedrockruntime.ConverseStreamInput)
+
 // Provider implements ryn.Provider using AWS Bedrock ConverseStream.
 type Provider struct {
 	client *bedrockruntime.Client
 	model  string
+	hooks  []RequestHook
 }
 
 var _ ryn.Provider = (*Provider)(nil)
@@ -44,11 +67,20 @@ type Option func(*providerConfig)
 
 type providerConfig struct {
 	model string
+	hooks []RequestHook
 }
 
 // WithModel sets the default model ID.
 func WithModel(model string) Option {
 	return func(c *providerConfig) { c.model = model }
+}
+
+// WithRequestHook registers a function called with the raw SDK input
+// before each request. Multiple hooks are called in registration order.
+func WithRequestHook(fn RequestHook) Option {
+	return func(c *providerConfig) {
+		c.hooks = append(c.hooks, fn)
+	}
 }
 
 // New creates a Bedrock provider from an AWS config.
@@ -60,6 +92,7 @@ func New(cfg aws.Config, opts ...Option) *Provider {
 	return &Provider{
 		client: bedrockruntime.NewFromConfig(cfg),
 		model:  pc.model,
+		hooks:  pc.hooks,
 	}
 }
 
@@ -67,6 +100,10 @@ func New(cfg aws.Config, opts ...Option) *Provider {
 func NewFromClient(client *bedrockruntime.Client, model string) *Provider {
 	return &Provider{client: client, model: model}
 }
+
+// Client returns the underlying Bedrock SDK client.
+// Use for direct SDK access when the ryn abstraction is insufficient.
+func (p *Provider) Client() *bedrockruntime.Client { return p.client }
 
 // Generate implements ryn.Provider.
 func (p *Provider) Generate(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
@@ -76,6 +113,15 @@ func (p *Provider) Generate(ctx context.Context, req *ryn.Request) (*ryn.Stream,
 	}
 
 	input := p.buildInput(model, req)
+
+	// Provider-level hooks
+	for _, h := range p.hooks {
+		h(input)
+	}
+	// Per-request hook via Extra
+	if hook, ok := req.Extra.(RequestHook); ok {
+		hook(input)
+	}
 
 	resp, err := p.client.ConverseStream(ctx, input)
 	if err != nil {
@@ -242,7 +288,7 @@ func (p *Provider) buildInput(model string, req *ryn.Request) *bedrockruntime.Co
 			}
 			if len(tool.Parameters) > 0 {
 				var doc any
-				json.Unmarshal(tool.Parameters, &doc)
+				_ = ryn.JSONUnmarshal(tool.Parameters, &doc)
 				spec.Value.InputSchema = &types.ToolInputSchemaMemberJson{
 					Value: document.NewLazyDocument(doc),
 				}
@@ -288,7 +334,7 @@ func convertMessage(msg ryn.Message) types.Message {
 		case ryn.KindToolCall:
 			if p.Tool != nil {
 				var input any
-				json.Unmarshal(p.Tool.Args, &input)
+				_ = ryn.JSONUnmarshal(p.Tool.Args, &input)
 				blocks = append(blocks, &types.ContentBlockMemberToolUse{
 					Value: types.ToolUseBlock{
 						ToolUseId: aws.String(p.Tool.ID),

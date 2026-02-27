@@ -67,11 +67,15 @@ func WithHeader(key, value string) Option {
 //
 // baseURL should be the API root (e.g. "https://api.openai.com/v1").
 // apiKey can be empty for unauthenticated endpoints.
+//
+// The default HTTP client uses ryn.DefaultHTTPClient which is optimized
+// for high-concurrency streaming with keep-alive connection pooling.
+// Override with WithClient if you need a custom transport.
 func New(baseURL, apiKey string, opts ...Option) *Provider {
 	p := &Provider{
 		baseURL: strings.TrimRight(baseURL, "/"),
 		apiKey:  apiKey,
-		client:  http.DefaultClient,
+		client:  ryn.DefaultHTTPClient,
 		model:   "gpt-4o",
 		headers: make(map[string]string),
 	}
@@ -88,7 +92,7 @@ func (p *Provider) Generate(ctx context.Context, req *ryn.Request) (*ryn.Stream,
 		model = p.model
 	}
 
-	body, err := json.Marshal(buildRequest(model, req))
+	body, err := ryn.JSONMarshal(buildRequest(model, req))
 	if err != nil {
 		return nil, fmt.Errorf("ryn/compat: marshal: %w", err)
 	}
@@ -140,7 +144,7 @@ func consume(ctx context.Context, body io.ReadCloser, out *ryn.Emitter) {
 		}
 
 		var c chunk
-		if err := json.Unmarshal(ev.Data, &c); err != nil {
+		if err := ryn.JSONUnmarshal(ev.Data, &c); err != nil {
 			out.Error(fmt.Errorf("ryn/compat: decode: %w", err))
 			return
 		}

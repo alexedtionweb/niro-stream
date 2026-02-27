@@ -255,21 +255,42 @@ type Request struct {
     ResponseFormat string          // "", "json", "json_schema"
     ResponseSchema json.RawMessage // JSON Schema for structured output
     Options        Options         // Temperature, MaxTokens, TopP, etc.
+    Extra          any             // Provider-specific SDK hooks (see below)
 }
 ```
 
 `EffectiveMessages()` returns Messages with SystemPrompt prepended as a system message.
 
+#### Request.Extra — Per-Request SDK Customization
+
+The `Extra` field enables raw SDK parameter access on a per-request basis without modifying the provider. Each SDK provider checks `Extra` for its own `RequestHook` type:
+
+```go
+// OpenAI: type RequestHook func(params *oai.ChatCompletionNewParams)
+// Anthropic: type RequestHook func(params *ant.MessageNewParams)
+// Google: type RequestHook func(model *genai.GenerativeModel)
+// Bedrock: type RequestHook func(input *bedrockruntime.ConverseStreamInput)
+```
+
+Providers ignore unrecognized `Extra` types. This pattern lets a single `ryn.Request` carry provider-specific tuning without breaking the common interface.
+
 ### Provider Implementations
 
-All built-in providers follow the same internal pattern:
+All SDK providers are **separate Go modules** (`ryn.dev/ryn/provider/<name>`). They follow the same internal pattern:
 
 1. **Translate** `ryn.Request` → SDK-specific params (messages, tools, options)
-2. **Call** the SDK's streaming method
-3. **Spawn** a goroutine that reads from the SDK stream
-4. **Emit** Frames: `KindText` for deltas, `KindToolCall` for completed tools, `KindUsage` for token counts
-5. **Set** `ResponseMeta` with model, finish reason, response ID
-6. **Close** the emitter when the SDK stream ends
+2. **Apply hooks**: provider-level `WithRequestHook` + per-request `Request.Extra`
+3. **Call** the SDK's streaming method
+4. **Spawn** a goroutine that reads from the SDK stream
+5. **Emit** Frames: `KindText` for deltas, `KindToolCall` for completed tools, `KindUsage` for token counts
+6. **Set** `ResponseMeta` with model, finish reason, response ID
+7. **Close** the emitter when the SDK stream ends
+
+Each provider exposes:
+
+- **`Client()`** — the underlying SDK client for direct API access
+- **`RequestHook` type** — function receiving raw SDK params
+- **`WithRequestHook()`** — provider option applying a hook to every request
 
 #### OpenAI Provider
 
@@ -465,8 +486,9 @@ The user always checks `stream.Err()` after iteration. One place. One pattern.
 **Cold path (tool calls, usage, multimodal)**:
 
 - `*ToolCall`, `*ToolResult`, `*Usage` are pointer fields — allocated only when used
-- `[]byte` for binary data — single allocation per chunk
-- These paths are inherently I/O bound, so allocation cost is negligible
+- `[]byte` for binary data — pooled via `BytePool` (zero alloc) or single allocation per chunk
+- `*Usage` and `*ResponseMeta` — pooled via `sync.Pool` (zero alloc, ~21-27ns)
+- These paths are inherently I/O bound, but pooling eliminates GC pressure at scale
 
 ### Goroutine Lifecycle
 
@@ -501,59 +523,311 @@ type Usage struct {
 - `Usage.Add()` merges two Usage values (Detail maps are combined)
 - Orchestration primitives (Race) return Usage alongside text
 
+## Structured Output (JSON Schema)
+
+Ryn supports schema-constrained output with typed decoding inspired by Genkit’s
+GenerateData/GenerateDataStream model. The request sets:
+
+- `ResponseFormat = "json_schema"`
+- `ResponseSchema = <JSON Schema bytes>`
+
+Helpers in [structured.go](structured.go) provide two paths:
+
+1. **Final typed output** — `GenerateStructured[T]` runs the request and
+   unmarshals the final JSON into `T`.
+2. **Partial + final streaming** — `StreamStructured[T]` parses partial JSON as
+   soon as the stream becomes valid, then emits the final typed value when the
+   stream ends.
+
+Decoding uses the configurable JSON backend defined in [json.go](json.go) and
+performs a fast `JSONValid` check before attempting to unmarshal partial data.
+
 ## Package Structure
 
+Ryn uses a **multi-module** layout. The core module (`ryn.dev/ryn`) has **zero external dependencies**. Each SDK provider is a separate Go module with its own `go.mod` — users only pull the SDKs they need.
+
 ```
-ryn.dev/ryn/
-├── doc.go              Package documentation
-├── frame.go            Frame, Kind, Signal, ToolCall, ToolResult, Tool, Usage
-├── message.go          Message, Part, Role — conversation model
-├── stream.go           Stream, Emitter, NewStream — the core pipe
-├── processor.go        Processor interface, Map/Filter/Tap/TextOnly/Accumulate
-├── pipeline.go         Pipeline — concurrent goroutine-per-stage chain
-├── provider.go         Provider interface, Request, Options
-├── hook.go             Hook interface, GenerateStartInfo/EndInfo, NoOpHook, Hooks()
-├── orchestrate.go      Fan, Race, Sequence — concurrent workflow primitives
-├── runtime.go          Runtime — lifecycle composer (Provider + Pipeline + Hook)
+ryn.dev/ryn                          ← root module (zero external deps)
+├── go.mod                           module ryn.dev/ryn
+├── go.work                          workspace linking all sub-modules (dev only)
+├── doc.go                           Package documentation
+├── frame.go                         Frame, Kind, Signal, ToolCall, ToolResult, Tool, Usage
+├── message.go                       Message, Part, Role — conversation model
+├── stream.go                        Stream, Emitter, NewStream — the core pipe
+├── processor.go                     Processor interface, Map/Filter/Tap/TextOnly/Accumulate
+├── pipeline.go                      Pipeline — concurrent goroutine-per-stage chain
+├── provider.go                      Provider interface, Request, Options, Extra
+├── hook.go                          Hook interface, GenerateStartInfo/EndInfo, NoOpHook, Hooks()
+├── orchestrate.go                   Fan, Race, Sequence — concurrent workflow primitives
+├── runtime.go                       Runtime — lifecycle composer (Provider + Pipeline + Hook)
+├── pool.go                          BytePool, pooled frame constructors, Usage/ResponseMeta pools
+├── transport.go                     Transport(), HTTPClient(), DefaultTransport, DefaultHTTPClient
+├── cache.go                         Cache — sharded LRU response cache with TTL
+├── registry.go                      Registry — named provider routing
+├── json.go                          Configurable JSON backend (Fiber-compatible list)
+├── structured.go                    Structured output helpers (JSON Schema → typed)
+├── errors.go                        Error type, ErrorCode, semantic error checkers, error helpers
+├── validation.go                    Request.Validate(), Message.Validate(), Tool.Validate()
+├── retry.go                         RetryProvider, BackoffStrategy, ExponentialBackoff, ConstantBackoff
+├── cost.go                          Cost tracking, ModelPricing, PricingRegistry, pricing for known models
+├── timeout.go                       Timeout enforcement, request tracing, RequestID generation, TraceContext
+├── tools.go                         Tool execution loop, automatic tool calling, ToolExecutor interface
+├── bench_test.go                    42 benchmarks for core primitives + infrastructure
+├── ryn_test.go                      81 tests covering core, infrastructure, validation, retry, cost, tracing, tools
 │
 ├── internal/
 │   └── sse/
-│       └── reader.go   SSE event reader (stdlib-only, for compat provider)
+│       ├── reader.go                SSE event reader (stdlib-only)
+│       └── reader_test.go
 │
 ├── provider/
-│   ├── openai/         OpenAI SDK-backed provider
-│   │   ├── openai.go
-│   │   └── encode.go
-│   ├── anthropic/      Anthropic SDK-backed provider
-│   │   └── anthropic.go
-│   ├── google/         Google Gemini SDK-backed provider
-│   │   └── google.go
-│   ├── bedrock/        AWS Bedrock SDK-backed provider
-│   │   └── bedrock.go
-│   └── compat/         OpenAI-compatible HTTP+SSE provider
-│       └── compat.go
-│
-└── examples/
-    ├── chat/           Basic streaming chat with provider selection
-    ├── tools/          Tool-calling loop with round-trip
-    ├── parallel/       Fan, Race, Sequence orchestration demo
-    └── pipeline/       Processing pipeline with Hook telemetry
+│   ├── compat/                      OpenAI-compatible HTTP+SSE (in root module, stdlib-only)
+│   │   ├── compat.go
+│   │   └── compat_test.go
 ```
+
+│ │
+│ ├── openai/ ← separate module: ryn.dev/ryn/provider/openai
+│ │ ├── go.mod
+│ │ ├── openai.go Provider + Client() + RequestHook + WithRequestHook()
+│ │ └── encode.go
+│ │
+│ ├── anthropic/ ← separate module: ryn.dev/ryn/provider/anthropic
+│ │ ├── go.mod
+│ │ └── anthropic.go Provider + Client() + RequestHook + WithRequestHook()
+│ │
+│ ├── google/ ← separate module: ryn.dev/ryn/provider/google
+│ │ ├── go.mod
+│ │ └── google.go Provider + Client() + RequestHook + WithRequestHook()
+│ │
+│ └── bedrock/ ← separate module: ryn.dev/ryn/provider/bedrock
+│ ├── go.mod
+│ └── bedrock.go Provider + Client() + RequestHook + WithRequestHook()
+│
+└── \_examples/ ← separate module: ryn.dev/ryn/\_examples
+├── go.mod
+├── chat/main.go
+├── tools/main.go
+├── parallel/main.go
+└── pipeline/main.go
+
+````
+
+### Multi-Module Design
+
+**Why separate modules?**
+
+Without separate modules, `go get ryn.dev/ryn` would pull every SDK (OpenAI, Anthropic, Google, AWS) into the dependency graph — even if you only use one provider. This balloons `go.sum`, slows builds, and introduces transitive dependencies you don't control.
+
+With the plugin model:
+
+```bash
+# Core — zero external deps
+go get ryn.dev/ryn
+
+# Only the provider you need
+go get ryn.dev/ryn/provider/openai
+````
+
+Your binary contains only the SDK you actually import. The compat provider (stdlib HTTP+SSE) stays in the root module since it has zero external deps.
+
+**Development workflow**: A `go.work` file links all sub-modules for local development. Each provider `go.mod` has a `replace` directive pointing to the local root. These are removed before tagging releases.
+
+### SDK Extensibility Pattern
+
+Every SDK provider exposes three extension points:
+
+1. **`Client()`** — returns the underlying SDK client for direct API access
+2. **`WithRequestHook(fn)`** — provider-level option: hook runs on every request
+3. **`Request.Extra`** — per-request hook via `ryn.Request.Extra` field
+
+```go
+// Provider-level: every request gets logprobs
+llm := openai.New(key, openai.WithRequestHook(func(p *oai.ChatCompletionNewParams) {
+    p.LogProbs = oai.Bool(true)
+}))
+
+// Per-request: this one request only
+stream, _ := llm.Generate(ctx, &ryn.Request{
+    Messages: msgs,
+    Extra: openai.RequestHook(func(p *oai.ChatCompletionNewParams) {
+        p.TopLogProbs = oai.Int(5)
+    }),
+})
+```
+
+The `RequestHook` type is provider-specific — it receives the raw SDK parameter struct. This gives full SDK access without forking.
 
 ### Dependency Graph
 
 ```
-                  ryn (core)
-                /    |    \     \
-           stream pipeline hook  orchestrate
-                        \
-                     provider.go
-                    /   |    |    \     \
-             openai anthropic google bedrock compat
-             (SDK)   (SDK)   (SDK)  (SDK)  (stdlib)
+                ryn.dev/ryn (core)         ← stdlib only, zero deps
+              /    |       \        \
+         stream  pipeline  hook  orchestrate
+                       \
+                    provider.go  ←──  Request.Extra any (hooks into SDKs)
+                   /    |    |    \         \
+            openai anthropic google bedrock  compat
+            (own   (own      (own   (own    (root module,
+            module) module)  module) module)  stdlib-only)
 ```
 
-The core package (`ryn`) has zero external dependencies. Provider packages depend on their respective official SDKs.
+## Production Infrastructure
+
+Ryn includes purpose-built infrastructure for high-concurrency production deployments (millions of concurrent LLM calls).
+
+### BytePool — Zero-Allocation Media Buffers
+
+**Problem**: Under millions of concurrent calls, per-frame `[]byte` allocations for audio/image/video data create GC pressure that dominates latency.
+
+**Solution**: `BytePool` is a size-class `sync.Pool` with three buckets:
+
+```
+┌──────────────────────────────────────────────┐
+│                BytePool                       │
+├──────────┬──────────┬────────────────────────┤
+│ small    │ ≤4 KB    │ Audio chunks (20ms PCM) │
+│ medium   │ ≤64 KB   │ Larger audio, small imgs│
+│ large    │ ≤1 MB    │ Images, video frames    │
+│ (direct) │ >1 MB    │ Allocated directly      │
+└──────────┴──────────┴────────────────────────┘
+```
+
+**Key design choices**:
+
+- Pointers stored in pools (avoids interface boxing allocations)
+- Buffers returned via `Put()` are reset to `[:0]` — no stale data leaks
+- Oversized buffers (>2× large class) are dropped to prevent pool bloat
+- `DefaultBytePool` is process-wide; providers can create isolated pools
+
+**Pooled frame constructors** (`AudioFramePooled`, `ImageFramePooled`, `VideoFramePooled`) copy data into a pooled buffer and return a Frame. The consumer calls `pool.Put(frame.Data)` when done.
+
+### Transport — HTTP Connection Pooling
+
+**Problem**: Each LLM API call over HTTPS incurs TCP+TLS handshake cost. At scale, connection establishment becomes a bottleneck.
+
+**Solution**: `Transport()` creates an `*http.Transport` optimized for LLM traffic:
+
+- **Keep-alive**: 30s interval, 120s idle timeout — amortizes handshakes
+- **Connection pool**: GOMAXPROCS×64 total idle, GOMAXPROCS×16 per host
+- **TLS**: Session ticket resumption, TLS 1.2+ minimum
+- **HTTP/2**: Negotiated via ALPN (all major LLM APIs support it)
+- **Buffers**: 64KB write (typical request payloads), 32KB read (SSE streams)
+
+`DefaultTransport` and `DefaultHTTPClient` are process-wide singletons. The compat provider uses `DefaultHTTPClient` by default.
+
+### Cache — Sharded LRU Response Cache
+
+**Problem**: Identical requests (same model + messages + tools + options) should not hit the provider repeatedly.
+
+**Solution**: `Cache` provides a sharded (64 shards), TTL-aware LRU cache:
+
+```
+Request → SHA-256(model + messages + tools + options) → shard[hash % 64]
+    │
+    ├── Hit: replay cached frames as a new Stream
+    └── Miss: tee the provider's stream → emit to consumer + store in cache
+```
+
+**Key design choices**:
+
+- **64 shards** — power of 2 for fast modulo, eliminates lock contention
+- **Per-shard RWMutex** — reads are write-locked only for LRU promotion (O(1))
+- **Intrusive doubly-linked list** — O(1) LRU promote/evict, no heap allocation for list nodes
+- **SHA-256 keying** — deterministic, collision-resistant, includes all request fields
+- **Tee pattern** — on cache miss, frames are streamed to consumer AND cached simultaneously
+- **Atomic hit/miss counters** — lock-free stats via `atomic.Int64`
+
+Cache wraps any `Provider` transparently via `cache.Wrap(provider)`.
+
+### Registry — Named Provider Routing
+
+**Problem**: Production deployments run multiple providers (OpenAI, Anthropic, cached variants, fallbacks) and need to route by name at request time.
+
+**Solution**: `Registry` is a `sync.RWMutex`-protected `map[string]Provider`:
+
+```go
+reg := ryn.NewRegistry()
+reg.Register("openai", openaiProvider)
+reg.Register("cached-openai", cache.Wrap(openaiProvider))
+
+// Request-time routing:
+stream, err := reg.Generate(ctx, "openai", req)
+```
+
+Reads use `RLock` — zero contention under concurrent lookups. Writes use full lock. `All()` returns a snapshot (copy of map).
+
+### Object Pools
+
+`sync.Pool`-backed pools for frequently allocated hot-path objects:
+
+| Pool                | Object          | Allocs | Cost  |
+| ------------------- | --------------- | ------ | ----- |
+| `GetUsage()`        | `*Usage`        | 0      | ~21ns |
+| `GetResponseMeta()` | `*ResponseMeta` | 0      | ~27ns |
+
+Objects are zeroed on `Get` and cleaned on `Put` (maps set to nil to prevent retention).
+
+## Error Handling & Validation
+
+### Semantic Error Types (`errors.go`)
+
+Errors use typed error codes for proper handling:
+
+```go
+type ErrorCode int
+
+const (
+    ErrCodeInvalidRequest = 400 + iota
+    ErrCodeAuthenticationFailed           // don't retry
+    ErrCodeModelNotFound                  // don't retry
+    ErrCodeRateLimited = 429             // retry with backoff
+    ErrCodeProviderError = 500 + iota
+    ErrCodeServiceUnavailable             // retry
+    ErrCodeTimeout                        // retry with longer deadline
+)
+
+type Error struct {
+    Code       ErrorCode
+    Message    string
+    Err        error           // underlying error (chaining)
+    Provider   string
+    RequestID  string          // trace ID
+    Retryable  bool
+    StatusCode int
+}
+
+// Helpers: IsRetryable(err), IsRateLimited(err), IsAuthError(err), IsTimeout(err)
+```
+
+### Request Validation (`validation.go`)
+
+Request.Validate() checks: non-empty messages, valid ResponseFormat, JSON Schema validity, option bounds (Temperature ∈ [0, 2.0], TopP ∈ [0, 1.0], etc.), tool definitions.
+
+## Retry & Backoff (`retry.go`)
+
+**BackoffStrategy** implementations:
+
+- ConstantBackoff: Fixed delay
+- ExponentialBackoff: Exponential growth with optional jitter
+
+**RetryProvider** wraps Provider with configurable retry logic. Only retries errors marked retryable. Respects context cancellation.
+
+## Cost Tracking (`cost.go`)
+
+**ModelPricing** + **PricingRegistry** for per-model cost tracking. Default pricing for OpenAI, Anthropic, Google, AWS Bedrock (2025).
+
+## Timeouts & Tracing (`timeout.go`)
+
+**TimeoutProvider**: Generation timeout enforcement.
+
+**TraceContext**: Request-scoped trace data (RequestID, UserID, SessionID). Used by hooks for logging, cost tracking, distributed tracing.
+
+## Tool Execution (`tools.go`)
+
+**ToolExecutor**: Execute tool calls.
+
+**ToolLoop**: Multi-turn tool calling (Generate → Execute → Generate → ... until no tools or max rounds).
 
 ## Future Extension Points
 
@@ -577,12 +851,16 @@ Future: `ToolExecutor` processor that automatically dispatches, feeds results ba
 Current: single-turn generate, manual tool loop.
 Future: `Agent` that manages multi-turn state, automatic tool execution, and continuous streaming with interruption support.
 
-### Structured Output
-
-Current: `ResponseFormat` + `ResponseSchema` on Request.
-Future: Generic helper that decodes the final text into a typed Go struct.
-
 ### Provider Middleware
 
-Current: Hook provides observability.
-Future: Provider middleware for retries, rate limiting, caching, fallback chains.
+Current: Hook provides observability, `RequestHook` enables SDK-level customization, `Cache` provides response caching, `Registry` enables named routing.
+Future: Provider middleware for retries, rate limiting, fallback chains, circuit breaking.
+
+### Community Providers
+
+The plugin model makes it easy to add providers without touching the core:
+
+```go
+// Third-party provider — just implement ryn.Provider
+// and publish as ryn.dev/ryn/provider/mistral (or your own module path)
+```

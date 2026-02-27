@@ -81,30 +81,31 @@ Tokens arrive as they're generated. Usage is tracked silently. No buffering. No 
 
 ## Providers
 
-Ryn ships with five provider implementations backed by official SDKs:
+Ryn uses a **plugin model**: the core (`ryn.dev/ryn`) has **zero external dependencies**. Each SDK-backed provider lives in its own Go module — you only `go get` what you use. No SDK you don't need ever enters your build graph.
 
-| Provider          | Package              | SDK                                                                           |
-| ----------------- | -------------------- | ----------------------------------------------------------------------------- |
-| OpenAI            | `provider/openai`    | [openai/openai-go](https://github.com/openai/openai-go)                       |
-| Anthropic         | `provider/anthropic` | [anthropics/anthropic-sdk-go](https://github.com/anthropics/anthropic-sdk-go) |
-| Google Gemini     | `provider/google`    | [google/generative-ai-go](https://github.com/google/generative-ai-go)         |
-| AWS Bedrock       | `provider/bedrock`   | [aws-sdk-go-v2](https://github.com/aws/aws-sdk-go-v2)                         |
-| OpenAI-compatible | `provider/compat`    | stdlib HTTP + SSE (no SDK)                                                    |
+| Provider          | Module                           | Install                                 | SDK                                                                           |
+| ----------------- | -------------------------------- | --------------------------------------- | ----------------------------------------------------------------------------- |
+| OpenAI            | `ryn.dev/ryn/provider/openai`    | `go get ryn.dev/ryn/provider/openai`    | [openai/openai-go](https://github.com/openai/openai-go)                       |
+| Anthropic         | `ryn.dev/ryn/provider/anthropic` | `go get ryn.dev/ryn/provider/anthropic` | [anthropics/anthropic-sdk-go](https://github.com/anthropics/anthropic-sdk-go) |
+| Google Gemini     | `ryn.dev/ryn/provider/google`    | `go get ryn.dev/ryn/provider/google`    | [google/generative-ai-go](https://github.com/google/generative-ai-go)         |
+| AWS Bedrock       | `ryn.dev/ryn/provider/bedrock`   | `go get ryn.dev/ryn/provider/bedrock`   | [aws-sdk-go-v2](https://github.com/aws/aws-sdk-go-v2)                         |
+| OpenAI-compatible | `ryn.dev/ryn/provider/compat`    | included in core (zero deps)            | stdlib HTTP + SSE                                                             |
 
 ```go
-// OpenAI
+// OpenAI — go get ryn.dev/ryn/provider/openai
 llm := openai.New(os.Getenv("OPENAI_API_KEY"))
 
-// Anthropic
+// Anthropic — go get ryn.dev/ryn/provider/anthropic
 llm := anthropic.New(os.Getenv("ANTHROPIC_API_KEY"))
 
-// Google Gemini
+// Google Gemini — go get ryn.dev/ryn/provider/google
 llm := google.New(ctx, os.Getenv("GOOGLE_API_KEY"))
 
-// AWS Bedrock
+// AWS Bedrock — go get ryn.dev/ryn/provider/bedrock
 llm := bedrock.New(cfg) // from aws-sdk-go-v2 config
 
 // Any OpenAI-compatible endpoint (Ollama, vLLM, LiteLLM, etc.)
+// Included in core — no extra install needed
 llm := compat.New("http://localhost:11434/v1", "")
 ```
 
@@ -122,6 +123,36 @@ mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Strea
     return s, nil
 })
 ```
+
+### SDK Extensibility
+
+Every SDK provider exposes its underlying client and a `RequestHook` for raw SDK parameter access. This gives you full control without forking the provider.
+
+**Expose underlying client:**
+
+```go
+llm := openai.New(apiKey)
+client := llm.Client() // returns openai-go's Client for direct API calls
+```
+
+**Per-provider `RequestHook` — modify raw SDK params before each request:**
+
+```go
+// Provider-level hook (applied to every request)
+llm := openai.New(apiKey, openai.WithRequestHook(func(p *oai.ChatCompletionNewParams) {
+    p.StreamOptions = oai.F(oai.ChatCompletionStreamOptionsParam{IncludeUsage: oai.Bool(true)})
+}))
+
+// Per-request hook (via Request.Extra)
+stream, err := llm.Generate(ctx, &ryn.Request{
+    Messages: msgs,
+    Extra: openai.RequestHook(func(p *oai.ChatCompletionNewParams) {
+        p.LogProbs = oai.Bool(true)
+    }),
+})
+```
+
+Each provider defines its own `RequestHook` type with the appropriate SDK parameter struct. See the provider packages for details.
 
 ## Core Concepts
 
@@ -263,6 +294,47 @@ for stream.Next(ctx) {
 
 See [examples/tools](examples/tools/main.go) for a complete tool-calling loop.
 
+## Structured Output (JSON Schema → Typed)
+
+Use JSON Schema to constrain model output and decode it into a typed struct.
+
+### Final typed output
+
+```go
+type Weather struct {
+    City  string `json:"city"`
+    TempF int    `json:"temp_f"`
+}
+
+schema := json.RawMessage(`{"type":"object","properties":{"city":{"type":"string"},"temp_f":{"type":"integer"}},"required":["city","temp_f"]}`)
+
+result, resp, usage, err := ryn.GenerateStructured[Weather](ctx, llm, &ryn.Request{
+    Messages: []ryn.Message{ryn.UserText("Weather in NYC?")},
+}, schema)
+```
+
+### Streaming partial + final output
+
+```go
+ss, err := ryn.StreamStructured[Weather](ctx, llm, &ryn.Request{
+    Messages: []ryn.Message{ryn.UserText("Weather in NYC?")},
+}, schema)
+if err != nil { /* handle */ }
+
+for ss.Next(ctx) {
+    ev := ss.Event()
+    if ev.Partial != nil {
+        // partial valid JSON (may update as stream progresses)
+    }
+    if ev.Final != nil {
+        // final typed output
+    }
+}
+if err := ss.Err(); err != nil {
+    // handle error
+}
+```
+
 ## Hooks — Telemetry & Observability
 
 Every generation is observable through the `Hook` interface:
@@ -290,6 +362,192 @@ rt := ryn.NewRuntime(llm).
 stream, err := rt.Generate(ctx, req)
 ```
 
+## Error Handling & Validation
+
+Ryn provides semantic error types and request validation for robust error handling.
+
+### Request Validation
+
+Validate requests before invoking a provider:
+
+```go
+req := &ryn.Request{
+    Model: "gpt-4o",
+    Messages: []ryn.Message{ryn.UserText("hello")},
+    ResponseFormat: "json_schema",
+    ResponseSchema: schema,
+    Options: ryn.Options{Temperature: ryn.Temp(0.7)},
+}
+
+if err := req.Validate(); err != nil {
+    fmt.Printf("validation error: %v (code: %d)\n", err.Message, err.Code)
+}
+```
+
+Checks: non-empty messages, valid ResponseFormat, ResponseSchema validity (if json_schema), parameter ranges (Temperature ∈ [0, 2.0], TopP ∈ [0, 1.0], etc.), tool definitions, and more.
+
+### Error Types & Semantic Handling
+
+Errors are typed for proper handling:
+
+```go
+// Check error category
+if ryn.IsRetryable(err) {
+    // Safe to retry
+}
+if ryn.IsRateLimited(err) {
+    // Rate limit — use backoff
+}
+if ryn.IsAuthError(err) {
+    // Invalid credentials — don't retry
+}
+if ryn.IsTimeout(err) {
+    // Timeout — may retry with longer deadline
+}
+
+// Error chaining
+err := ryn.WrapError(ryn.ErrCodeProviderError, "OpenAI failed", underlying)
+err.WithProvider("openai").WithRequestID("req_123")
+```
+
+Error codes: InvalidRequest (400), AuthenticationFailed (401), ModelNotFound (404), RateLimited (429), ProviderError (500), ServiceUnavailable (503), Timeout (504), and Ryn-specific codes.
+
+## Retry & Backoff
+
+Automatic retry with exponential backoff for transient failures:
+
+```go
+config := ryn.RetryConfig{
+    MaxAttempts: 5,
+    Backoff: ryn.ExponentialBackoff{
+        InitialDelay: 100 * time.Millisecond,
+        Multiplier:   2.0,
+        MaxDelay:     10 * time.Second,
+        Jitter:       true, // avoid thundering herd
+    },
+    ShouldRetry: ryn.IsRetryable, // only retry transient errors
+    OnRetry: func(attempt int, err error) {
+        log.Printf("Retry %d: %v", attempt, err)
+    },
+}
+
+provider := ryn.NewRetryProvider(llm, config)
+stream, err := provider.Generate(ctx, req)
+```
+
+Works with context cancellation and respects deadlines. Only retries errors marked as retryable (429, 503, 504, stream errors).
+
+## Timeouts & Tracing
+
+### Timeouts
+
+Enforce generation timeouts:
+
+```go
+provider := ryn.NewTimeoutProvider(llm, 5*time.Minute)
+ctx, cancel := ryn.WithGenerationTimeout(context.Background(), 5*time.Minute)
+defer cancel()
+
+stream, err := provider.Generate(ctx, req)
+```
+
+### Request Tracing
+
+Automatic request ID generation and propagation:
+
+```go
+// Generate unique request ID
+requestID := ryn.GenerateRequestID() // "req_<random>"
+
+// Inject trace context
+trace := ryn.TraceContext{
+    RequestID: requestID,
+    UserID:    "user123",
+    SessionID: "session456",
+}
+ctx = ryn.WithTraceContext(ctx, trace)
+
+// Use TracingProvider to auto-inject trace context
+provider := ryn.NewTracingProvider(llm)
+stream, err := provider.Generate(ctx, req)
+
+// Retrieve in hooks for logging
+trace := ryn.GetTraceContext(ctx)
+fmt.Printf("Request: %s (user: %s)", trace.RequestID, trace.UserID)
+```
+
+## Cost Tracking
+
+Track generation costs in real-time using the global pricing registry:
+
+```go
+// Use default pricing (auto-initialized with 2025 rates)
+cost := ryn.CalculateCost("openai", "gpt-4o", usage)
+fmt.Printf("Cost: $%.4f (%d in, %d out)\n", cost.TotalCost, usage.InputTokens, usage.OutputTokens)
+
+// Configure custom pricing
+registry := ryn.GetPricingRegistry()
+registry.Set("my-provider", "my-model", &ryn.ModelPricing{
+    InputCostPer1M:  0.001,
+    OutputCostPer1M: 0.002,
+})
+
+// Use in hooks for cost accumulation
+hook := &MyHook{
+    onEnd: func(ctx context.Context, info ryn.GenerateEndInfo) {
+        cost := info.Cost
+        totalCost += cost.TotalCost
+        log.Printf("Generated %d tokens for $%.4f", info.Usage.TotalTokens, cost.TotalCost)
+    },
+}
+```
+
+Built-in pricing for OpenAI (GPT-4, GPT-3.5), Anthropic (Claude 3.5 Sonnet, Opus), Google Gemini, and AWS Bedrock.
+
+## Tool Execution
+
+Automatic tool calling with loop management:
+
+```go
+executor := ryn.ToolExecutorFunc(func(ctx context.Context, name string, args json.RawMessage) (string, error) {
+    switch name {
+    case "weather":
+        return getWeather(args)
+    case "calculator":
+        return calculate(args)
+    default:
+        return "", fmt.Errorf("unknown tool %q", name)
+    }
+})
+
+loop := ryn.NewToolLoop(executor, 5) // max 5 rounds
+stream, err := loop.GenerateWithTools(ctx, llm, &ryn.Request{
+    Messages: []ryn.Message{ryn.UserText("What's the weather and 2+2?")},
+    Tools:    []ryn.Tool{ /* ... */ },
+})
+```
+
+Or use a wrapping provider:
+
+```go
+provider := ryn.NewStreamWithToolHandling(llm, executor, 5)
+stream, err := provider.Generate(ctx, req)
+// Tool calls handled automatically
+```
+
+## Production Composition
+
+Combine multiple wrappers for a production-ready provider:
+
+```go
+provider := ryn.ComposedProvider(
+    baseProvider,
+    5 * time.Minute,                          // timeout
+    &ryn.DefaultRetryConfig(),                // retry
+)
+// Adds tracing, timeout, and retry all at once
+```
+
 ## Multimodal
 
 Messages carry mixed content — text, images, audio, URLs:
@@ -306,24 +564,143 @@ Streams carry interleaved text, tool calls, usage, and control signals. No separ
 
 ## Performance
 
-- **Frame**: Tagged union (~80B value type). Text tokens: only `Kind` + `Text` populated — no heap allocation beyond the string.
+- **Zero-dependency core**: `ryn.dev/ryn` has no external imports — only the Go stdlib.
+- **Frame**: Tagged union (~80B value type). Text tokens: zero allocations beyond the string header.
 - **Stream**: `chan Frame` with `sync/atomic` error propagation. No mutexes on the read path.
 - **Pipeline**: One goroutine per stage, bounded channels for backpressure.
-- **Providers**: Official SDKs with streaming APIs. No intermediate buffering.
+- **Providers**: Separate Go modules — your build only includes SDKs you use.
 - **Target**: First token in <100ms over the full pipeline (network permitting).
+
+Run benchmarks yourself:
+
+```bash
+go test -bench=. -benchmem ./...
+```
+
+## Production Infrastructure
+
+Ryn ships with production-grade infrastructure for high-concurrency deployments (millions of concurrent calls).
+
+### BytePool — Zero-Alloc Media
+
+`BytePool` eliminates per-frame `[]byte` allocations for audio, image, and video data using size-class `sync.Pool` buckets (4KB, 64KB, 1MB).
+
+```go
+pool := ryn.DefaultBytePool // process-wide pool
+
+// Provider emits pooled frames:
+frame := ryn.AudioFramePooled(pool, pcmChunk, "audio/pcm")
+
+// Consumer returns buffer when done:
+pool.Put(frame.Data)
+```
+
+Benchmark: **~60ns** per Get/Put cycle, **1 alloc** (pointer indirection). Scales linearly under parallel load.
+
+### Transport — Connection Pooling & Keep-Alive
+
+`Transport()` returns an optimized `*http.Transport` tuned for LLM API traffic: aggressive keep-alive, TLS session resumption, large idle pool, HTTP/2 negotiation.
+
+```go
+// Use the process-wide default (recommended):
+client := ryn.DefaultHTTPClient
+
+// Or create with custom options:
+client := ryn.HTTPClient(&ryn.TransportOptions{
+    MaxIdleConnsPerHost: 50,
+    IdleConnTimeout:     5 * time.Minute,
+})
+
+// Pass to any provider:
+llm := compat.New(url, key, compat.WithClient(client))
+```
+
+Defaults: GOMAXPROCS×64 idle connections, GOMAXPROCS×16 per host, 120s idle timeout, TLS 1.2+, 64KB write / 32KB read buffers.
+
+### Cache — LRU Response Cache
+
+Thread-safe, sharded (64 shards) LRU cache with TTL for caching identical LLM requests.
+
+```go
+cache := ryn.NewCache(ryn.CacheOptions{
+    MaxEntries: 10_000,
+    TTL:        5 * time.Minute,
+})
+provider := cache.Wrap(llm) // transparent caching provider
+
+stream, _ := provider.Generate(ctx, req)  // first call: miss → provider
+stream, _ := provider.Generate(ctx, req)  // same request: hit → cached replay
+```
+
+Benchmark: **~1.6μs** per cache hit. Lock-free reads via atomic counters. `cache.Stats()` returns hit/miss/rate.
+
+### Registry — Named Provider Routing
+
+`Registry` manages named providers for runtime lookup, multi-provider deployments, and A/B routing.
+
+```go
+reg := ryn.NewRegistry()
+reg.Register("openai", openaiProvider)
+reg.Register("anthropic", anthropicProvider)
+reg.Register("fast", cache.Wrap(openaiProvider))
+
+// Route by name at request time:
+stream, err := reg.Generate(ctx, "openai", req)
+
+// List available providers:
+names := reg.Names()  // ["anthropic", "fast", "openai"]
+```
+
+Benchmark: **0 allocs, ~34ns** per lookup. RWMutex-protected, safe for concurrent registration and lookup.
+
+### Object Pools
+
+`sync.Pool`-backed pools for hot-path objects:
+
+```go
+u := ryn.GetUsage()         // 0 allocs, ~21ns
+defer ryn.PutUsage(u)
+
+m := ryn.GetResponseMeta()  // 0 allocs, ~27ns
+defer ryn.PutResponseMeta(m)
+```
+
+### JSON Backend (Configurable)
+
+Ryn allows swapping the JSON implementation globally (same compatible set as Fiber):
+
+- encoding/json (stdlib)
+- github.com/goccy/go-json
+- github.com/bytedance/sonic
+- github.com/segmentio/encoding/json
+- github.com/json-iterator/go
+
+```go
+ryn.SetJSON(&ryn.JSONLibrary{
+    Marshal:   json.Marshal,
+    Unmarshal: json.Unmarshal,
+    Valid:     json.Valid,
+    NewEncoder: func(w io.Writer) ryn.JSONEncoder {
+        return json.NewEncoder(w)
+    },
+    NewDecoder: func(r io.Reader) ryn.JSONDecoder {
+        return json.NewDecoder(r)
+    },
+})
+```
 
 ## Examples
 
-| Example                               | Description                                 |
-| ------------------------------------- | ------------------------------------------- |
-| [chat](examples/chat/main.go)         | Streaming chat with provider selection      |
-| [tools](examples/tools/main.go)       | Tool-calling loop with automatic round-trip |
-| [parallel](examples/parallel/main.go) | Fan, Race, Sequence orchestration           |
-| [pipeline](examples/pipeline/main.go) | Processing pipeline with hooks              |
+| Example                                | Description                                 |
+| -------------------------------------- | ------------------------------------------- |
+| [chat](_examples/chat/main.go)         | Streaming chat with provider selection      |
+| [tools](_examples/tools/main.go)       | Tool-calling loop with automatic round-trip |
+| [parallel](_examples/parallel/main.go) | Fan, Race, Sequence orchestration           |
+| [pipeline](_examples/pipeline/main.go) | Processing pipeline with hooks              |
 
 ## Requirements
 
-- Go 1.22+
+- Go 1.23+
 
 ## Architecture
 
@@ -337,7 +714,7 @@ Designed for forward compatibility:
 - [ ] Duplex pipelines (bidirectional streams)
 - [ ] Tool execution graphs (automatic dispatch + re-invoke)
 - [ ] Realtime agent loops with interruption
-- [ ] Structured output helpers (JSON schema → typed response)
+- [ ] Provider middleware (retries, rate limiting, fallback chains)
 - [ ] WASM edge runtime support
 
 None require breaking changes to the core.

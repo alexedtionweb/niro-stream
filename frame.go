@@ -186,11 +186,23 @@ func (u *Usage) Add(other *Usage) {
 	u.TotalTokens += other.TotalTokens
 	if len(other.Detail) > 0 {
 		if u.Detail == nil {
-			u.Detail = make(map[string]int, len(other.Detail))
+			// Size hint: most providers report 2-4 detail keys
+			u.Detail = make(map[string]int, 4)
 		}
 		for k, v := range other.Detail {
 			u.Detail[k] += v
 		}
+	}
+}
+
+// Reset zeroes all fields. Useful when reusing a Usage from a pool.
+func (u *Usage) Reset() {
+	u.InputTokens = 0
+	u.OutputTokens = 0
+	u.TotalTokens = 0
+	// Clear map without reallocating
+	for k := range u.Detail {
+		delete(u.Detail, k)
 	}
 }
 

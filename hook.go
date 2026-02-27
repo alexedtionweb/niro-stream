@@ -46,6 +46,7 @@ type GenerateStartInfo struct {
 	Model      string            // Requested model
 	Messages   int               // Number of messages
 	Tools      int               // Number of tools
+	RequestID  string            // Unique request ID for tracing
 	FunctionID string            // Caller-assigned ID for tracing (set via Request metadata)
 	Metadata   map[string]string // Arbitrary metadata from the caller
 }
@@ -54,7 +55,9 @@ type GenerateStartInfo struct {
 type GenerateEndInfo struct {
 	Provider     string        // Provider name
 	Model        string        // Model actually used
+	RequestID    string        // Unique request ID for tracing
 	Usage        Usage         // Token usage
+	Cost         Cost          // Cost information (tokens × model pricing)
 	FinishReason string        // Why generation stopped
 	Duration     time.Duration // Wall-clock duration
 	ResponseID   string        // Provider-assigned response ID

@@ -2,13 +2,9 @@ package ryn
 
 import (
 	"context"
-	"errors"
 	"sync"
 	"sync/atomic"
 )
-
-// ErrClosed is returned when emitting to a closed stream.
-var ErrClosed = errors.New("ryn: stream closed")
 
 // pipe is the shared state between a Stream and its Emitter.
 type pipe struct {
@@ -172,8 +168,10 @@ func StreamFromSlice(frames []Frame) *Stream {
 }
 
 // Collect reads all frames from a Stream into a slice.
+// Pre-allocates capacity when possible to minimize slice growth.
 func Collect(ctx context.Context, s *Stream) ([]Frame, error) {
-	var frames []Frame
+	// Pre-allocate with reasonable capacity to reduce grow-copy overhead
+	frames := make([]Frame, 0, 64)
 	for s.Next(ctx) {
 		frames = append(frames, s.Frame())
 	}
@@ -181,8 +179,9 @@ func Collect(ctx context.Context, s *Stream) ([]Frame, error) {
 }
 
 // CollectText reads all text frames and concatenates their content.
+// Uses a byte buffer with pre-allocated capacity.
 func CollectText(ctx context.Context, s *Stream) (string, error) {
-	var buf []byte
+	buf := make([]byte, 0, 4096) // typical LLM response < 4KB
 	for s.Next(ctx) {
 		f := s.Frame()
 		if f.Kind == KindText {

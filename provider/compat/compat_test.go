@@ -2,7 +2,6 @@ package compat_test
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -31,7 +30,7 @@ func TestCompatProviderStreaming(t *testing.T) {
 
 		// Decode the request body to verify
 		var body map[string]any
-		json.NewDecoder(r.Body).Decode(&body)
+		_ = ryn.JSONNewDecoder(r.Body).Decode(&body)
 		if body["model"] != "test-model" {
 			t.Errorf("unexpected model: %v", body["model"])
 		}
@@ -155,7 +154,7 @@ func TestCompatProviderToolCalls(t *testing.T) {
 	}
 
 	var args map[string]string
-	json.Unmarshal(frames[0].Tool.Args, &args)
+	_ = ryn.JSONUnmarshal(frames[0].Tool.Args, &args)
 	if args["city"] != "NYC" {
 		t.Errorf("tool args city: got %q, want %q", args["city"], "NYC")
 	}

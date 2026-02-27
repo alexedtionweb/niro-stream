@@ -76,6 +76,20 @@ type Request struct {
 
 	// Options controls generation parameters.
 	Options Options
+
+	// Extra carries provider-specific configuration.
+	// Each provider documents its accepted types (typically a RequestHook
+	// function that receives the raw SDK params). Providers ignore
+	// unrecognized types. Use for per-request SDK customization not
+	// covered by the common Options.
+	//
+	//   stream, err := llm.Generate(ctx, &ryn.Request{
+	//       Messages: msgs,
+	//       Extra: openai.RequestHook(func(p *oai.ChatCompletionNewParams) {
+	//           p.LogProbs = oai.Bool(true)
+	//       }),
+	//   })
+	Extra any
 }
 
 // EffectiveMessages returns the final message list including

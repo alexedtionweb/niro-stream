@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -292,7 +294,7 @@ func TestEmitAfterClose(t *testing.T) {
 	e.Close()
 
 	err := e.Emit(ctx, ryn.TextFrame("late"))
-	assertEqual(t, err, ryn.ErrClosed)
+	assertErrorContains(t, err, "stream closed")
 }
 
 func TestCollectText(t *testing.T) {
@@ -855,6 +857,579 @@ func TestForward(t *testing.T) {
 	assertEqual(t, len(frames), 2)
 }
 
+// --- BytePool Tests ---
+
+func TestBytePoolGetPut(t *testing.T) {
+	t.Parallel()
+	pool := ryn.NewBytePool()
+
+	// Small buffer
+	buf := pool.Get(100)
+	assertEqual(t, len(buf), 100)
+	assertTrue(t, cap(buf) >= 100)
+	pool.Put(buf)
+
+	// Medium buffer
+	buf = pool.Get(32 * 1024)
+	assertEqual(t, len(buf), 32*1024)
+	pool.Put(buf)
+
+	// Large buffer
+	buf = pool.Get(512 * 1024)
+	assertEqual(t, len(buf), 512*1024)
+	pool.Put(buf)
+
+	// Huge buffer (not pooled)
+	buf = pool.Get(2 * 1024 * 1024)
+	assertEqual(t, len(buf), 2*1024*1024)
+	pool.Put(buf)
+}
+
+func TestBytePoolConcurrent(t *testing.T) {
+	t.Parallel()
+	pool := ryn.NewBytePool()
+
+	var wg sync.WaitGroup
+	for i := 0; i < 100; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 100; j++ {
+				buf := pool.Get(960) // typical audio chunk
+				buf[0] = 42
+				pool.Put(buf)
+			}
+		}()
+	}
+	wg.Wait()
+}
+
+func TestPooledFrameConstructors(t *testing.T) {
+	t.Parallel()
+	pool := ryn.NewBytePool()
+
+	data := []byte{1, 2, 3, 4, 5}
+
+	af := ryn.AudioFramePooled(pool, data, "audio/pcm")
+	assertEqual(t, af.Kind, ryn.KindAudio)
+	assertEqual(t, len(af.Data), 5)
+	assertEqual(t, af.Data[0], byte(1))
+	assertEqual(t, af.Mime, "audio/pcm")
+	pool.Put(af.Data)
+
+	imgF := ryn.ImageFramePooled(pool, data, "image/png")
+	assertEqual(t, imgF.Kind, ryn.KindImage)
+	pool.Put(imgF.Data)
+
+	vf := ryn.VideoFramePooled(pool, data, "video/mp4")
+	assertEqual(t, vf.Kind, ryn.KindVideo)
+	pool.Put(vf.Data)
+}
+
+func TestUsagePool(t *testing.T) {
+	t.Parallel()
+	u := ryn.GetUsage()
+	assertEqual(t, u.InputTokens, 0)
+	assertEqual(t, u.OutputTokens, 0)
+
+	u.InputTokens = 100
+	u.OutputTokens = 50
+	u.Detail = map[string]int{"cached": 10}
+	ryn.PutUsage(u)
+
+	// After put, getting a new one should be zeroed
+	u2 := ryn.GetUsage()
+	assertEqual(t, u2.InputTokens, 0)
+	assertTrue(t, u2.Detail == nil)
+	ryn.PutUsage(u2)
+}
+
+func TestResponseMetaPool(t *testing.T) {
+	t.Parallel()
+	m := ryn.GetResponseMeta()
+	assertEqual(t, m.Model, "")
+	assertEqual(t, m.ID, "")
+
+	m.Model = "gpt-4o"
+	m.ProviderMeta = map[string]any{"x": 1}
+	ryn.PutResponseMeta(m)
+
+	m2 := ryn.GetResponseMeta()
+	assertEqual(t, m2.Model, "")
+	assertTrue(t, m2.ProviderMeta == nil)
+	ryn.PutResponseMeta(m2)
+}
+
+func TestUsageReset(t *testing.T) {
+	t.Parallel()
+	u := ryn.Usage{
+		InputTokens:  100,
+		OutputTokens: 50,
+		TotalTokens:  150,
+		Detail:       map[string]int{"cached": 10},
+	}
+	u.Reset()
+	assertEqual(t, u.InputTokens, 0)
+	assertEqual(t, u.OutputTokens, 0)
+	assertEqual(t, u.TotalTokens, 0)
+	assertEqual(t, len(u.Detail), 0) // map cleared, not nil
+}
+
+// --- Cache Tests ---
+
+func TestCacheHitMiss(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	callCount := 0
+	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+		callCount++
+		return ryn.StreamFromSlice([]ryn.Frame{ryn.TextFrame("hello")}), nil
+	})
+
+	cache := ryn.NewCache(ryn.CacheOptions{MaxEntries: 100, TTL: time.Minute})
+	provider := cache.Wrap(mock)
+
+	req := &ryn.Request{Model: "test", Messages: []ryn.Message{ryn.UserText("hi")}}
+
+	// First call: miss
+	s, err := provider.Generate(ctx, req)
+	assertNoError(t, err)
+	text, _ := ryn.CollectText(ctx, s)
+	assertEqual(t, text, "hello")
+	assertEqual(t, callCount, 1)
+
+	// Second call: hit
+	s2, err := provider.Generate(ctx, req)
+	assertNoError(t, err)
+	text2, _ := ryn.CollectText(ctx, s2)
+	assertEqual(t, text2, "hello")
+	assertEqual(t, callCount, 1) // not called again
+
+	hits, misses := cache.Stats()
+	assertEqual(t, hits, int64(1))
+	assertEqual(t, misses, int64(1))
+}
+
+func TestCacheDifferentRequests(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	callCount := 0
+	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+		callCount++
+		return ryn.StreamFromSlice([]ryn.Frame{ryn.TextFrame(req.Messages[0].Parts[0].Text)}), nil
+	})
+
+	cache := ryn.NewCache(ryn.CacheOptions{MaxEntries: 100})
+	provider := cache.Wrap(mock)
+
+	s1, _ := provider.Generate(ctx, &ryn.Request{Messages: []ryn.Message{ryn.UserText("a")}})
+	ryn.CollectText(ctx, s1)
+
+	s2, _ := provider.Generate(ctx, &ryn.Request{Messages: []ryn.Message{ryn.UserText("b")}})
+	ryn.CollectText(ctx, s2)
+
+	assertEqual(t, callCount, 2) // different requests, both miss
+}
+
+func TestCacheTTLExpiry(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	callCount := 0
+	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+		callCount++
+		return ryn.StreamFromSlice([]ryn.Frame{ryn.TextFrame("ok")}), nil
+	})
+
+	cache := ryn.NewCache(ryn.CacheOptions{MaxEntries: 100, TTL: 50 * time.Millisecond})
+	provider := cache.Wrap(mock)
+
+	req := &ryn.Request{Messages: []ryn.Message{ryn.UserText("hi")}}
+
+	s1, _ := provider.Generate(ctx, req)
+	ryn.CollectText(ctx, s1)
+	assertEqual(t, callCount, 1)
+
+	time.Sleep(100 * time.Millisecond)
+
+	s2, _ := provider.Generate(ctx, req)
+	ryn.CollectText(ctx, s2)
+	assertEqual(t, callCount, 2) // expired, called again
+}
+
+func TestCacheLRUEviction(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+		return ryn.StreamFromSlice([]ryn.Frame{ryn.TextFrame("x")}), nil
+	})
+
+	cache := ryn.NewCache(ryn.CacheOptions{MaxEntries: 64, TTL: time.Hour})
+	provider := cache.Wrap(mock)
+
+	// Fill cache beyond capacity
+	for i := 0; i < 200; i++ {
+		s, _ := provider.Generate(ctx, &ryn.Request{
+			Model:    fmt.Sprintf("model-%d", i),
+			Messages: []ryn.Message{ryn.UserText("hi")},
+		})
+		ryn.CollectText(ctx, s)
+	}
+
+	assertTrue(t, cache.Len() <= 64)
+}
+
+func TestCacheClear(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+		return ryn.StreamFromSlice([]ryn.Frame{ryn.TextFrame("x")}), nil
+	})
+
+	cache := ryn.NewCache(ryn.CacheOptions{MaxEntries: 100})
+	provider := cache.Wrap(mock)
+
+	for i := 0; i < 10; i++ {
+		s, _ := provider.Generate(ctx, &ryn.Request{
+			Model:    fmt.Sprintf("m%d", i),
+			Messages: []ryn.Message{ryn.UserText("x")},
+		})
+		ryn.CollectText(ctx, s)
+	}
+
+	assertTrue(t, cache.Len() > 0)
+	cache.Clear()
+	assertEqual(t, cache.Len(), 0)
+}
+
+func TestCacheConcurrent(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+		return ryn.StreamFromSlice([]ryn.Frame{ryn.TextFrame("ok")}), nil
+	})
+
+	cache := ryn.NewCache(ryn.CacheOptions{MaxEntries: 1000})
+	provider := cache.Wrap(mock)
+
+	var wg sync.WaitGroup
+	for i := 0; i < 50; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 20; j++ {
+				req := &ryn.Request{
+					Model:    fmt.Sprintf("m%d", j%5),
+					Messages: []ryn.Message{ryn.UserText("hi")},
+				}
+				s, err := provider.Generate(ctx, req)
+				if err != nil {
+					t.Errorf("generate error: %v", err)
+					return
+				}
+				ryn.CollectText(ctx, s)
+			}
+		}()
+	}
+	wg.Wait()
+}
+
+// --- Registry Tests ---
+
+func TestRegistryBasic(t *testing.T) {
+	t.Parallel()
+
+	reg := ryn.NewRegistry()
+	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+		return ryn.StreamFromSlice([]ryn.Frame{ryn.TextFrame("hello")}), nil
+	})
+
+	reg.Register("test", mock)
+	assertTrue(t, reg.Has("test"))
+	assertEqual(t, reg.Len(), 1)
+
+	p, err := reg.Get("test")
+	assertNoError(t, err)
+	assertNotNil(t, p)
+}
+
+func TestRegistryNotFound(t *testing.T) {
+	t.Parallel()
+
+	reg := ryn.NewRegistry()
+	_, err := reg.Get("missing")
+	assertErrorContains(t, err, "not registered")
+}
+
+func TestRegistryMustGetPanics(t *testing.T) {
+	t.Parallel()
+
+	reg := ryn.NewRegistry()
+	defer func() {
+		r := recover()
+		assertNotNil(t, r)
+	}()
+	reg.MustGet("missing")
+}
+
+func TestRegistryRemove(t *testing.T) {
+	t.Parallel()
+
+	reg := ryn.NewRegistry()
+	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+		return nil, nil
+	})
+
+	reg.Register("x", mock)
+	assertTrue(t, reg.Has("x"))
+	reg.Remove("x")
+	assertEqual(t, reg.Has("x"), false)
+}
+
+func TestRegistryAllAndNames(t *testing.T) {
+	t.Parallel()
+
+	reg := ryn.NewRegistry()
+	for _, name := range []string{"a", "b", "c"} {
+		n := name
+		reg.Register(n, ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+			return nil, nil
+		}))
+	}
+
+	all := reg.All()
+	assertEqual(t, len(all), 3)
+	names := reg.Names()
+	assertEqual(t, len(names), 3)
+}
+
+func TestRegistryGenerate(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	reg := ryn.NewRegistry()
+	reg.Register("mock", ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+		return ryn.StreamFromSlice([]ryn.Frame{ryn.TextFrame("from registry")}), nil
+	}))
+
+	s, err := reg.Generate(ctx, "mock", &ryn.Request{Messages: []ryn.Message{ryn.UserText("hi")}})
+	assertNoError(t, err)
+	text, _ := ryn.CollectText(ctx, s)
+	assertEqual(t, text, "from registry")
+}
+
+func TestRegistryGenerateNotFound(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	reg := ryn.NewRegistry()
+	_, err := reg.Generate(ctx, "nope", &ryn.Request{})
+	assertErrorContains(t, err, "not registered")
+}
+
+func TestRegistryConcurrent(t *testing.T) {
+	t.Parallel()
+
+	reg := ryn.NewRegistry()
+	var wg sync.WaitGroup
+	for i := 0; i < 100; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			name := fmt.Sprintf("p%d", i%10)
+			reg.Register(name, ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+				return nil, nil
+			}))
+			reg.Has(name)
+			reg.Get(name)
+			reg.Names()
+		}()
+	}
+	wg.Wait()
+}
+
+// --- Transport Tests ---
+
+func TestTransportDefaults(t *testing.T) {
+	t.Parallel()
+
+	tr := ryn.Transport(nil)
+	assertNotNil(t, tr)
+	assertTrue(t, tr.MaxIdleConns > 0)
+	assertTrue(t, tr.MaxIdleConnsPerHost > 0)
+	assertTrue(t, tr.IdleConnTimeout > 0)
+	assertTrue(t, !tr.DisableKeepAlives)
+}
+
+func TestTransportCustomOptions(t *testing.T) {
+	t.Parallel()
+
+	tr := ryn.Transport(&ryn.TransportOptions{
+		MaxIdleConns:        100,
+		MaxIdleConnsPerHost: 25,
+		MaxConnsPerHost:     50,
+		IdleConnTimeout:     30 * time.Second,
+		DisableKeepAlives:   true,
+	})
+	assertEqual(t, tr.MaxIdleConns, 100)
+	assertEqual(t, tr.MaxIdleConnsPerHost, 25)
+	assertEqual(t, tr.MaxConnsPerHost, 50)
+	assertEqual(t, tr.IdleConnTimeout, 30*time.Second)
+	assertTrue(t, tr.DisableKeepAlives)
+}
+
+func TestHTTPClient(t *testing.T) {
+	t.Parallel()
+	client := ryn.HTTPClient(nil)
+	assertNotNil(t, client)
+	assertNotNil(t, client.Transport)
+}
+
+func TestDefaultTransportAndClient(t *testing.T) {
+	t.Parallel()
+	assertNotNil(t, ryn.DefaultTransport)
+	assertNotNil(t, ryn.DefaultHTTPClient)
+}
+
+// --- JSON Library Tests ---
+
+func TestSetJSON(t *testing.T) {
+	t.Parallel()
+
+	called := atomic.Int32{}
+	custom := &ryn.JSONLibrary{
+		Marshal: func(v any) ([]byte, error) {
+			called.Add(1)
+			return []byte(`{"a":1}`), nil
+		},
+		Unmarshal: func(data []byte, v any) error {
+			called.Add(1)
+			return json.Unmarshal(data, v)
+		},
+		Valid: func(data []byte) bool {
+			called.Add(1)
+			return true
+		},
+	}
+
+	ryn.SetJSON(custom)
+	t.Cleanup(func() { ryn.SetJSON(nil) })
+
+	var out struct {
+		A int `json:"a"`
+	}
+
+	b, err := ryn.JSONMarshal(out)
+	assertNoError(t, err)
+	assertTrue(t, len(b) > 0)
+	assertNoError(t, ryn.JSONUnmarshal(b, &out))
+	assertTrue(t, ryn.JSONValid(b))
+	assertTrue(t, called.Load() >= 3)
+}
+
+// --- Structured Output Tests ---
+
+func TestGenerateStructured(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	type result struct {
+		Name string `json:"name"`
+		Age  int    `json:"age"`
+	}
+
+	schema := json.RawMessage(`{"type":"object","properties":{"name":{"type":"string"},"age":{"type":"integer"}},"required":["name","age"]}`)
+
+	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+		if req.ResponseFormat != "json_schema" {
+			t.Errorf("expected ResponseFormat=json_schema, got %q", req.ResponseFormat)
+		}
+		if string(req.ResponseSchema) != string(schema) {
+			t.Errorf("schema mismatch")
+		}
+		s, e := ryn.NewStream(0)
+		go func() {
+			defer e.Close()
+			_ = e.Emit(ctx, ryn.TextFrame(`{"name":"alice","age":30}`))
+			_ = e.Emit(ctx, ryn.UsageFrame(&ryn.Usage{InputTokens: 3, OutputTokens: 5, TotalTokens: 8}))
+		}()
+		return s, nil
+	})
+
+	res, _, usage, err := ryn.GenerateStructured[result](ctx, mock, &ryn.Request{
+		Messages: []ryn.Message{ryn.UserText("hi")},
+	}, schema)
+	assertNoError(t, err)
+	assertEqual(t, res.Name, "alice")
+	assertEqual(t, res.Age, 30)
+	assertEqual(t, usage.TotalTokens, 8)
+}
+
+func TestStreamStructuredPartialAndFinal(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	type result struct {
+		Name string `json:"name"`
+		Age  int    `json:"age"`
+	}
+
+	schema := json.RawMessage(`{"type":"object","properties":{"name":{"type":"string"},"age":{"type":"integer"}},"required":["name","age"]}`)
+
+	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+		s, e := ryn.NewStream(0)
+		go func() {
+			defer e.Close()
+			_ = e.Emit(ctx, ryn.TextFrame(`{"name":"al`))
+			_ = e.Emit(ctx, ryn.TextFrame(`ice","age":30}`))
+		}()
+		return s, nil
+	})
+
+	ss, err := ryn.StreamStructured[result](ctx, mock, &ryn.Request{Messages: []ryn.Message{ryn.UserText("hi")}}, schema)
+	assertNoError(t, err)
+
+	partialSeen := false
+	finalSeen := false
+	for ss.Next(ctx) {
+		ev := ss.Event()
+		if ev.Partial != nil {
+			partialSeen = true
+		}
+		if ev.Final != nil {
+			finalSeen = true
+			assertEqual(t, ev.Final.Name, "alice")
+			assertEqual(t, ev.Final.Age, 30)
+		}
+	}
+	assertTrue(t, partialSeen)
+	assertTrue(t, finalSeen)
+	assertNoError(t, ss.Err())
+}
+
+func TestGenerateStructuredNoText(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	schema := json.RawMessage(`{"type":"object"}`)
+	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+		s, e := ryn.NewStream(0)
+		go func() {
+			defer e.Close()
+			_ = e.Emit(ctx, ryn.UsageFrame(&ryn.Usage{InputTokens: 1}))
+		}()
+		return s, nil
+	})
+
+	_, _, _, err := ryn.GenerateStructured[map[string]any](ctx, mock, &ryn.Request{Messages: []ryn.Message{ryn.UserText("hi")}}, schema)
+	assertErrorContains(t, err, "no structured output")
+}
+
 // --- Helpers ---
 
 type countingHook struct {
@@ -921,6 +1496,344 @@ func assertErrorContains(t *testing.T, err error, substr string) {
 	if !contains(err.Error(), substr) {
 		t.Errorf("error %q does not contain %q", err.Error(), substr)
 	}
+}
+
+// --- Error Handling Tests ---
+
+func TestErrorCreation(t *testing.T) {
+	t.Parallel()
+
+	err := ryn.NewError(ryn.ErrCodeInvalidRequest, "test error")
+	assertNotNil(t, err)
+	assertEqual(t, err.Code, ryn.ErrCodeInvalidRequest)
+	assertEqual(t, err.Message, "test error")
+	assertTrue(t, err.Error() != "")
+}
+
+func TestErrorWrapping(t *testing.T) {
+	t.Parallel()
+
+	inner := fmt.Errorf("inner error")
+	err := ryn.WrapError(ryn.ErrCodeProviderError, "provider failed", inner)
+	assertTrue(t, err != nil)
+
+	// Check error message contains both
+	msg := err.Error()
+	assertTrue(t, strings.Contains(msg, "provider failed"))
+	assertTrue(t, strings.Contains(msg, "inner error"))
+}
+
+func TestErrorCheckers(t *testing.T) {
+	t.Parallel()
+
+	rateLimitErr := ryn.NewError(ryn.ErrCodeRateLimited, "too many requests")
+	assertTrue(t, ryn.IsRetryable(rateLimitErr))
+	assertTrue(t, ryn.IsRateLimited(rateLimitErr))
+	assertEqual(t, ryn.IsTimeout(rateLimitErr), false)
+
+	authErr := ryn.NewError(ryn.ErrCodeAuthenticationFailed, "invalid key")
+	assertTrue(t, ryn.IsAuthError(authErr))
+	assertEqual(t, ryn.IsRetryable(authErr), false)
+
+	timeoutErr := ryn.NewError(ryn.ErrCodeTimeout, "took too long")
+	assertTrue(t, ryn.IsTimeout(timeoutErr))
+	assertTrue(t, ryn.IsRetryable(timeoutErr))
+}
+
+func TestErrorWithContext(t *testing.T) {
+	t.Parallel()
+
+	err := ryn.NewError(ryn.ErrCodeProviderError, "failed")
+	err.WithProvider("openai").WithRequestID("req_123").WithStatusCode(500)
+	msg := err.Error()
+	assertTrue(t, strings.Contains(msg, "openai"))
+	assertTrue(t, strings.Contains(msg, "req_123"))
+	assertEqual(t, err.StatusCode, 500)
+}
+
+// --- Validation Tests ---
+
+func TestRequestValidation(t *testing.T) {
+	t.Parallel()
+
+	t.Run("ValidRequest", func(t *testing.T) {
+		req := &ryn.Request{
+			Messages: []ryn.Message{ryn.UserText("hello")},
+		}
+		err := req.Validate()
+		assertTrue(t, err == nil)
+	})
+
+	t.Run("NoMessages", func(t *testing.T) {
+		req := &ryn.Request{}
+		err := req.Validate()
+		assertTrue(t, err != nil)
+		assertTrue(t, strings.Contains(err.Message, "no messages"))
+	})
+
+	t.Run("InvalidResponseFormat", func(t *testing.T) {
+		req := &ryn.Request{
+			Messages:       []ryn.Message{ryn.UserText("hi")},
+			ResponseFormat: "invalid_format",
+		}
+		err := req.Validate()
+		assertTrue(t, err != nil)
+	})
+
+	t.Run("JsonSchemaMissingSchema", func(t *testing.T) {
+		req := &ryn.Request{
+			Messages:       []ryn.Message{ryn.UserText("hi")},
+			ResponseFormat: "json_schema",
+			ResponseSchema: nil,
+		}
+		err := req.Validate()
+		assertTrue(t, err != nil)
+		assertTrue(t, strings.Contains(err.Message, "ResponseSchema"))
+	})
+
+	t.Run("InvalidJSON Schema", func(t *testing.T) {
+		req := &ryn.Request{
+			Messages:       []ryn.Message{ryn.UserText("hi")},
+			ResponseFormat: "json_schema",
+			ResponseSchema: json.RawMessage(`{invalid}`),
+		}
+		err := req.Validate()
+		assertTrue(t, err != nil)
+		assertEqual(t, err.Code, ryn.ErrCodeInvalidSchema)
+	})
+
+	t.Run("InvalidOptions", func(t *testing.T) {
+		req := &ryn.Request{
+			Messages: []ryn.Message{ryn.UserText("hi")},
+			Options: ryn.Options{
+				Temperature: ryn.Temp(3.0), // out of range
+			},
+		}
+		err := req.Validate()
+		assertTrue(t, err != nil)
+		assertTrue(t, strings.Contains(err.Message, "Temperature"))
+	})
+}
+
+func TestMessageValidation(t *testing.T) {
+	t.Parallel()
+
+	t.Run("ValidMessage", func(t *testing.T) {
+		msg := ryn.UserText("hello")
+		err := msg.Validate()
+		assertNil(t, err)
+	})
+
+	t.Run("EmptyMessage", func(t *testing.T) {
+		msg := ryn.Message{Role: ryn.RoleUser, Parts: []ryn.Part{}}
+		err := msg.Validate()
+		assertNotNil(t, err)
+	})
+}
+
+func TestToolValidation(t *testing.T) {
+	t.Parallel()
+
+	t.Run("ValidTool", func(t *testing.T) {
+		tool := ryn.Tool{
+			Name:        "weather",
+			Description: "Get weather",
+			Parameters:  json.RawMessage(`{"type":"object"}`),
+		}
+		err := tool.Validate()
+		assertNil(t, err)
+	})
+
+	t.Run("MissingName", func(t *testing.T) {
+		tool := ryn.Tool{Description: "Get weather"}
+		err := tool.Validate()
+		assertNotNil(t, err)
+		assertTrue(t, strings.Contains(err.Error(), "Name"))
+	})
+}
+
+// --- Retry Tests ---
+
+func TestRetryProvider(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	attempts := 0
+	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+		attempts++
+		if attempts < 3 {
+			return nil, ryn.NewError(ryn.ErrCodeRateLimited, "too fast")
+		}
+		return ryn.StreamFromSlice([]ryn.Frame{ryn.TextFrame("ok")}), nil
+	})
+
+	config := ryn.RetryConfig{
+		MaxAttempts: 5,
+		Backoff:     ryn.ConstantBackoff{Duration: 5 * time.Millisecond},
+		ShouldRetry: ryn.IsRetryable,
+	}
+
+	provider := ryn.NewRetryProvider(mock, config)
+	stream, err := provider.Generate(ctx, &ryn.Request{Messages: []ryn.Message{ryn.UserText("test")}})
+
+	assertNoError(t, err)
+	text, _ := ryn.CollectText(ctx, stream)
+	assertEqual(t, text, "ok")
+	assertEqual(t, attempts, 3)
+}
+
+func TestExponentialBackoff(t *testing.T) {
+	t.Parallel()
+
+	backoff := ryn.ExponentialBackoff{
+		InitialDelay: 10 * time.Millisecond,
+		Multiplier:   2.0,
+		MaxDelay:     100 * time.Millisecond,
+		Jitter:       false,
+	}
+
+	d0 := backoff.Delay(0)
+	d1 := backoff.Delay(1)
+	d2 := backoff.Delay(2)
+
+	assertTrue(t, d0 >= 10*time.Millisecond)
+	assertTrue(t, d1 > d0)
+	assertTrue(t, d2 > d1)
+	assertTrue(t, d2 <= 100*time.Millisecond)
+}
+
+// --- Cost Tracking Tests ---
+
+func TestCostCalculation(t *testing.T) {
+	t.Parallel()
+
+	pricing := &ryn.ModelPricing{
+		InputCostPer1M:  5.00,
+		OutputCostPer1M: 15.00,
+	}
+
+	usage := ryn.Usage{
+		InputTokens:  1000000, // 1M
+		OutputTokens: 1000000, // 1M
+		TotalTokens:  2000000,
+	}
+
+	cost := pricing.CalculateCost(usage)
+	assertTrue(t, cost.TotalCost > 0)
+	assertEqual(t, cost.InputCost, 5.0)
+	assertEqual(t, cost.OutputCost, 15.0)
+	assertEqual(t, cost.Currency, "USD")
+}
+
+func TestPricingRegistry(t *testing.T) {
+	t.Parallel()
+
+	registry := ryn.NewPricingRegistry()
+	registry.Set("openai", "gpt-4o", &ryn.ModelPricing{
+		InputCostPer1M:  5.00,
+		OutputCostPer1M: 15.00,
+	})
+	registry.SetDefault("openai", &ryn.ModelPricing{
+		InputCostPer1M:  1.00,
+		OutputCostPer1M: 3.00,
+	})
+
+	// Exact match
+	p := registry.Get("openai", "gpt-4o")
+	assertTrue(t, p != nil)
+	assertEqual(t, p.InputCostPer1M, 5.00)
+
+	// Fallback to default
+	p2 := registry.Get("openai", "unknown")
+	assertTrue(t, p2 != nil)
+	assertEqual(t, p2.InputCostPer1M, 1.00)
+
+	// Not found
+	p3 := registry.Get("unknown", "unknown")
+	assertTrue(t, p3 == nil)
+}
+
+// --- Tracing Tests ---
+
+func TestGenerateRequestID(t *testing.T) {
+	t.Parallel()
+
+	id1 := ryn.GenerateRequestID()
+	id2 := ryn.GenerateRequestID()
+
+	assertTrue(t, len(id1.String()) > 0)
+	assertTrue(t, id1.String() != id2.String()) // Should be unique
+	assertTrue(t, strings.HasPrefix(id1.String(), "req_"))
+}
+
+func TestTraceContext(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	trace := ryn.TraceContext{
+		RequestID: ryn.GenerateRequestID(),
+		UserID:    "user123",
+		SessionID: "session456",
+	}
+
+	ctx = ryn.WithTraceContext(ctx, trace)
+	retrieved := ryn.GetTraceContext(ctx)
+
+	assertEqual(t, retrieved.RequestID, trace.RequestID)
+	assertEqual(t, retrieved.UserID, "user123")
+	assertEqual(t, retrieved.SessionID, "session456")
+}
+
+func TestTracingProvider(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+		// Should have trace context injected
+		trace := ryn.GetTraceContext(ctx)
+		assertTrue(t, trace.RequestID != "")
+		return ryn.StreamFromSlice([]ryn.Frame{ryn.TextFrame("ok")}), nil
+	})
+
+	provider := ryn.NewTracingProvider(mock)
+	stream, err := provider.Generate(ctx, &ryn.Request{Messages: []ryn.Message{ryn.UserText("test")}})
+	assertNoError(t, err)
+	text, _ := ryn.CollectText(ctx, stream)
+	assertEqual(t, text, "ok")
+}
+
+// --- Tool Execution Tests ---
+
+func TestToolLoopBasic(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	executor := ryn.ToolExecutorFunc(func(ctx context.Context, name string, args json.RawMessage) (string, error) {
+		if name == "add" {
+			return "5", nil
+		}
+		return "", fmt.Errorf("unknown tool")
+	})
+
+	// Create a provider that returns no tool calls (so loop completes immediately)
+	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+		s, e := ryn.NewStream(0)
+		go func() {
+			defer e.Close()
+			_ = e.Emit(ctx, ryn.TextFrame("No tools needed"))
+		}()
+		return s, nil
+	})
+
+	loop := ryn.NewToolLoop(executor, 2)
+	stream, err := loop.GenerateWithTools(ctx, mock, &ryn.Request{
+		Messages: []ryn.Message{ryn.UserText("calculate")},
+	})
+
+	assertNoError(t, err)
+	assertTrue(t, stream != nil)
+	text, _ := ryn.CollectText(ctx, stream)
+	assertTrue(t, len(text) > 0)
 }
 
 func assertNotNil(t *testing.T, v any) {

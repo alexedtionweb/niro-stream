@@ -1,14 +1,18 @@
 // Package anthropic implements a Ryn Provider backed by the official
 // Anthropic Go SDK (github.com/anthropics/anthropic-sdk-go).
 //
-// This provider:
-//   - Uses the official SDK for auth, retries, and API compatibility
-//   - Streams text tokens and tool calls
-//   - Supports multimodal input (text, image)
-//   - Reports token usage via KindUsage frames
-//   - Sets ResponseMeta with model, finish reason, and response ID
+// This is an opt-in provider module. Import it only when you need
+// Anthropic Claude models:
 //
-// Usage:
+//	go get ryn.dev/ryn/provider/anthropic
+//
+// # SDK Access
+//
+// Use [Provider.Client] to access the underlying SDK client directly.
+// Use [WithRequestHook] or pass a [RequestHook] as Request.Extra for
+// raw SDK param customization.
+//
+// # Usage
 //
 //	llm := anthropic.New(os.Getenv("ANTHROPIC_API_KEY"))
 //	stream, err := llm.Generate(ctx, &ryn.Request{
@@ -30,10 +34,27 @@ import (
 	"ryn.dev/ryn"
 )
 
+// RequestHook allows modifying the raw SDK params before the request is sent.
+//
+// Provider-level:
+//
+//	anthropic.New(key, anthropic.WithRequestHook(func(p *ant.MessageNewParams) {
+//	    p.Metadata = &ant.MetadataParam{UserID: ant.String("u1")}
+//	}))
+//
+// Per-request (via Request.Extra):
+//
+//	stream, _ := llm.Generate(ctx, &ryn.Request{
+//	    Messages: msgs,
+//	    Extra: anthropic.RequestHook(func(p *ant.MessageNewParams) { ... }),
+//	})
+type RequestHook func(params *ant.MessageNewParams)
+
 // Provider implements ryn.Provider using the official Anthropic SDK.
 type Provider struct {
 	client ant.Client
 	model  string
+	hooks  []RequestHook
 }
 
 var _ ryn.Provider = (*Provider)(nil)
@@ -44,6 +65,7 @@ type Option func(*providerConfig)
 type providerConfig struct {
 	opts  []option.RequestOption
 	model string
+	hooks []RequestHook
 }
 
 // WithModel sets the default model.
@@ -58,6 +80,14 @@ func WithRequestOption(opt option.RequestOption) Option {
 	}
 }
 
+// WithRequestHook registers a function called with the raw SDK params
+// before each request. Multiple hooks are called in registration order.
+func WithRequestHook(fn RequestHook) Option {
+	return func(c *providerConfig) {
+		c.hooks = append(c.hooks, fn)
+	}
+}
+
 // New creates an Anthropic provider.
 func New(apiKey string, opts ...Option) *Provider {
 	cfg := &providerConfig{model: string(ant.ModelClaudeSonnet4_5)}
@@ -68,6 +98,7 @@ func New(apiKey string, opts ...Option) *Provider {
 	return &Provider{
 		client: ant.NewClient(clientOpts...),
 		model:  cfg.model,
+		hooks:  cfg.hooks,
 	}
 }
 
@@ -75,6 +106,10 @@ func New(apiKey string, opts ...Option) *Provider {
 func NewFromClient(client ant.Client, model string) *Provider {
 	return &Provider{client: client, model: model}
 }
+
+// Client returns the underlying Anthropic SDK client.
+// Use for direct SDK access when the ryn abstraction is insufficient.
+func (p *Provider) Client() ant.Client { return p.client }
 
 // Generate implements ryn.Provider.
 func (p *Provider) Generate(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
@@ -84,6 +119,16 @@ func (p *Provider) Generate(ctx context.Context, req *ryn.Request) (*ryn.Stream,
 	}
 
 	params := p.buildParams(model, req)
+
+	// Provider-level hooks
+	for _, h := range p.hooks {
+		h(&params)
+	}
+	// Per-request hook via Extra
+	if hook, ok := req.Extra.(RequestHook); ok {
+		hook(&params)
+	}
+
 	sdk := p.client.Messages.NewStreaming(ctx, params)
 
 	stream, emitter := ryn.NewStream(32)
@@ -210,7 +255,7 @@ func (p *Provider) buildParams(model string, req *ryn.Request) ant.MessageNewPar
 		schema := ant.ToolInputSchemaParam{}
 		if len(tool.Parameters) > 0 {
 			var props map[string]any
-			_ = json.Unmarshal(tool.Parameters, &props)
+			_ = ryn.JSONUnmarshal(tool.Parameters, &props)
 			if p, ok := props["properties"]; ok {
 				schema.Properties = p
 			}
@@ -260,7 +305,7 @@ func convertMessage(msg ryn.Message) ant.MessageParam {
 			case ryn.KindToolCall:
 				if p.Tool != nil {
 					var input any
-					_ = json.Unmarshal(p.Tool.Args, &input)
+					_ = ryn.JSONUnmarshal(p.Tool.Args, &input)
 					blocks = append(blocks, ant.NewToolUseBlock(p.Tool.ID, input, p.Tool.Name))
 				}
 			}
