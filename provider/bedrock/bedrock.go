@@ -25,12 +25,13 @@ package bedrock
 import (
 	"context"
 	"encoding/json"
-	"fmt"
+	"errors"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/document"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
+	smithy "github.com/aws/smithy-go"
 
 	"ryn.dev/ryn"
 )
@@ -124,8 +125,20 @@ func New(cfg aws.Config, opts ...Option) *Provider {
 }
 
 // NewFromClient creates a provider from an existing Bedrock client.
-func NewFromClient(client *bedrockruntime.Client, model string) *Provider {
-	return &Provider{client: client, model: model}
+func NewFromClient(client *bedrockruntime.Client, model string, opts ...Option) *Provider {
+	pc := &providerConfig{model: model}
+	for _, o := range opts {
+		o(pc)
+	}
+	if pc.model == "" {
+		pc.model = model
+	}
+	return &Provider{
+		client:           client,
+		model:            pc.model,
+		hooks:            pc.hooks,
+		inferenceProfile: pc.inferenceProfile,
+	}
 }
 
 // Client returns the underlying Bedrock SDK client.
@@ -134,6 +147,10 @@ func (p *Provider) Client() *bedrockruntime.Client { return p.client }
 
 // Generate implements ryn.Provider.
 func (p *Provider) Generate(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+	if err := req.Validate(); err != nil {
+		return nil, err
+	}
+
 	model := req.Model
 	if model == "" && p.inferenceProfile != "" {
 		model = p.inferenceProfile
@@ -172,7 +189,7 @@ func (p *Provider) Generate(ctx context.Context, req *ryn.Request) (*ryn.Stream,
 
 	resp, err := p.client.ConverseStream(ctx, input)
 	if err != nil {
-		return nil, fmt.Errorf("ryn/bedrock: converse: %w", err)
+		return nil, classifyError(err)
 	}
 
 	stream, emitter := ryn.NewStream(32)
@@ -191,6 +208,9 @@ func consume(ctx context.Context, resp *bedrockruntime.ConverseStreamOutput, out
 		toolName    string
 		toolArgsBuf []byte
 	)
+
+	// meta accumulates fields from multiple events before the final SetResponse.
+	meta := &ryn.ResponseMeta{Model: model}
 
 	for event := range events.Events() {
 		switch ev := event.(type) {
@@ -217,10 +237,14 @@ func consume(ctx context.Context, resp *bedrockruntime.ConverseStreamOutput, out
 
 		case *types.ConverseStreamOutputMemberContentBlockStop:
 			if toolName != "" {
+				// Copy args: toolArgsBuf's backing array is reused across tool
+				// calls (toolArgsBuf[:0]), so we must not alias it in RawMessage.
+				argsCopy := make([]byte, len(toolArgsBuf))
+				copy(argsCopy, toolArgsBuf)
 				tc := &ryn.ToolCall{
 					ID:   toolUseID,
 					Name: toolName,
-					Args: json.RawMessage(toolArgsBuf),
+					Args: json.RawMessage(argsCopy),
 				}
 				if err := out.Emit(ctx, ryn.ToolCallFrame(tc)); err != nil {
 					return
@@ -238,30 +262,122 @@ func consume(ctx context.Context, resp *bedrockruntime.ConverseStreamOutput, out
 					TotalTokens:  int(aws.ToInt32(u.TotalTokens)),
 				}
 				_ = out.Emit(ctx, ryn.UsageFrame(usage))
-
-				meta := &ryn.ResponseMeta{
-					Model: model,
-					Usage: *usage,
-				}
+				meta.Usage = *usage
 				if ev.Value.Metrics != nil && ev.Value.Metrics.LatencyMs != nil {
 					meta.ProviderMeta = map[string]any{
 						"latency_ms": *ev.Value.Metrics.LatencyMs,
 					}
 				}
-				out.SetResponse(meta)
 			}
 
 		case *types.ConverseStreamOutputMemberMessageStop:
-			reason := string(ev.Value.StopReason)
-			out.SetResponse(&ryn.ResponseMeta{
-				Model:        model,
-				FinishReason: reason,
-			})
+			meta.FinishReason = mapFinishReason(ev.Value.StopReason)
 		}
 	}
 
 	if err := events.Err(); err != nil {
-		out.Error(fmt.Errorf("ryn/bedrock: event: %w", err))
+		out.Error(classifyError(err))
+		return
+	}
+
+	if meta.FinishReason == "" {
+		meta.FinishReason = "stop"
+	}
+	out.SetResponse(meta)
+}
+
+// classifyError maps AWS SDK errors to typed *ryn.Error values.
+func classifyError(err error) *ryn.Error {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return ryn.WrapError(ryn.ErrCodeTimeout, "request timed out", err).WithProvider("bedrock")
+	}
+	if errors.Is(err, context.Canceled) {
+		return ryn.WrapError(ryn.ErrCodeContextCancelled, "context cancelled", err).WithProvider("bedrock")
+	}
+
+	var throttle *types.ThrottlingException
+	if errors.As(err, &throttle) {
+		return ryn.WrapError(ryn.ErrCodeRateLimited, throttle.ErrorMessage(), err).
+			WithProvider("bedrock")
+	}
+	var quota *types.ServiceQuotaExceededException
+	if errors.As(err, &quota) {
+		return ryn.WrapError(ryn.ErrCodeRateLimited, quota.ErrorMessage(), err).
+			WithProvider("bedrock")
+	}
+	var access *types.AccessDeniedException
+	if errors.As(err, &access) {
+		return ryn.WrapError(ryn.ErrCodeAuthenticationFailed, access.ErrorMessage(), err).WithProvider("bedrock")
+	}
+	var notFound *types.ResourceNotFoundException
+	if errors.As(err, &notFound) {
+		return ryn.WrapError(ryn.ErrCodeModelNotFound, notFound.ErrorMessage(), err).WithProvider("bedrock")
+	}
+	var validation *types.ValidationException
+	if errors.As(err, &validation) {
+		return ryn.WrapError(ryn.ErrCodeInvalidRequest, validation.ErrorMessage(), err).WithProvider("bedrock")
+	}
+	var modelTimeout *types.ModelTimeoutException
+	if errors.As(err, &modelTimeout) {
+		return ryn.WrapError(ryn.ErrCodeTimeout, modelTimeout.ErrorMessage(), err).
+			WithProvider("bedrock")
+	}
+	var svcUnavail *types.ServiceUnavailableException
+	if errors.As(err, &svcUnavail) {
+		return ryn.WrapError(ryn.ErrCodeServiceUnavailable, svcUnavail.ErrorMessage(), err).
+			WithProvider("bedrock")
+	}
+	var internal *types.InternalServerException
+	if errors.As(err, &internal) {
+		return ryn.WrapError(ryn.ErrCodeProviderError, internal.ErrorMessage(), err).
+			WithProvider("bedrock")
+	}
+	var streamErr *types.ModelStreamErrorException
+	if errors.As(err, &streamErr) {
+		return ryn.WrapError(ryn.ErrCodeStreamError, streamErr.ErrorMessage(), err).WithProvider("bedrock")
+	}
+
+	// Fallback: some error types (e.g. ServiceQuotaExceededException) are absent
+	// from the ConverseStream deserializer's switch and come back as a generic
+	// smithy error. Map the code string to the canonical ryn error code.
+	var generic *smithy.GenericAPIError
+	if errors.As(err, &generic) {
+		switch generic.Code {
+		case "ServiceQuotaExceededException":
+			return ryn.WrapError(ryn.ErrCodeRateLimited, generic.Message, err).WithProvider("bedrock")
+		case "AccessDeniedException":
+			return ryn.WrapError(ryn.ErrCodeAuthenticationFailed, generic.Message, err).WithProvider("bedrock")
+		case "ResourceNotFoundException":
+			return ryn.WrapError(ryn.ErrCodeModelNotFound, generic.Message, err).WithProvider("bedrock")
+		case "ValidationException":
+			return ryn.WrapError(ryn.ErrCodeInvalidRequest, generic.Message, err).WithProvider("bedrock")
+		case "ModelTimeoutException":
+			return ryn.WrapError(ryn.ErrCodeTimeout, generic.Message, err).WithProvider("bedrock")
+		case "ModelStreamErrorException":
+			return ryn.WrapError(ryn.ErrCodeStreamError, generic.Message, err).WithProvider("bedrock")
+		case "ServiceUnavailableException":
+			return ryn.WrapError(ryn.ErrCodeServiceUnavailable, generic.Message, err).WithProvider("bedrock")
+		case "InternalServerException":
+			return ryn.WrapError(ryn.ErrCodeProviderError, generic.Message, err).WithProvider("bedrock")
+		}
+	}
+
+	return ryn.WrapError(ryn.ErrCodeProviderError, "bedrock error", err).WithProvider("bedrock")
+}
+
+// mapFinishReason converts a Bedrock StopReason to the ryn canonical string.
+func mapFinishReason(r types.StopReason) string {
+	switch r {
+	case types.StopReasonEndTurn, types.StopReasonStopSequence:
+		return "stop"
+	case types.StopReasonToolUse:
+		return "tool_use"
+	case types.StopReasonMaxTokens, types.StopReasonModelContextWindowExceeded:
+		return "length"
+	case types.StopReasonContentFiltered, types.StopReasonGuardrailIntervened:
+		return "content_filter"
+	default:
+		return "other"
 	}
 }
 
@@ -333,18 +449,35 @@ func (p *Provider) buildInput(model string, req *ryn.Request) *bedrockruntime.Co
 					Description: aws.String(tool.Description),
 				},
 			}
-			if len(tool.Parameters) > 0 {
-				var doc any
-				_ = ryn.JSONUnmarshal(tool.Parameters, &doc)
-				spec.Value.InputSchema = &types.ToolInputSchemaMemberJson{
-					Value: document.NewLazyDocument(doc),
-				}
+			// InputSchema is required by the Bedrock SDK; use a minimal empty
+			// object schema when the caller has not specified parameters.
+			params := tool.Parameters
+			if len(params) == 0 {
+				params = json.RawMessage(`{"type":"object","properties":{}}`)
+			}
+			var doc any
+			_ = ryn.JSONUnmarshal(params, &doc)
+			spec.Value.InputSchema = &types.ToolInputSchemaMemberJson{
+				Value: document.NewLazyDocument(doc),
 			}
 			toolSpecs = append(toolSpecs, spec)
 		}
-		input.ToolConfig = &types.ToolConfiguration{
-			Tools: toolSpecs,
+		toolCfg := &types.ToolConfiguration{Tools: toolSpecs}
+		switch req.ToolChoice {
+		case ryn.ToolChoiceRequired:
+			toolCfg.ToolChoice = &types.ToolChoiceMemberAny{Value: types.AnyToolChoice{}}
+		case ryn.ToolChoiceNone:
+			// Bedrock has no "none" mode; omit ToolChoice to let the model decide.
+		default:
+			if s := string(req.ToolChoice); len(s) > 5 && s[:5] == "func:" {
+				toolCfg.ToolChoice = &types.ToolChoiceMemberTool{
+					Value: types.SpecificToolChoice{Name: aws.String(s[5:])},
+				}
+			} else {
+				toolCfg.ToolChoice = &types.ToolChoiceMemberAuto{Value: types.AutoToolChoice{}}
+			}
 		}
+		input.ToolConfig = toolCfg
 	}
 
 	return input
@@ -393,9 +526,14 @@ func convertMessage(msg ryn.Message) types.Message {
 
 		case ryn.KindToolResult:
 			if p.Result != nil {
+				status := types.ToolResultStatusSuccess
+				if p.Result.IsError {
+					status = types.ToolResultStatusError
+				}
 				blocks = append(blocks, &types.ContentBlockMemberToolResult{
 					Value: types.ToolResultBlock{
 						ToolUseId: aws.String(p.Result.CallID),
+						Status:    status,
 						Content: []types.ToolResultContentBlock{
 							&types.ToolResultContentBlockMemberText{
 								Value: p.Result.Content,
