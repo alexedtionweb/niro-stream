@@ -2,6 +2,7 @@ package orchestrate_test
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -105,6 +106,144 @@ func TestSequenceEmpty(t *testing.T) {
 	frames, err := ryn.Collect(ctx, stream)
 	assertNoError(t, err)
 	assertEqual(t, len(frames), 0)
+}
+
+func TestFanWithError(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	stream := orchestrate.Fan(ctx,
+		func(ctx context.Context) (*ryn.Stream, error) {
+			return ryn.StreamFromSlice([]ryn.Frame{ryn.TextFrame("ok")}), nil
+		},
+		func(ctx context.Context) (*ryn.Stream, error) {
+			return nil, fmt.Errorf("fn failed")
+		},
+	)
+
+	// consume; the error should be set
+	var textSeen bool
+	for stream.Next(ctx) {
+		f := stream.Frame()
+		if f.Kind == ryn.KindText {
+			textSeen = true
+		}
+	}
+	// error should be propagated
+	assertTrue(t, stream.Err() != nil)
+	assertTrue(t, textSeen) // the successful stream still delivered
+}
+
+func TestFanStreamError(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	stream := orchestrate.Fan(ctx,
+		func(ctx context.Context) (*ryn.Stream, error) {
+			s, e := ryn.NewStream(4)
+			go func() {
+				defer e.Close()
+				e.Error(fmt.Errorf("stream internal error"))
+			}()
+			return s, nil
+		},
+	)
+
+	for stream.Next(ctx) {
+	}
+	assertTrue(t, stream.Err() != nil)
+}
+
+func TestFanEmpty(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	stream := orchestrate.Fan(ctx) // no functions
+	frames, err := ryn.Collect(ctx, stream)
+	assertNoError(t, err)
+	assertEqual(t, len(frames), 0)
+}
+
+func TestRaceAllError(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	_, _, err := orchestrate.Race(ctx,
+		func(ctx context.Context) (*ryn.Stream, error) {
+			return nil, fmt.Errorf("fn1 failed")
+		},
+		func(ctx context.Context) (*ryn.Stream, error) {
+			return nil, fmt.Errorf("fn2 failed")
+		},
+	)
+	assertTrue(t, err != nil)
+}
+
+func TestRaceStreamError(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	_, _, err := orchestrate.Race(ctx,
+		func(ctx context.Context) (*ryn.Stream, error) {
+			s, e := ryn.NewStream(4)
+			go func() {
+				defer e.Close()
+				e.Error(fmt.Errorf("stream error"))
+			}()
+			return s, nil
+		},
+	)
+	assertTrue(t, err != nil)
+}
+
+func TestSequenceStepError(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	_, err := orchestrate.Sequence(ctx,
+		func(ctx context.Context, input string) (*ryn.Stream, error) {
+			return nil, fmt.Errorf("step failed")
+		},
+		func(ctx context.Context, input string) (*ryn.Stream, error) {
+			return ryn.StreamFromSlice(nil), nil
+		},
+	)
+	assertTrue(t, err != nil)
+}
+
+func TestSequenceIntermediateStreamError(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	_, err := orchestrate.Sequence(ctx,
+		func(ctx context.Context, input string) (*ryn.Stream, error) {
+			s, e := ryn.NewStream(4)
+			go func() {
+				defer e.Close()
+				e.Error(fmt.Errorf("intermediate error"))
+			}()
+			return s, nil
+		},
+		func(ctx context.Context, input string) (*ryn.Stream, error) {
+			return ryn.StreamFromSlice(nil), nil
+		},
+	)
+	assertTrue(t, err != nil)
+}
+
+func TestSequenceSingleStep(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	stream, err := orchestrate.Sequence(ctx,
+		func(ctx context.Context, input string) (*ryn.Stream, error) {
+			return ryn.StreamFromSlice([]ryn.Frame{ryn.TextFrame("only")}), nil
+		},
+	)
+	assertNoError(t, err)
+	text, err := ryn.CollectText(ctx, stream)
+	assertNoError(t, err)
+	assertEqual(t, text, "only")
 }
 
 // --- test helpers ---

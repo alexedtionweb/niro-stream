@@ -172,3 +172,164 @@ func TestCacheConcurrent(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+func TestCacheProviderError(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+		return nil, fmt.Errorf("provider down")
+	})
+
+	// CacheOptions{} uses default MaxEntries (0 → 1024) covering that branch.
+	cache := middleware.NewCache(middleware.CacheOptions{})
+	provider := cache.Wrap(mock)
+
+	_, err := provider.Generate(ctx, &ryn.Request{Messages: []ryn.Message{ryn.UserText("hi")}})
+	assertErrorContains(t, err, "provider down")
+}
+
+func TestCacheStreamError(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+		out, em := ryn.NewStream(4)
+		go func() {
+			defer em.Close()
+			em.Error(fmt.Errorf("stream error"))
+		}()
+		return out, nil
+	})
+
+	cache := middleware.NewCache(middleware.CacheOptions{MaxEntries: 100})
+	provider := cache.Wrap(mock)
+
+	s, err := provider.Generate(ctx, &ryn.Request{Messages: []ryn.Message{ryn.UserText("hi")}})
+	assertNoError(t, err)
+	_, err = ryn.Collect(ctx, s)
+	assertErrorContains(t, err, "stream error")
+}
+
+func TestCacheCustomKeyFn(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	callCount := 0
+	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+		callCount++
+		return ryn.StreamFromSlice([]ryn.Frame{ryn.TextFrame("ok")}), nil
+	})
+
+	// Fixed key → all requests map to same cache entry.
+	cache := middleware.NewCache(middleware.CacheOptions{
+		MaxEntries: 100,
+		TTL:        time.Minute,
+		KeyFn: func(*ryn.Request) [32]byte {
+			return [32]byte{1, 2, 3}
+		},
+	})
+	provider := cache.Wrap(mock)
+
+	for i := 0; i < 3; i++ {
+		s, _ := provider.Generate(ctx, &ryn.Request{
+			Model:    fmt.Sprintf("model-%d", i),
+			Messages: []ryn.Message{ryn.UserText("hi")},
+		})
+		ryn.CollectText(ctx, s)
+	}
+	// All requests resolve to the same key → only the first is a miss.
+	assertEqual(t, callCount, 1)
+}
+
+func TestCacheMoveToFront(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	// Use a custom key function to place multiple entries in the same shard (shard 0).
+	// Three requests: A, B, C (all → shard 0, different keys).
+	// Then re-access B → moveToFront(B) where B is in the middle → triggers actual move.
+	keySeq := []int{1, 2, 3, 1, 2} // key discriminators in order
+	keyIdx := 0
+
+	cache := middleware.NewCache(middleware.CacheOptions{
+		MaxEntries: 2048, // large enough to avoid eviction
+		TTL:        time.Minute,
+		KeyFn: func(req *ryn.Request) [32]byte {
+			var k [32]byte
+			k[0] = 0                      // shard 0
+			k[1] = byte(keySeq[keyIdx%5]) // cyclic index
+			keyIdx++
+			return k
+		},
+	})
+
+	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+		return ryn.StreamFromSlice([]ryn.Frame{ryn.TextFrame(req.Model)}), nil
+	})
+	provider := cache.Wrap(mock)
+
+	req := func(model string) *ryn.Request {
+		return &ryn.Request{Model: model, Messages: []ryn.Message{ryn.UserText("hi")}}
+	}
+
+	// Populate shard 0 with 3 distinct entries: key1(A), key2(B), key3(C).
+	s, _ := provider.Generate(ctx, req("A"))
+	ryn.CollectText(ctx, s) // key1 → miss → put(A); head=A
+
+	s, _ = provider.Generate(ctx, req("B"))
+	ryn.CollectText(ctx, s) // key2 → miss → put(B); head=B, tail=A
+
+	s, _ = provider.Generate(ctx, req("C"))
+	ryn.CollectText(ctx, s) // key3 → miss → put(C); head=C, B in middle, tail=A
+
+	// Re-access key1 → hit → moveToFront(A) where A is tail (not head).
+	s, _ = provider.Generate(ctx, req("A-again"))
+	text, _ := ryn.CollectText(ctx, s)
+	assertEqual(t, text, "A") // served from cache
+
+	// Re-access key2 → hit → moveToFront(B) where B may be middle.
+	s, _ = provider.Generate(ctx, req("B-again"))
+	text, _ = ryn.CollectText(ctx, s)
+	assertEqual(t, text, "B") // served from cache
+
+	hits, _ := cache.Stats()
+	assertTrue(t, hits >= 2)
+}
+
+func TestCacheHitWithUsage(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+		out, em := ryn.NewStream(8)
+		go func() {
+			defer em.Close()
+			em.Emit(ctx, ryn.TextFrame("hello"))
+			usage := ryn.Usage{InputTokens: 5, OutputTokens: 3, TotalTokens: 8}
+			em.Emit(ctx, ryn.UsageFrame(&usage))
+		}()
+		return out, nil
+	})
+
+	cache := middleware.NewCache(middleware.CacheOptions{MaxEntries: 100, TTL: time.Minute})
+	provider := cache.Wrap(mock)
+
+	req := &ryn.Request{Model: "m", Messages: []ryn.Message{ryn.UserText("hi")}}
+
+	// First call: miss, provider emits text + usage frame.
+	s1, err := provider.Generate(ctx, req)
+	assertNoError(t, err)
+	ryn.Collect(ctx, s1)
+
+	// Second call: cache hit — should replay frames and re-emit usage.
+	s2, err := provider.Generate(ctx, req)
+	assertNoError(t, err)
+	text, err := ryn.CollectText(ctx, s2)
+	assertNoError(t, err)
+	assertEqual(t, text, "hello")
+
+	// KindUsage frames are consumed automatically by Next() and reflected in Usage().
+	u := s2.Usage()
+	assertTrue(t, u.InputTokens > 0 || u.OutputTokens > 0)
+}

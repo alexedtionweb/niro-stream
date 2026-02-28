@@ -1,6 +1,7 @@
 package ryn_test
 
 import (
+	"encoding/json"
 	"testing"
 
 	"ryn.dev/ryn"
@@ -47,5 +48,42 @@ func TestMessageConstructors(t *testing.T) {
 		)
 		assertEqual(t, len(m.Parts), 2)
 		assertEqual(t, m.Parts[1].URL, "https://example.com/img.png")
+	})
+}
+
+func TestPartConstructors(t *testing.T) {
+	t.Parallel()
+
+	t.Run("ImagePart", func(t *testing.T) {
+		p := ryn.ImagePart([]byte{0xFF, 0xD8}, "image/jpeg")
+		assertEqual(t, p.Kind, ryn.KindImage)
+		assertEqual(t, p.Mime, "image/jpeg")
+		assertEqual(t, len(p.Data), 2)
+	})
+
+	t.Run("AudioPart", func(t *testing.T) {
+		p := ryn.AudioPart([]byte{0x01}, "audio/pcm")
+		assertEqual(t, p.Kind, ryn.KindAudio)
+		assertEqual(t, p.Mime, "audio/pcm")
+	})
+
+	t.Run("VideoPart", func(t *testing.T) {
+		p := ryn.VideoPart([]byte{0x00}, "video/mp4")
+		assertEqual(t, p.Kind, ryn.KindVideo)
+		assertEqual(t, p.Mime, "video/mp4")
+	})
+
+	t.Run("ToolCallPart", func(t *testing.T) {
+		call := &ryn.ToolCall{ID: "c1", Name: "fn", Args: json.RawMessage(`{}`)}
+		p := ryn.ToolCallPart(call)
+		assertEqual(t, p.Kind, ryn.KindToolCall)
+		assertEqual(t, p.Tool.Name, "fn")
+	})
+
+	t.Run("ToolResultPart", func(t *testing.T) {
+		result := &ryn.ToolResult{CallID: "c1", Content: "success"}
+		p := ryn.ToolResultPart(result)
+		assertEqual(t, p.Kind, ryn.KindToolResult)
+		assertEqual(t, p.Result.Content, "success")
 	})
 }

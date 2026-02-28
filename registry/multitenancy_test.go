@@ -112,3 +112,144 @@ func TestMultiTenantProviderSelectorAndErrors(t *testing.T) {
 	_, err = fail.Generate(ctx, &ryn.Request{Messages: []ryn.Message{ryn.UserText("x")}})
 	assertErrorContains(t, err, "selector failed")
 }
+
+func TestMultiTenantNilRequest(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	reg := registry.New()
+	reg.Register("a", ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+		return ryn.StreamFromSlice([]ryn.Frame{ryn.TextFrame("ok")}), nil
+	}))
+
+	router := registry.NewMultiTenantProvider(reg, registry.WithDefaultClient("a"))
+	_, err := router.Generate(ctx, nil)
+	assertErrorContains(t, err, "cannot be nil")
+}
+
+func TestSingleProviderAutoSelect(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	reg := registry.New()
+	reg.Register("only", ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+		return ryn.StreamFromSlice([]ryn.Frame{ryn.TextFrame("auto")}), nil
+	}))
+
+	// No default, no selector, no req.Client — but only 1 provider, so auto-select.
+	router := registry.NewMultiTenantProvider(reg)
+	s, err := router.Generate(ctx, &ryn.Request{Messages: []ryn.Message{ryn.UserText("hi")}})
+	assertNoError(t, err)
+	text, _ := ryn.CollectText(ctx, s)
+	assertEqual(t, text, "auto")
+}
+
+func TestNoClientSelectedError(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	reg := registry.New()
+	reg.Register("a", ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+		return nil, nil
+	}))
+	reg.Register("b", ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+		return nil, nil
+	}))
+
+	// 2 providers, no client specified anywhere.
+	router := registry.NewMultiTenantProvider(reg)
+	_, err := router.Generate(ctx, &ryn.Request{Messages: []ryn.Message{ryn.UserText("hi")}})
+	assertErrorContains(t, err, "no client selected")
+}
+
+func TestMutatorError(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	reg := registry.New()
+	reg.Register("a", ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+		return ryn.StreamFromSlice([]ryn.Frame{ryn.TextFrame("ok")}), nil
+	}))
+
+	router := registry.NewMultiTenantProvider(reg,
+		registry.WithDefaultClient("a"),
+		registry.WithClientMutator("a", func(ctx context.Context, req *ryn.Request) error {
+			return fmt.Errorf("mutator boom")
+		}),
+	)
+	_, err := router.Generate(ctx, &ryn.Request{Messages: []ryn.Message{ryn.UserText("hi")}})
+	assertErrorContains(t, err, "mutator boom")
+}
+
+func TestCloneRequestWithExtras(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	var got *ryn.Request
+	reg := registry.New()
+	reg.Register("a", ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+		got = req
+		return ryn.StreamFromSlice([]ryn.Frame{ryn.TextFrame("ok")}), nil
+	}))
+
+	router := registry.NewMultiTenantProvider(reg, registry.WithDefaultClient("a"))
+
+	tools := []ryn.Tool{{Name: "calc", Description: "calculator"}}
+	schema := []byte(`{"type":"object"}`)
+	stop := []string{"stop1", "stop2"}
+
+	orig := &ryn.Request{
+		Messages:       []ryn.Message{ryn.UserText("hi")},
+		Tools:          tools,
+		ResponseSchema: schema,
+		Options:        ryn.Options{Stop: stop},
+	}
+	s, err := router.Generate(ctx, orig)
+	assertNoError(t, err)
+	ryn.CollectText(ctx, s)
+
+	// Cloned request should have copies of slices, not the same backing arrays.
+	assertNotNil(t, got)
+	assertEqual(t, len(got.Tools), 1)
+	assertEqual(t, string(got.ResponseSchema), `{"type":"object"}`)
+	assertEqual(t, len(got.Options.Stop), 2)
+}
+
+func TestCloneMessageWithData(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	var got *ryn.Request
+	reg := registry.New()
+	reg.Register("a", ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+		got = req
+		return ryn.StreamFromSlice([]ryn.Frame{ryn.TextFrame("ok")}), nil
+	}))
+
+	router := registry.NewMultiTenantProvider(reg, registry.WithDefaultClient("a"))
+
+	// Build a message with binary data (image), tool call with args, and tool result.
+	imgPart := ryn.ImagePart([]byte{0x89, 0x50}, "image/png")
+	toolCall := &ryn.ToolCall{ID: "call1", Name: "fn", Args: []byte(`{"x":1}`)}
+	toolCallPart := ryn.ToolCallPart(toolCall)
+	toolResult := &ryn.ToolResult{CallID: "call1", Content: "42"}
+	toolResultPart := ryn.ToolResultPart(toolResult)
+
+	msg := ryn.Multi(ryn.RoleUser, imgPart, toolCallPart, toolResultPart)
+
+	orig := &ryn.Request{Messages: []ryn.Message{msg}}
+	s, err := router.Generate(ctx, orig)
+	assertNoError(t, err)
+	ryn.CollectText(ctx, s)
+
+	assertNotNil(t, got)
+	assertEqual(t, len(got.Messages[0].Parts), 3)
+	// Image data should be copied.
+	assertEqual(t, len(got.Messages[0].Parts[0].Data), 2)
+	// Tool call should be cloned.
+	assertNotNil(t, got.Messages[0].Parts[1].Tool)
+	assertEqual(t, got.Messages[0].Parts[1].Tool.Name, "fn")
+	// Tool result should be cloned.
+	assertNotNil(t, got.Messages[0].Parts[2].Result)
+	assertEqual(t, got.Messages[0].Parts[2].Result.CallID, "call1")
+}

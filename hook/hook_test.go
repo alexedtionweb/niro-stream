@@ -2,8 +2,10 @@ package hook_test
 
 import (
 	"context"
+	"errors"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"ryn.dev/ryn"
 	"ryn.dev/ryn/hook"
@@ -26,6 +28,18 @@ func TestNoOpHookSatisfiesInterface(t *testing.T) {
 	var h hook.Hook = hook.NoOpHook{}
 	ctx := h.OnGenerateStart(context.Background(), hook.GenerateStartInfo{})
 	assertNotNil(t, ctx)
+	assertEqual(t, h.OnFrame(ctx, ryn.TextFrame("x")), nil)
+}
+
+func TestNoOpHookAllMethods(t *testing.T) {
+	t.Parallel()
+	h := hook.NoOpHook{}
+	ctx := context.Background()
+
+	h.OnGenerateEnd(ctx, hook.GenerateEndInfo{})
+	h.OnToolCall(ctx, ryn.ToolCall{})
+	h.OnToolResult(ctx, ryn.ToolResult{}, 0)
+	h.OnError(ctx, errors.New("err"))
 	assertEqual(t, h.OnFrame(ctx, ryn.TextFrame("x")), nil)
 }
 
@@ -62,6 +76,161 @@ func TestHooksAllNil(t *testing.T) {
 	assertNil(t, combined)
 }
 
+func TestMultiHookGenerateEnd(t *testing.T) {
+	t.Parallel()
+	var endCalled1, endCalled2 atomic.Bool
+
+	h1 := &fullHook{onEnd: func(_ context.Context, _ hook.GenerateEndInfo) { endCalled1.Store(true) }}
+	h2 := &fullHook{onEnd: func(_ context.Context, _ hook.GenerateEndInfo) { endCalled2.Store(true) }}
+
+	combined := hook.Compose(h1, h2)
+	ctx := context.Background()
+	combined.OnGenerateEnd(ctx, hook.GenerateEndInfo{Model: "gpt-4o", Duration: time.Second})
+
+	assertTrue(t, endCalled1.Load())
+	assertTrue(t, endCalled2.Load())
+}
+
+func TestMultiHookToolCallAndResult(t *testing.T) {
+	t.Parallel()
+	var toolCallCount, toolResultCount atomic.Int32
+
+	h1 := &fullHook{
+		onToolCall: func(_ context.Context, call ryn.ToolCall) {
+			toolCallCount.Add(1)
+		},
+		onToolResult: func(_ context.Context, result ryn.ToolResult, elapsed time.Duration) {
+			toolResultCount.Add(1)
+		},
+	}
+	h2 := &fullHook{
+		onToolCall: func(_ context.Context, call ryn.ToolCall) {
+			toolCallCount.Add(1)
+		},
+		onToolResult: func(_ context.Context, result ryn.ToolResult, elapsed time.Duration) {
+			toolResultCount.Add(1)
+		},
+	}
+
+	combined := hook.Compose(h1, h2)
+	ctx := context.Background()
+	combined.OnToolCall(ctx, ryn.ToolCall{ID: "c1", Name: "weather"})
+	combined.OnToolResult(ctx, ryn.ToolResult{CallID: "c1", Content: "sunny"}, 50*time.Millisecond)
+
+	assertEqual(t, int(toolCallCount.Load()), 2)
+	assertEqual(t, int(toolResultCount.Load()), 2)
+}
+
+func TestMultiHookOnError(t *testing.T) {
+	t.Parallel()
+	var errCount atomic.Int32
+
+	h1 := &fullHook{onError: func(_ context.Context, err error) { errCount.Add(1) }}
+	h2 := &fullHook{onError: func(_ context.Context, err error) { errCount.Add(1) }}
+
+	combined := hook.Compose(h1, h2)
+	combined.OnError(context.Background(), errors.New("test error"))
+
+	assertEqual(t, int(errCount.Load()), 2)
+}
+
+func TestMultiHookOnFrameFirstErrorPropagates(t *testing.T) {
+	t.Parallel()
+	firstErr := errors.New("first error")
+
+	// h1 returns an error, h2 should still be called but first error propagates
+	var h2Called atomic.Bool
+	h1 := &fullHook{onFrame: func(_ context.Context, _ ryn.Frame) error { return firstErr }}
+	h2 := &fullHook{onFrame: func(_ context.Context, _ ryn.Frame) error {
+		h2Called.Store(true)
+		return nil
+	}}
+
+	combined := hook.Compose(h1, h2)
+	err := combined.OnFrame(context.Background(), ryn.TextFrame("x"))
+	assertEqual(t, err, firstErr)
+	assertTrue(t, h2Called.Load()) // h2 was still called
+}
+
+func TestHookGenerateStartInfo(t *testing.T) {
+	t.Parallel()
+	var capturedInfo hook.GenerateStartInfo
+
+	h := &fullHook{
+		onStart: func(ctx context.Context, info hook.GenerateStartInfo) context.Context {
+			capturedInfo = info
+			return ctx
+		},
+	}
+
+	combined := hook.Compose(h)
+	ctx := context.Background()
+	combined.OnGenerateStart(ctx, hook.GenerateStartInfo{
+		Provider:   "openai",
+		Model:      "gpt-4o",
+		Messages:   5,
+		Tools:      2,
+		RequestID:  "req_123",
+		FunctionID: "fn_abc",
+		Metadata:   map[string]string{"env": "prod"},
+	})
+
+	assertEqual(t, capturedInfo.Provider, "openai")
+	assertEqual(t, capturedInfo.Model, "gpt-4o")
+	assertEqual(t, capturedInfo.Messages, 5)
+	assertEqual(t, capturedInfo.Tools, 2)
+	assertEqual(t, capturedInfo.RequestID, "req_123")
+}
+
+// fullHook is a test hook that delegates all methods.
+type fullHook struct {
+	hook.NoOpHook
+	onStart      func(ctx context.Context, info hook.GenerateStartInfo) context.Context
+	onEnd        func(ctx context.Context, info hook.GenerateEndInfo)
+	onFrame      func(ctx context.Context, f ryn.Frame) error
+	onToolCall   func(ctx context.Context, call ryn.ToolCall)
+	onToolResult func(ctx context.Context, result ryn.ToolResult, elapsed time.Duration)
+	onError      func(ctx context.Context, err error)
+}
+
+func (h *fullHook) OnGenerateStart(ctx context.Context, info hook.GenerateStartInfo) context.Context {
+	if h.onStart != nil {
+		return h.onStart(ctx, info)
+	}
+	return ctx
+}
+
+func (h *fullHook) OnGenerateEnd(ctx context.Context, info hook.GenerateEndInfo) {
+	if h.onEnd != nil {
+		h.onEnd(ctx, info)
+	}
+}
+
+func (h *fullHook) OnFrame(ctx context.Context, f ryn.Frame) error {
+	if h.onFrame != nil {
+		return h.onFrame(ctx, f)
+	}
+	return nil
+}
+
+func (h *fullHook) OnToolCall(ctx context.Context, call ryn.ToolCall) {
+	if h.onToolCall != nil {
+		h.onToolCall(ctx, call)
+	}
+}
+
+func (h *fullHook) OnToolResult(ctx context.Context, result ryn.ToolResult, elapsed time.Duration) {
+	if h.onToolResult != nil {
+		h.onToolResult(ctx, result, elapsed)
+	}
+}
+
+func (h *fullHook) OnError(ctx context.Context, err error) {
+	if h.onError != nil {
+		h.onError(ctx, err)
+	}
+}
+
 // --- test helpers ---
 
 func assertEqual[T comparable](t *testing.T, got, want T) {
@@ -78,6 +247,12 @@ func assertNotNil(t *testing.T, v any) {
 	}
 }
 
+func assertTrue(t *testing.T, v bool) {
+	t.Helper()
+	if !v {
+		t.Error("expected true")
+	}
+}
 func assertNil(t *testing.T, v any) {
 	t.Helper()
 	if v != nil {

@@ -2,6 +2,7 @@ package ryn_test
 
 import (
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -40,14 +41,26 @@ func assertNotNil(t *testing.T, v any) {
 	t.Helper()
 	if v == nil {
 		t.Error("expected non-nil")
+		return
+	}
+	// Handle typed nils (e.g. (*ryn.Error)(nil) wrapped in any)
+	rv := reflect.ValueOf(v)
+	if rv.Kind() == reflect.Ptr && rv.IsNil() {
+		t.Error("expected non-nil")
 	}
 }
 
 func assertNil(t *testing.T, v any) {
 	t.Helper()
-	if v != nil {
-		t.Errorf("expected nil, got %v", v)
+	if v == nil {
+		return
 	}
+	// Handle typed nils (e.g. (*ryn.Error)(nil) wrapped in any)
+	rv := reflect.ValueOf(v)
+	if rv.Kind() == reflect.Ptr && rv.IsNil() {
+		return
+	}
+	t.Errorf("expected nil, got %v", v)
 }
 
 func assertTrue(t *testing.T, v bool) {

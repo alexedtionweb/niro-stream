@@ -106,28 +106,34 @@ func (f toolSchemaValidatorFunc) Validate(schema json.RawMessage, args json.RawM
 	return f(schema, args)
 }
 
+// validatorHolder wraps a ToolSchemaValidator for storage in atomic.Value.
+// Using a wrapper struct ensures atomic.Value always stores the same concrete type.
+type validatorHolder struct {
+	v ToolSchemaValidator
+}
+
 var globalToolSchemaValidator atomic.Value
 
 func init() {
-	globalToolSchemaValidator.Store(ToolSchemaValidator(defaultToolSchemaValidator()))
+	globalToolSchemaValidator.Store(&validatorHolder{v: defaultToolSchemaValidator()})
 }
 
 // SetToolSchemaValidator sets the global schema validator. Nil resets to default.
 func SetToolSchemaValidator(v ToolSchemaValidator) {
 	if v == nil {
-		globalToolSchemaValidator.Store(ToolSchemaValidator(defaultToolSchemaValidator()))
+		globalToolSchemaValidator.Store(&validatorHolder{v: defaultToolSchemaValidator()})
 		return
 	}
-	globalToolSchemaValidator.Store(v)
+	globalToolSchemaValidator.Store(&validatorHolder{v: v})
 }
 
 // CurrentToolSchemaValidator returns active validator.
 func CurrentToolSchemaValidator() ToolSchemaValidator {
 	if v := globalToolSchemaValidator.Load(); v != nil {
-		return v.(ToolSchemaValidator)
+		return v.(*validatorHolder).v
 	}
 	d := defaultToolSchemaValidator()
-	globalToolSchemaValidator.Store(ToolSchemaValidator(d))
+	globalToolSchemaValidator.Store(&validatorHolder{v: d})
 	return d
 }
 

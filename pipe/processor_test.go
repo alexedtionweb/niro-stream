@@ -2,6 +2,7 @@ package pipe_test
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"ryn.dev/ryn"
@@ -146,4 +147,115 @@ func TestAccumulate(t *testing.T) {
 		}
 	}
 	assertEqual(t, text, "Hello")
+}
+
+func TestAccumulateNoText(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	// Only non-text frames: they pass through, and no text is accumulated,
+	// so the final "if len(buf) > 0" is false → covers the "return nil" path.
+	in := ryn.StreamFromSlice([]ryn.Frame{
+		ryn.ControlFrame(ryn.SignalFlush),
+		ryn.ControlFrame(ryn.SignalFlush),
+	})
+
+	out, emitter := ryn.NewStream(4)
+	go func() {
+		defer emitter.Close()
+		pipe.Accumulate().Process(ctx, in, emitter)
+	}()
+
+	frames, err := ryn.Collect(ctx, out)
+	assertNoError(t, err)
+	assertEqual(t, len(frames), 2)
+}
+
+func TestAccumulateStreamError(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	// Stream that emits an error — covers the "return in.Err()" path in Accumulate.
+	in, inEm := ryn.NewStream(4)
+	go func() {
+		defer inEm.Close()
+		inEm.Error(fmt.Errorf("stream broke"))
+	}()
+
+	out, outEm := ryn.NewStream(4)
+	go func() {
+		defer outEm.Close()
+		if err := pipe.Accumulate().Process(ctx, in, outEm); err != nil {
+			outEm.Error(err)
+		}
+	}()
+
+	_, err := ryn.Collect(ctx, out)
+	assertErrorContains(t, err, "stream broke")
+}
+
+func TestFilterStreamError(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	in, inEm := ryn.NewStream(4)
+	go func() {
+		defer inEm.Close()
+		inEm.Error(fmt.Errorf("filter stream err"))
+	}()
+
+	out, outEm := ryn.NewStream(4)
+	go func() {
+		defer outEm.Close()
+		if err := pipe.Filter(func(f ryn.Frame) bool { return true }).Process(ctx, in, outEm); err != nil {
+			outEm.Error(err)
+		}
+	}()
+
+	_, err := ryn.Collect(ctx, out)
+	assertErrorContains(t, err, "filter stream err")
+}
+
+func TestMapStreamError(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	in, inEm := ryn.NewStream(4)
+	go func() {
+		defer inEm.Close()
+		inEm.Error(fmt.Errorf("map stream err"))
+	}()
+
+	out, outEm := ryn.NewStream(4)
+	go func() {
+		defer outEm.Close()
+		if err := pipe.Map(func(f ryn.Frame) ryn.Frame { return f }).Process(ctx, in, outEm); err != nil {
+			outEm.Error(err)
+		}
+	}()
+
+	_, err := ryn.Collect(ctx, out)
+	assertErrorContains(t, err, "map stream err")
+}
+
+func TestTapStreamError(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	in, inEm := ryn.NewStream(4)
+	go func() {
+		defer inEm.Close()
+		inEm.Error(fmt.Errorf("tap stream err"))
+	}()
+
+	out, outEm := ryn.NewStream(4)
+	go func() {
+		defer outEm.Close()
+		if err := pipe.Tap(func(f ryn.Frame) {}).Process(ctx, in, outEm); err != nil {
+			outEm.Error(err)
+		}
+	}()
+
+	_, err := ryn.Collect(ctx, out)
+	assertErrorContains(t, err, "tap stream err")
 }

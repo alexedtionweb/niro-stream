@@ -162,6 +162,28 @@ func TestCollectText(t *testing.T) {
 	assertEqual(t, text, "Hello World")
 }
 
+func TestStreamChan(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	s, e := ryn.NewStream(4)
+	go func() {
+		defer e.Close()
+		e.Emit(ctx, ryn.TextFrame("x"))
+		e.Emit(ctx, ryn.TextFrame("y"))
+	}()
+
+	ch := s.Chan()
+	assertNotNil(t, ch)
+
+	// Drain via the channel directly
+	var frames []ryn.Frame
+	for f := range ch {
+		frames = append(frames, f)
+	}
+	assertEqual(t, len(frames), 2)
+}
+
 func TestForward(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

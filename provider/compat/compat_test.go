@@ -209,3 +209,267 @@ func TestCompatProviderCustomHeaders(t *testing.T) {
 	}
 	ryn.Collect(ctx, stream) // drain
 }
+
+func TestCompatWithClient(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer srv.Close()
+
+	customClient := &http.Client{}
+	llm := compat.New(srv.URL, "", compat.WithClient(customClient))
+
+	ctx := context.Background()
+	stream, err := llm.Generate(ctx, &ryn.Request{
+		Model:    "m",
+		Messages: []ryn.Message{ryn.UserText("hi")},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ryn.Collect(ctx, stream)
+}
+
+func TestCompatProviderMultipartMessages(t *testing.T) {
+	t.Parallel()
+
+	var capturedBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ryn.JSONNewDecoder(r.Body).Decode(&capturedBody)
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer srv.Close()
+
+	ctx := context.Background()
+	llm := compat.New(srv.URL, "")
+
+	// Message with image URL
+	stream, err := llm.Generate(ctx, &ryn.Request{
+		Model: "m",
+		Messages: []ryn.Message{
+			ryn.Multi(ryn.RoleUser,
+				ryn.TextPart("check this"),
+				ryn.ImageURLPart("https://example.com/img.png", "image/png"),
+			),
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ryn.Collect(ctx, stream)
+}
+
+func TestCompatProviderImageDataMessage(t *testing.T) {
+	t.Parallel()
+
+	var capturedBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ryn.JSONNewDecoder(r.Body).Decode(&capturedBody)
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer srv.Close()
+
+	ctx := context.Background()
+	llm := compat.New(srv.URL, "")
+
+	stream, err := llm.Generate(ctx, &ryn.Request{
+		Model: "m",
+		Messages: []ryn.Message{
+			ryn.Multi(ryn.RoleUser,
+				ryn.TextPart("check this"),
+				ryn.ImagePart([]byte{0xFF, 0xD8}, "image/jpeg"),
+			),
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ryn.Collect(ctx, stream)
+}
+
+func TestCompatProviderAudioMessage(t *testing.T) {
+	t.Parallel()
+
+	var capturedBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ryn.JSONNewDecoder(r.Body).Decode(&capturedBody)
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer srv.Close()
+
+	ctx := context.Background()
+	llm := compat.New(srv.URL, "")
+
+	// Test each audio format
+	for _, mime := range []string{"audio/mpeg", "audio/opus", "audio/flac", "audio/wav"} {
+		stream, err := llm.Generate(ctx, &ryn.Request{
+			Model: "m",
+			Messages: []ryn.Message{
+				ryn.Multi(ryn.RoleUser,
+					ryn.AudioPart([]byte{0x01}, mime),
+				),
+			},
+		})
+		if err != nil {
+			t.Fatalf("mime %s: %v", mime, err)
+		}
+		ryn.Collect(ctx, stream)
+	}
+}
+
+func TestCompatProviderToolCallMessage(t *testing.T) {
+	t.Parallel()
+
+	var capturedBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ryn.JSONNewDecoder(r.Body).Decode(&capturedBody)
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer srv.Close()
+
+	ctx := context.Background()
+	llm := compat.New(srv.URL, "")
+
+	// Assistant with tool call
+	stream, err := llm.Generate(ctx, &ryn.Request{
+		Model: "m",
+		Messages: []ryn.Message{
+			ryn.UserText("what's the weather?"),
+			ryn.Multi(ryn.RoleAssistant,
+				ryn.ToolCallPart(&ryn.ToolCall{ID: "c1", Name: "get_weather", Args: []byte(`{"city":"NYC"}`)}),
+			),
+			ryn.ToolMessage("c1", `{"temp":72}`),
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ryn.Collect(ctx, stream)
+}
+
+func TestCompatProviderWithOptions(t *testing.T) {
+	t.Parallel()
+
+	var capturedBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ryn.JSONNewDecoder(r.Body).Decode(&capturedBody)
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer srv.Close()
+
+	ctx := context.Background()
+	temp := 0.7
+	topP := 0.9
+	llm := compat.New(srv.URL, "")
+
+	stream, err := llm.Generate(ctx, &ryn.Request{
+		Model:    "m",
+		Messages: []ryn.Message{ryn.UserText("hi")},
+		Options: ryn.Options{
+			MaxTokens:   100,
+			Temperature: &temp,
+			TopP:        &topP,
+			Stop:        []string{"END"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ryn.Collect(ctx, stream)
+}
+
+func TestCompatProviderWithTools(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer srv.Close()
+
+	ctx := context.Background()
+	llm := compat.New(srv.URL, "")
+
+	stream, err := llm.Generate(ctx, &ryn.Request{
+		Model:    "m",
+		Messages: []ryn.Message{ryn.UserText("hi")},
+		Tools: []ryn.Tool{{
+			Name:        "get_weather",
+			Description: "Get weather",
+			Parameters:  []byte(`{"type":"object","properties":{"city":{"type":"string"}}}`),
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ryn.Collect(ctx, stream)
+}
+
+func TestCompatSSEParseError(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		flusher, _ := w.(http.Flusher)
+		// Send invalid JSON
+		fmt.Fprint(w, "data: {invalid json}\n\n")
+		flusher.Flush()
+	}))
+	defer srv.Close()
+
+	ctx := context.Background()
+	llm := compat.New(srv.URL, "")
+
+	stream, err := llm.Generate(ctx, &ryn.Request{
+		Model:    "m",
+		Messages: []ryn.Message{ryn.UserText("hi")},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Collect should return an error due to invalid JSON
+	_, err = ryn.Collect(ctx, stream)
+	if err == nil {
+		t.Error("expected error from invalid SSE JSON")
+	}
+}
+
+func TestCompatUsageOnlyChunk(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		flusher, _ := w.(http.Flusher)
+
+		// Chunk with no choices but has usage (stream_options style)
+		fmt.Fprint(w, `data: {"id":"r1","model":"m","choices":[],"usage":{"prompt_tokens":5,"completion_tokens":3,"total_tokens":8}}`+"\n\n")
+		flusher.Flush()
+		fmt.Fprint(w, "data: [DONE]\n\n")
+		flusher.Flush()
+	}))
+	defer srv.Close()
+
+	ctx := context.Background()
+	llm := compat.New(srv.URL, "")
+
+	stream, err := llm.Generate(ctx, &ryn.Request{
+		Model:    "m",
+		Messages: []ryn.Message{ryn.UserText("hi")},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ryn.Collect(ctx, stream)
+	usage := stream.Usage()
+	if usage.TotalTokens != 8 {
+		t.Errorf("expected total_tokens=8, got %d", usage.TotalTokens)
+	}
+}

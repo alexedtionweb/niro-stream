@@ -2,6 +2,7 @@ package pipe_test
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"ryn.dev/ryn"
@@ -81,4 +82,24 @@ func TestPipelineWithAccumulate(t *testing.T) {
 	text, err := ryn.CollectText(ctx, out)
 	assertNoError(t, err)
 	assertEqual(t, text, "Hi")
+}
+
+func TestPipelineProcessorError(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	in := ryn.StreamFromSlice([]ryn.Frame{ryn.TextFrame("x")})
+
+	errProc := pipe.ProcessorFunc(func(ctx context.Context, in *ryn.Stream, out *ryn.Emitter) error {
+		for in.Next(ctx) {
+			// consume but don't forward
+		}
+		return fmt.Errorf("processor failed")
+	})
+
+	p := pipe.New(errProc)
+	out := p.Run(ctx, in)
+
+	_, err := ryn.Collect(ctx, out)
+	assertErrorContains(t, err, "processor failed")
 }

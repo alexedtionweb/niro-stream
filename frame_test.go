@@ -28,6 +28,13 @@ func TestFrameConstructors(t *testing.T) {
 		assertEqual(t, f.Kind, ryn.KindImage)
 	})
 
+	t.Run("VideoFrame", func(t *testing.T) {
+		f := ryn.VideoFrame([]byte{0x00, 0x01}, "video/mp4")
+		assertEqual(t, f.Kind, ryn.KindVideo)
+		assertEqual(t, f.Mime, "video/mp4")
+		assertEqual(t, len(f.Data), 2)
+	})
+
 	t.Run("ToolCallFrame", func(t *testing.T) {
 		tc := &ryn.ToolCall{ID: "c1", Name: "fn", Args: json.RawMessage(`{}`)}
 		f := ryn.ToolCallFrame(tc)
@@ -58,10 +65,23 @@ func TestFrameConstructors(t *testing.T) {
 
 func TestKindString(t *testing.T) {
 	t.Parallel()
-	assertEqual(t, ryn.KindText.String(), "text")
-	assertEqual(t, ryn.KindToolCall.String(), "tool_call")
-	assertEqual(t, ryn.KindUsage.String(), "usage")
-	assertEqual(t, ryn.Kind(0).String(), "unknown")
+	cases := []struct {
+		kind ryn.Kind
+		want string
+	}{
+		{ryn.KindText, "text"},
+		{ryn.KindAudio, "audio"},
+		{ryn.KindImage, "image"},
+		{ryn.KindVideo, "video"},
+		{ryn.KindToolCall, "tool_call"},
+		{ryn.KindToolResult, "tool_result"},
+		{ryn.KindUsage, "usage"},
+		{ryn.KindControl, "control"},
+		{ryn.Kind(0), "unknown"},
+	}
+	for _, tc := range cases {
+		assertEqual(t, tc.kind.String(), tc.want)
+	}
 }
 
 func TestSignalString(t *testing.T) {
@@ -70,6 +90,7 @@ func TestSignalString(t *testing.T) {
 	assertEqual(t, ryn.SignalEOT.String(), "eot")
 	assertEqual(t, ryn.SignalAbort.String(), "abort")
 	assertEqual(t, ryn.SignalNone.String(), "none")
+	assertEqual(t, ryn.Signal(99).String(), "none") // default case
 }
 
 func TestUsageAdd(t *testing.T) {

@@ -2,6 +2,7 @@ package middleware_test
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -123,4 +124,30 @@ func TestComposedWithRetryConfig(t *testing.T) {
 	text, _ := ryn.CollectText(ctx, stream)
 	assertEqual(t, text, "ok")
 	assertTrue(t, attempts >= 2)
+}
+
+func TestWithGenerationTimeout(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	tctx, cancel := middleware.WithGenerationTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	deadline, ok := tctx.Deadline()
+	assertTrue(t, ok)
+	assertTrue(t, time.Until(deadline) > 0)
+	assertTrue(t, time.Until(deadline) <= 5*time.Second)
+}
+
+func TestTimeoutProviderProviderError(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+		return nil, fmt.Errorf("provider down")
+	})
+
+	provider := middleware.NewTimeoutProvider(mock, 5*time.Second)
+	_, err := provider.Generate(ctx, &ryn.Request{Messages: []ryn.Message{ryn.UserText("test")}})
+	assertErrorContains(t, err, "provider down")
 }

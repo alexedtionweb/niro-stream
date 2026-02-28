@@ -101,6 +101,17 @@ func TestRegistryGenerateNotFound(t *testing.T) {
 	assertErrorContains(t, err, "not registered")
 }
 
+func TestRegistryMustGetSuccess(t *testing.T) {
+	t.Parallel()
+
+	reg := registry.New()
+	reg.Register("x", ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+		return nil, nil
+	}))
+	p := reg.MustGet("x")
+	assertNotNil(t, p)
+}
+
 func TestRegistryConcurrent(t *testing.T) {
 	t.Parallel()
 

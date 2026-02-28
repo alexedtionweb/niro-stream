@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 
 	"google.golang.org/genai"
 
@@ -617,5 +619,864 @@ func checkRynError(t *testing.T, err error, wantCode ryn.ErrorCode) {
 	}
 	if rynErr.Code != wantCode {
 		t.Errorf("want code %v, got %v", wantCode, rynErr.Code)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// WithHTTPClient option + NewFromClient + Client()
+// ---------------------------------------------------------------------------
+
+func TestWithHTTPClient_Applied(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sseResponse(w, geminiFinal("ok", "STOP", 1, 1))
+	}))
+	defer srv.Close()
+
+	// Combine WithHTTPClient (custom *http.Client) + WithHTTPOptions (BaseURL)
+	// to exercise both branches of applyHTTP.
+	p, err := New("test-key",
+		WithHTTPClient(&http.Client{}),
+		WithHTTPOptions(genai.HTTPOptions{BaseURL: srv.URL + "/"}),
+	)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer p.Close()
+
+	stream, err := p.Generate(context.Background(), &ryn.Request{
+		Messages: []ryn.Message{ryn.UserText("hi")},
+	})
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	for stream.Next(context.Background()) {
+	}
+	if err := stream.Err(); err != nil {
+		t.Fatalf("stream: %v", err)
+	}
+}
+
+func TestNewFromClient_AndClientAccessor(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sseResponse(w, geminiFinal("hi", "STOP", 2, 3))
+	}))
+	defer srv.Close()
+
+	base, err := New("test-key", WithHTTPOptions(genai.HTTPOptions{BaseURL: srv.URL + "/"}))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	p := NewFromClient(base.Client(), "gemini-2.0-flash")
+	if p.Client() == nil {
+		t.Error("Client() returned nil")
+	}
+	if p.Client() != base.Client() {
+		t.Error("Client() returned wrong client")
+	}
+
+	stream, err := p.Generate(context.Background(), &ryn.Request{
+		Messages: []ryn.Message{ryn.UserText("hello")},
+	})
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	for stream.Next(context.Background()) {
+	}
+	if err := stream.Err(); err != nil {
+		t.Fatalf("stream: %v", err)
+	}
+	if stream.Response().Usage.InputTokens != 2 {
+		t.Errorf("want inputTokens=2, got %d", stream.Response().Usage.InputTokens)
+	}
+}
+
+func TestNewFromClient_WithHooks(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sseResponse(w, geminiFinal("ok", "STOP", 1, 1))
+	}))
+	defer srv.Close()
+
+	base, _ := New("test-key", WithHTTPOptions(genai.HTTPOptions{BaseURL: srv.URL + "/"}))
+	hookCalled := false
+	p := NewFromClient(base.Client(), "gemini-pro",
+		func(model string, cfg *genai.GenerateContentConfig) { hookCalled = true },
+	)
+	stream, err := p.Generate(context.Background(), &ryn.Request{
+		Messages: []ryn.Message{ryn.UserText("hi")},
+	})
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	for stream.Next(context.Background()) {
+	}
+	if !hookCalled {
+		t.Error("hook passed to NewFromClient was not called")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// NewVertexAI success path
+// ---------------------------------------------------------------------------
+
+func TestNewVertexAI_Success(t *testing.T) {
+	// genai.NewClient does not make network calls during construction, so
+	// we can test the success path without real GCP credentials.
+	p, err := NewVertexAI("my-project", "us-central1",
+		WithHTTPOptions(genai.HTTPOptions{BaseURL: "http://localhost:19999/"}),
+	)
+	if err != nil {
+		t.Fatalf("NewVertexAI: %v", err)
+	}
+	if p == nil {
+		t.Error("expected non-nil provider")
+	}
+	p.Close()
+}
+
+// ---------------------------------------------------------------------------
+// classifyError: context.Canceled and context.DeadlineExceeded
+// ---------------------------------------------------------------------------
+
+func TestGenerate_ContextCanceled(t *testing.T) {
+	// Server that blocks until the client disconnects.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	}))
+	defer srv.Close()
+
+	p := newTestProvider(t, srv.URL)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // pre-cancel so the HTTP request fails immediately
+
+	stream, err := p.Generate(ctx, &ryn.Request{
+		Messages: []ryn.Message{ryn.UserText("hi")},
+	})
+	if err != nil {
+		checkRynError(t, err, ryn.ErrCodeContextCancelled)
+		return
+	}
+	// Drain with a fresh context so stream.Next doesn't short-circuit on
+	// ctx.Done() before the consume goroutine emits the classified error.
+	for stream.Next(context.Background()) {
+	}
+	if stream.Err() == nil {
+		t.Fatal("expected context cancelled error")
+	}
+	checkRynError(t, stream.Err(), ryn.ErrCodeContextCancelled)
+}
+
+func TestGenerate_DeadlineExceeded(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	}))
+	defer srv.Close()
+
+	p := newTestProvider(t, srv.URL)
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Millisecond)
+	defer cancel()
+
+	// Ensure the deadline has already passed before we even call Generate.
+	time.Sleep(10 * time.Millisecond)
+
+	stream, err := p.Generate(ctx, &ryn.Request{
+		Messages: []ryn.Message{ryn.UserText("hi")},
+	})
+	if err != nil {
+		checkRynError(t, err, ryn.ErrCodeTimeout)
+		return
+	}
+	// Drain with a fresh context so stream.Next doesn't short-circuit on
+	// ctx.Done() before the consume goroutine emits the classified error.
+	for stream.Next(context.Background()) {
+	}
+	if stream.Err() == nil {
+		t.Fatal("expected timeout error")
+	}
+	checkRynError(t, stream.Err(), ryn.ErrCodeTimeout)
+}
+
+// ---------------------------------------------------------------------------
+// mapFinishReason: all cases
+// ---------------------------------------------------------------------------
+
+func assertFinishReason(t *testing.T, bedrockReason, want string) {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sseResponse(w, geminiFinal("", bedrockReason, 1, 0))
+	}))
+	defer srv.Close()
+
+	p := newTestProvider(t, srv.URL)
+	stream, err := p.Generate(context.Background(), &ryn.Request{
+		Messages: []ryn.Message{ryn.UserText("hi")},
+	})
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	for stream.Next(context.Background()) {
+	}
+	if err := stream.Err(); err != nil {
+		t.Fatalf("stream error: %v", err)
+	}
+	if got := stream.Response().FinishReason; got != want {
+		t.Errorf("reason=%q: want %q, got %q", bedrockReason, want, got)
+	}
+}
+
+func TestMapFinishReason_Recitation(t *testing.T) {
+	assertFinishReason(t, "RECITATION", "content_filter")
+}
+func TestMapFinishReason_Language(t *testing.T) { assertFinishReason(t, "LANGUAGE", "content_filter") }
+func TestMapFinishReason_Blocklist(t *testing.T) {
+	assertFinishReason(t, "BLOCKLIST", "content_filter")
+}
+func TestMapFinishReason_ProhibitedContent(t *testing.T) {
+	assertFinishReason(t, "PROHIBITED_CONTENT", "content_filter")
+}
+func TestMapFinishReason_SPII(t *testing.T) { assertFinishReason(t, "SPII", "content_filter") }
+func TestMapFinishReason_ImageSafety(t *testing.T) {
+	assertFinishReason(t, "IMAGE_SAFETY", "content_filter")
+}
+func TestMapFinishReason_MalformedFunctionCall(t *testing.T) {
+	assertFinishReason(t, "MALFORMED_FUNCTION_CALL", "other")
+}
+func TestMapFinishReason_Other(t *testing.T)   { assertFinishReason(t, "OTHER", "other") }
+func TestMapFinishReason_Unknown(t *testing.T) { assertFinishReason(t, "SOME_FUTURE_REASON", "stop") }
+func TestMapFinishReason_Empty(t *testing.T)   { assertFinishReason(t, "", "stop") }
+
+// ---------------------------------------------------------------------------
+// buildConfig: inference options
+// ---------------------------------------------------------------------------
+
+func TestGenerate_InferenceOptions(t *testing.T) {
+	var capturedBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&capturedBody)
+		sseResponse(w, geminiFinal("ok", "STOP", 5, 5))
+	}))
+	defer srv.Close()
+
+	temp := 0.7
+	topP := 0.9
+	topK := 40
+	p := newTestProvider(t, srv.URL)
+	stream, err := p.Generate(context.Background(), &ryn.Request{
+		Messages: []ryn.Message{ryn.UserText("hi")},
+		Options: ryn.Options{
+			MaxTokens:   512,
+			Temperature: &temp,
+			TopP:        &topP,
+			TopK:        &topK,
+			Stop:        []string{"\n\n", "END"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	for stream.Next(context.Background()) {
+	}
+	if err := stream.Err(); err != nil {
+		t.Fatalf("stream: %v", err)
+	}
+
+	gc, _ := capturedBody["generationConfig"].(map[string]any)
+	if gc["maxOutputTokens"] != float64(512) {
+		t.Errorf("want maxOutputTokens=512, got %v", gc["maxOutputTokens"])
+	}
+	if gc["temperature"] == nil {
+		t.Error("expected temperature in generationConfig")
+	}
+	if gc["topP"] == nil {
+		t.Error("expected topP in generationConfig")
+	}
+	if gc["topK"] == nil {
+		t.Error("expected topK in generationConfig")
+	}
+	stops, _ := gc["stopSequences"].([]any)
+	if len(stops) != 2 {
+		t.Errorf("want 2 stop sequences, got %v", stops)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// buildConfig: ResponseFormat
+// ---------------------------------------------------------------------------
+
+func TestGenerate_ResponseFormat_JSON(t *testing.T) {
+	var capturedBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&capturedBody)
+		sseResponse(w, geminiFinal(`{"key":"val"}`, "STOP", 1, 5))
+	}))
+	defer srv.Close()
+
+	p := newTestProvider(t, srv.URL)
+	stream, err := p.Generate(context.Background(), &ryn.Request{
+		Messages:       []ryn.Message{ryn.UserText("give JSON")},
+		ResponseFormat: "json",
+	})
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	for stream.Next(context.Background()) {
+	}
+
+	gc, _ := capturedBody["generationConfig"].(map[string]any)
+	if gc["responseMimeType"] != "application/json" {
+		t.Errorf("want responseMimeType=application/json, got %v", gc["responseMimeType"])
+	}
+}
+
+func TestGenerate_ResponseFormat_JSONSchema(t *testing.T) {
+	var capturedBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&capturedBody)
+		sseResponse(w, geminiFinal(`{"name":"Alice"}`, "STOP", 1, 5))
+	}))
+	defer srv.Close()
+
+	schema := json.RawMessage(`{"type":"object","properties":{"name":{"type":"string"}}}`)
+	p := newTestProvider(t, srv.URL)
+	stream, err := p.Generate(context.Background(), &ryn.Request{
+		Messages:       []ryn.Message{ryn.UserText("give JSON")},
+		ResponseFormat: "json_schema",
+		ResponseSchema: schema,
+	})
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	for stream.Next(context.Background()) {
+	}
+
+	gc, _ := capturedBody["generationConfig"].(map[string]any)
+	if gc["responseMimeType"] != "application/json" {
+		t.Errorf("want responseMimeType=application/json, got %v", gc["responseMimeType"])
+	}
+	if gc["responseSchema"] == nil {
+		t.Error("expected responseSchema in generationConfig")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// buildConfig: ToolChoice variants
+// ---------------------------------------------------------------------------
+
+func TestGenerate_ToolChoice_None(t *testing.T) {
+	var capturedBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&capturedBody)
+		sseResponse(w, geminiFinal("ok", "STOP", 1, 1))
+	}))
+	defer srv.Close()
+
+	p := newTestProvider(t, srv.URL)
+	stream, err := p.Generate(context.Background(), &ryn.Request{
+		Messages:   []ryn.Message{ryn.UserText("hi")},
+		Tools:      []ryn.Tool{{Name: "foo", Description: "d"}},
+		ToolChoice: ryn.ToolChoiceNone,
+	})
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	for stream.Next(context.Background()) {
+	}
+
+	tc, _ := capturedBody["toolConfig"].(map[string]any)
+	fcc, _ := tc["functionCallingConfig"].(map[string]any)
+	if fcc["mode"] != "NONE" {
+		t.Errorf("want mode=NONE for ToolChoiceNone, got %v", fcc["mode"])
+	}
+}
+
+func TestGenerate_ToolChoice_Required(t *testing.T) {
+	var capturedBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&capturedBody)
+		sseResponse(w, geminiFinal("ok", "STOP", 1, 1))
+	}))
+	defer srv.Close()
+
+	p := newTestProvider(t, srv.URL)
+	stream, err := p.Generate(context.Background(), &ryn.Request{
+		Messages:   []ryn.Message{ryn.UserText("hi")},
+		Tools:      []ryn.Tool{{Name: "bar", Description: "d"}},
+		ToolChoice: ryn.ToolChoiceRequired,
+	})
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	for stream.Next(context.Background()) {
+	}
+
+	tc, _ := capturedBody["toolConfig"].(map[string]any)
+	fcc, _ := tc["functionCallingConfig"].(map[string]any)
+	if fcc["mode"] != "ANY" {
+		t.Errorf("want mode=ANY for ToolChoiceRequired, got %v", fcc["mode"])
+	}
+}
+
+func TestGenerate_ToolChoice_Func(t *testing.T) {
+	var capturedBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&capturedBody)
+		sseResponse(w, geminiFinal("ok", "STOP", 1, 1))
+	}))
+	defer srv.Close()
+
+	p := newTestProvider(t, srv.URL)
+	stream, err := p.Generate(context.Background(), &ryn.Request{
+		Messages:   []ryn.Message{ryn.UserText("hi")},
+		Tools:      []ryn.Tool{{Name: "specific_fn", Description: "d"}},
+		ToolChoice: ryn.ToolChoiceFunc("specific_fn"),
+	})
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	for stream.Next(context.Background()) {
+	}
+
+	tc, _ := capturedBody["toolConfig"].(map[string]any)
+	fcc, _ := tc["functionCallingConfig"].(map[string]any)
+	if fcc["mode"] != "ANY" {
+		t.Errorf("want mode=ANY for ToolChoiceFunc, got %v", fcc["mode"])
+	}
+	allowed, _ := fcc["allowedFunctionNames"].([]any)
+	if len(allowed) != 1 || allowed[0] != "specific_fn" {
+		t.Errorf("want allowedFunctionNames=[specific_fn], got %v", allowed)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// convertParts: image / audio / video parts
+// ---------------------------------------------------------------------------
+
+func TestGenerate_ImagePart(t *testing.T) {
+	var capturedBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&capturedBody)
+		sseResponse(w, geminiFinal("I see a cat", "STOP", 3, 5))
+	}))
+	defer srv.Close()
+
+	p := newTestProvider(t, srv.URL)
+	stream, err := p.Generate(context.Background(), &ryn.Request{
+		Messages: []ryn.Message{{
+			Role: ryn.RoleUser,
+			Parts: []ryn.Part{
+				{Kind: ryn.KindText, Text: "What is this?"},
+				ryn.ImagePart([]byte{0xFF, 0xD8, 0xFF, 0xE0}, "image/jpeg"),
+			},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	for stream.Next(context.Background()) {
+	}
+	if err := stream.Err(); err != nil {
+		t.Fatalf("stream: %v", err)
+	}
+
+	contents, _ := capturedBody["contents"].([]any)
+	if len(contents) == 0 {
+		t.Fatal("no contents sent")
+	}
+	parts, _ := contents[0].(map[string]any)["parts"].([]any)
+	var hasInlineData bool
+	for _, p := range parts {
+		pm, _ := p.(map[string]any)
+		if pm["inlineData"] != nil {
+			hasInlineData = true
+		}
+	}
+	if !hasInlineData {
+		t.Error("expected inlineData part for image")
+	}
+}
+
+func TestGenerate_AudioPart(t *testing.T) {
+	var capturedBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&capturedBody)
+		sseResponse(w, geminiFinal("transcribed", "STOP", 3, 5))
+	}))
+	defer srv.Close()
+
+	p := newTestProvider(t, srv.URL)
+	stream, err := p.Generate(context.Background(), &ryn.Request{
+		Messages: []ryn.Message{{
+			Role:  ryn.RoleUser,
+			Parts: []ryn.Part{ryn.AudioPart([]byte{0x52, 0x49, 0x46, 0x46}, "audio/wav")},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	for stream.Next(context.Background()) {
+	}
+	if err := stream.Err(); err != nil {
+		t.Fatalf("stream: %v", err)
+	}
+
+	contents, _ := capturedBody["contents"].([]any)
+	parts, _ := contents[0].(map[string]any)["parts"].([]any)
+	var hasInlineData bool
+	for _, p := range parts {
+		pm, _ := p.(map[string]any)
+		if pm["inlineData"] != nil {
+			hasInlineData = true
+		}
+	}
+	if !hasInlineData {
+		t.Error("expected inlineData part for audio")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// convertParts: KindToolCall and tool result success
+// ---------------------------------------------------------------------------
+
+func TestGenerate_AssistantToolCallMessage(t *testing.T) {
+	var capturedBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&capturedBody)
+		sseResponse(w, geminiFinal("done", "STOP", 5, 2))
+	}))
+	defer srv.Close()
+
+	p := newTestProvider(t, srv.URL)
+	stream, err := p.Generate(context.Background(), &ryn.Request{
+		Messages: []ryn.Message{
+			ryn.UserText("call the tool"),
+			{
+				Role: ryn.RoleAssistant,
+				Parts: []ryn.Part{
+					ryn.ToolCallPart(&ryn.ToolCall{
+						ID:   "call-1",
+						Name: "my_tool",
+						Args: json.RawMessage(`{"x":42}`),
+					}),
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	for stream.Next(context.Background()) {
+	}
+	if err := stream.Err(); err != nil {
+		t.Fatalf("stream: %v", err)
+	}
+
+	contents, _ := capturedBody["contents"].([]any)
+	if len(contents) < 2 {
+		t.Fatalf("want >=2 contents, got %d", len(contents))
+	}
+	// Second content should be the model turn with functionCall
+	modelContent, _ := contents[1].(map[string]any)
+	if modelContent["role"] != "model" {
+		t.Errorf("want role=model, got %v", modelContent["role"])
+	}
+	parts, _ := modelContent["parts"].([]any)
+	var hasFunctionCall bool
+	for _, part := range parts {
+		pm, _ := part.(map[string]any)
+		if pm["functionCall"] != nil {
+			hasFunctionCall = true
+		}
+	}
+	if !hasFunctionCall {
+		t.Error("expected functionCall part in model content")
+	}
+}
+
+func TestGenerate_ToolResultSuccess(t *testing.T) {
+	var capturedBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&capturedBody)
+		sseResponse(w, geminiFinal("noted", "STOP", 5, 2))
+	}))
+	defer srv.Close()
+
+	p := newTestProvider(t, srv.URL)
+	stream, err := p.Generate(context.Background(), &ryn.Request{
+		Messages: []ryn.Message{
+			ryn.UserText("call the tool"),
+			{
+				Role: ryn.RoleTool,
+				Parts: []ryn.Part{{
+					Kind: ryn.KindToolResult,
+					Result: &ryn.ToolResult{
+						CallID:  "call-1",
+						Content: "the weather is sunny",
+						IsError: false, // success result
+					},
+				}},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	for stream.Next(context.Background()) {
+	}
+	if err := stream.Err(); err != nil {
+		t.Fatalf("stream: %v", err)
+	}
+
+	// Verify the tool result was sent with "output" key (not "error")
+	contents, _ := capturedBody["contents"].([]any)
+	var found bool
+	for _, c := range contents {
+		cm, _ := c.(map[string]any)
+		for _, p := range cm["parts"].([]any) {
+			pm, _ := p.(map[string]any)
+			if fr, ok := pm["functionResponse"].(map[string]any); ok {
+				resp, _ := fr["response"].(map[string]any)
+				if _, hasOutput := resp["output"]; hasOutput {
+					found = true
+				}
+			}
+		}
+	}
+	if !found {
+		t.Error("expected functionResponse with 'output' key for success result")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// consume: empty candidate content (cand.Content == nil)
+// ---------------------------------------------------------------------------
+
+func TestGenerate_EmptyCandidateContent(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sseResponse(w,
+			// First chunk: candidate with no content (e.g., safety filter before content)
+			map[string]any{
+				"candidates": []any{
+					map[string]any{
+						"finishReason": "SAFETY",
+						// no "content" key
+					},
+				},
+			},
+			geminiFinal("", "SAFETY", 1, 0),
+		)
+	}))
+	defer srv.Close()
+
+	p := newTestProvider(t, srv.URL)
+	stream, err := p.Generate(context.Background(), &ryn.Request{
+		Messages: []ryn.Message{ryn.UserText("hi")},
+	})
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	for stream.Next(context.Background()) {
+	}
+	if err := stream.Err(); err != nil {
+		t.Fatalf("stream: %v", err)
+	}
+	if stream.Response().FinishReason != "content_filter" {
+		t.Errorf("want content_filter, got %q", stream.Response().FinishReason)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// consume: multiple tool calls without ID (callIndex > 0 path)
+// ---------------------------------------------------------------------------
+
+func TestGenerate_MultipleToolCallsNoID(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sseResponse(w, map[string]any{
+			"candidates": []any{
+				map[string]any{
+					"content": map[string]any{
+						"role": "model",
+						"parts": []any{
+							map[string]any{
+								"functionCall": map[string]any{
+									// no "id" — first call uses name as ID
+									"name": "search",
+									"args": map[string]any{"q": "a"},
+								},
+							},
+							map[string]any{
+								"functionCall": map[string]any{
+									// no "id" — second call uses name_N format
+									"name": "search",
+									"args": map[string]any{"q": "b"},
+								},
+							},
+						},
+					},
+					"finishReason": "STOP",
+				},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	p := newTestProvider(t, srv.URL, WithModel("gemini-2.0-flash"))
+	stream, err := p.Generate(context.Background(), &ryn.Request{
+		Messages: []ryn.Message{ryn.UserText("search twice")},
+		Tools:    []ryn.Tool{{Name: "search", Description: "search"}},
+	})
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	frames := collectFrames(t, stream)
+
+	var calls []*ryn.ToolCall
+	for _, f := range frames {
+		if f.Kind == ryn.KindToolCall {
+			calls = append(calls, f.Tool)
+		}
+	}
+	if len(calls) != 2 {
+		t.Fatalf("want 2 tool calls, got %d", len(calls))
+	}
+	// First call uses name, second uses name_1
+	if calls[0].ID != "search" {
+		t.Errorf("first call ID: want search, got %q", calls[0].ID)
+	}
+	if !strings.HasPrefix(calls[1].ID, "search") {
+		t.Errorf("second call ID: want search_1, got %q", calls[1].ID)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// buildContents: system message in list is excluded
+// ---------------------------------------------------------------------------
+
+func TestGenerate_SystemMessageInList(t *testing.T) {
+	var capturedBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&capturedBody)
+		sseResponse(w, geminiFinal("ok", "STOP", 1, 1))
+	}))
+	defer srv.Close()
+
+	p := newTestProvider(t, srv.URL)
+	stream, err := p.Generate(context.Background(), &ryn.Request{
+		Messages: []ryn.Message{
+			{Role: ryn.RoleSystem, Parts: []ryn.Part{{Kind: ryn.KindText, Text: "Be concise."}}},
+			ryn.UserText("hello"),
+		},
+	})
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	for stream.Next(context.Background()) {
+	}
+	if err := stream.Err(); err != nil {
+		t.Fatalf("stream: %v", err)
+	}
+
+	contents, _ := capturedBody["contents"].([]any)
+	// System message must NOT appear in contents (it's filtered by buildContents)
+	for _, c := range contents {
+		cm, _ := c.(map[string]any)
+		if cm["role"] == "system" {
+			t.Error("system message should be excluded from contents array")
+		}
+	}
+	if len(contents) != 1 {
+		t.Errorf("want 1 content (user only), got %d", len(contents))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Additional HTTP error codes
+// ---------------------------------------------------------------------------
+
+func TestGenerate_HTTP403_Forbidden(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		fmt.Fprintln(w, `{"error":{"code":403,"message":"Permission denied","status":"PERMISSION_DENIED"}}`)
+	}))
+	defer srv.Close()
+
+	p := newTestProvider(t, srv.URL)
+	stream, err := p.Generate(context.Background(), &ryn.Request{
+		Messages: []ryn.Message{ryn.UserText("hello")},
+	})
+	if err != nil {
+		// 403 falls to the default 4xx case → ErrCodeInvalidRequest
+		checkRynError(t, err, ryn.ErrCodeInvalidRequest)
+		return
+	}
+	for stream.Next(context.Background()) {
+	}
+	checkRynError(t, stream.Err(), ryn.ErrCodeInvalidRequest)
+}
+
+func TestGenerate_HTTP404_ModelNotFound(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		fmt.Fprintln(w, `{"error":{"code":404,"message":"Model not found","status":"NOT_FOUND"}}`)
+	}))
+	defer srv.Close()
+
+	p := newTestProvider(t, srv.URL)
+	stream, err := p.Generate(context.Background(), &ryn.Request{
+		Messages: []ryn.Message{ryn.UserText("hello")},
+	})
+	if err != nil {
+		checkRynError(t, err, ryn.ErrCodeModelNotFound)
+		return
+	}
+	for stream.Next(context.Background()) {
+	}
+	checkRynError(t, stream.Err(), ryn.ErrCodeModelNotFound)
+}
+
+func TestGenerate_HTTP500_InternalError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprintln(w, `{"error":{"code":500,"message":"Internal error","status":"INTERNAL"}}`)
+	}))
+	defer srv.Close()
+
+	p := newTestProvider(t, srv.URL)
+	stream, err := p.Generate(context.Background(), &ryn.Request{
+		Messages: []ryn.Message{ryn.UserText("hello")},
+	})
+	if err != nil {
+		checkRynError(t, err, ryn.ErrCodeProviderError)
+		return
+	}
+	for stream.Next(context.Background()) {
+	}
+	checkRynError(t, stream.Err(), ryn.ErrCodeProviderError)
+}
+
+// ---------------------------------------------------------------------------
+// Model name fallback: empty request Model → uses provider default
+// ---------------------------------------------------------------------------
+
+func TestGenerate_DefaultModel(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sseResponse(w, geminiFinal("hi", "STOP", 1, 1))
+	}))
+	defer srv.Close()
+
+	p := newTestProvider(t, srv.URL, WithModel("my-default-model"))
+	stream, err := p.Generate(context.Background(), &ryn.Request{
+		// No Model field — should use provider default
+		Messages: []ryn.Message{ryn.UserText("hi")},
+	})
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	for stream.Next(context.Background()) {
+	}
+	if err := stream.Err(); err != nil {
+		t.Fatalf("stream: %v", err)
 	}
 }
