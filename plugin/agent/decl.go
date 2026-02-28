@@ -18,6 +18,15 @@ type Step struct {
 	// Type: "llm" | "tool" | "peer" | "sleep"
 	Type string `json:"type"`
 
+	// Input is the explicit input for this step. Takes priority over Messages[0].
+	// Supports variable substitution: {{.LastText}}, {{.VarName}}.
+	// If both Input and Messages are empty, the previous step's output is used.
+	Input string `json:"input,omitempty"`
+
+	// OutputVar captures this step's output into a named variable.
+	// Subsequent steps can reference it via {{.VarName}} in their Input.
+	OutputVar string `json:"output_var,omitempty"`
+
 	// LLM step fields
 	Messages []string `json:"messages,omitempty"`
 

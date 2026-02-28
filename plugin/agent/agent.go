@@ -43,6 +43,37 @@ func WithModel(model string) Option {
 	return func(rt *Runtime) { rt.model = model }
 }
 
+// WithSystemPrompt sets a system prompt sent on every turn.
+// This is the primary way to give an agent its persona and instructions.
+func WithSystemPrompt(prompt string) Option {
+	return func(rt *Runtime) { rt.systemPrompt = prompt }
+}
+
+// WithOptions sets default generation parameters (temperature, max tokens, etc.)
+// applied to every turn. Per-request overrides are not yet exposed — use
+// RunRequest for full control.
+func WithOptions(opts ryn.Options) Option {
+	return func(rt *Runtime) { rt.defaultOptions = opts }
+}
+
+// WithMiddleware wraps the provider with a middleware function.
+// Middlewares are applied in the order they are registered, innermost first:
+//
+//	agent.New(base,
+//		WithMiddleware(retry),   // applied 1st — wraps base
+//		WithMiddleware(cache),   // applied 2nd — wraps retry(base)
+//	)
+//
+// Components applied via WithComponent are then layered on top of all
+// WithMiddleware wrappers.
+func WithMiddleware(fn func(ryn.Provider) ryn.Provider) Option {
+	return func(rt *Runtime) {
+		if fn != nil {
+			rt.provider = fn(rt.provider)
+		}
+	}
+}
+
 // WithMemory attaches session memory.
 func WithMemory(mem Memory) Option {
 	return func(rt *Runtime) { rt.memory = mem }
@@ -76,12 +107,14 @@ func WithComponent(c Component) Option {
 // Core remains agent-agnostic; this module composes provider + memory + peers
 // and plugin components to execute conversational turns.
 type Runtime struct {
-	provider   ryn.Provider
-	model      string
-	memory     Memory
-	peers      map[string]Peer
-	components []Component
-	host       *component.Host
+	provider       ryn.Provider
+	model          string
+	systemPrompt   string
+	defaultOptions ryn.Options
+	memory         Memory
+	peers          map[string]Peer
+	components     []Component
+	host           *component.Host
 }
 
 // TurnResult contains response text and metadata.
@@ -133,6 +166,23 @@ func (rt *Runtime) Close() error {
 	return rt.host.CloseAll()
 }
 
+// Provider returns the current (possibly middleware-wrapped) provider.
+// Useful for extensions and tests that need to inspect the provider chain.
+func (rt *Runtime) Provider() ryn.Provider {
+	if rt == nil {
+		return nil
+	}
+	return rt.provider
+}
+
+// SystemPrompt returns the system prompt configured on this runtime.
+func (rt *Runtime) SystemPrompt() string {
+	if rt == nil {
+		return ""
+	}
+	return rt.systemPrompt
+}
+
 // loadMessages returns the full message slice for a turn: history + the new
 // user message. It is the single place that touches session memory on load.
 func (rt *Runtime) loadMessages(ctx context.Context, sessionID, input string) ([]ryn.Message, error) {
@@ -161,8 +211,10 @@ func (rt *Runtime) Run(ctx context.Context, sessionID string, input string) (Tur
 	}
 
 	req := &ryn.Request{
-		Model:    rt.model,
-		Messages: messages,
+		Model:        rt.model,
+		SystemPrompt: rt.systemPrompt,
+		Messages:     messages,
+		Options:      rt.defaultOptions,
 	}
 
 	stream, err := rt.provider.Generate(ctx, req)
@@ -215,8 +267,10 @@ func (rt *Runtime) RunStream(ctx context.Context, sessionID string, input string
 	}
 
 	req := &ryn.Request{
-		Model:    rt.model,
-		Messages: messages,
+		Model:        rt.model,
+		SystemPrompt: rt.systemPrompt,
+		Messages:     messages,
+		Options:      rt.defaultOptions,
 	}
 
 	src, err := rt.provider.Generate(ctx, req)
@@ -245,6 +299,13 @@ func (rt *Runtime) RunStream(ctx context.Context, sessionID string, input string
 		}
 		if resp := src.Response(); resp != nil {
 			emitter.SetResponse(resp)
+		}
+		// Forward accumulated usage so callers see correct token counts.
+		// KindUsage frames are silently consumed by src.Next() and must be
+		// re-emitted explicitly — same pattern as tools.ToolLoop.run().
+		if u := src.Usage(); u.InputTokens > 0 || u.OutputTokens > 0 || u.TotalTokens > 0 {
+			uCopy := u
+			_ = emitter.Emit(ctx, ryn.UsageFrame(&uCopy))
 		}
 		// Save memory only after the full response has been delivered.
 		if rt.memory != nil && sessionID != "" {

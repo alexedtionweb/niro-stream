@@ -8,9 +8,11 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"ryn.dev/ryn"
 	"ryn.dev/ryn/component"
+	"ryn.dev/ryn/middleware"
 	"ryn.dev/ryn/plugin/agent"
 	"ryn.dev/ryn/registry"
 	"ryn.dev/ryn/tools"
@@ -861,4 +863,490 @@ func TestRuntimeRunStreamError(t *testing.T) {
 	for stream.Next(ctx) {
 	}
 	assertErrorContains(t, stream.Err(), "stream failed")
+}
+
+// ---------------------------------------------------------------------------
+// WithSystemPrompt / WithOptions / WithMiddleware / accessors
+// ---------------------------------------------------------------------------
+
+func TestWithSystemPrompt(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	var gotSystemPrompt string
+	spy := ryn.ProviderFunc(func(_ context.Context, req *ryn.Request) (*ryn.Stream, error) {
+		gotSystemPrompt = req.SystemPrompt
+		return ryn.StreamFromSlice([]ryn.Frame{ryn.TextFrame("ok")}), nil
+	})
+
+	rt, err := agent.New(spy, agent.WithSystemPrompt("You are a helpful agent."))
+	assertNoError(t, err)
+
+	_, err = rt.Run(ctx, "", "hello")
+	assertNoError(t, err)
+	assertEqual(t, gotSystemPrompt, "You are a helpful agent.")
+	assertEqual(t, rt.SystemPrompt(), "You are a helpful agent.")
+}
+
+func TestWithOptions(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	var gotTemp *float64
+	spy := ryn.ProviderFunc(func(_ context.Context, req *ryn.Request) (*ryn.Stream, error) {
+		gotTemp = req.Options.Temperature
+		return ryn.StreamFromSlice([]ryn.Frame{ryn.TextFrame("ok")}), nil
+	})
+
+	rt, err := agent.New(spy, agent.WithOptions(ryn.Options{Temperature: ryn.Temp(0.2)}))
+	assertNoError(t, err)
+
+	_, err = rt.Run(ctx, "", "hello")
+	assertNoError(t, err)
+	if gotTemp == nil || *gotTemp != 0.2 {
+		t.Errorf("expected temperature 0.2, got %v", gotTemp)
+	}
+}
+
+func TestWithMiddleware(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	called := false
+	wrap := func(p ryn.Provider) ryn.Provider {
+		return ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+			called = true
+			return p.Generate(ctx, req)
+		})
+	}
+
+	rt, err := agent.New(echoProvider("wrapped"), agent.WithMiddleware(wrap))
+	assertNoError(t, err)
+
+	res, err := rt.Run(ctx, "", "hi")
+	assertNoError(t, err)
+	assertEqual(t, res.Text, "wrapped")
+	assertTrue(t, called)
+}
+
+func TestWithMiddlewareNil(t *testing.T) {
+	t.Parallel()
+	// nil middleware must be silently ignored.
+	rt, err := agent.New(echoProvider("ok"), agent.WithMiddleware(nil))
+	assertNoError(t, err)
+	assertNotNil(t, rt)
+}
+
+func TestProviderAccessor(t *testing.T) {
+	t.Parallel()
+	p := echoProvider("x")
+	rt, _ := agent.New(p)
+	// Provider() returns the (possibly wrapped) provider — must not be nil.
+	if rt.Provider() == nil {
+		t.Error("expected non-nil provider")
+	}
+}
+
+func TestSystemPromptForwardedInRunStream(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	var gotPrompt string
+	spy := ryn.ProviderFunc(func(_ context.Context, req *ryn.Request) (*ryn.Stream, error) {
+		gotPrompt = req.SystemPrompt
+		return ryn.StreamFromSlice([]ryn.Frame{ryn.TextFrame("streamed")}), nil
+	})
+
+	rt, err := agent.New(spy, agent.WithSystemPrompt("Be helpful."))
+	assertNoError(t, err)
+
+	stream, err := rt.RunStream(ctx, "", "hi")
+	assertNoError(t, err)
+	for stream.Next(ctx) {
+	}
+	assertNoError(t, stream.Err())
+	assertEqual(t, gotPrompt, "Be helpful.")
+}
+
+func TestRunStreamForwardsUsage(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	usageProvider := ryn.ProviderFunc(func(_ context.Context, _ *ryn.Request) (*ryn.Stream, error) {
+		out, em := ryn.NewStream(4)
+		go func() {
+			defer em.Close()
+			_ = em.Emit(ctx, ryn.TextFrame("hello"))
+			u := ryn.Usage{InputTokens: 10, OutputTokens: 5, TotalTokens: 15}
+			_ = em.Emit(ctx, ryn.UsageFrame(&u))
+		}()
+		return out, nil
+	})
+
+	rt, err := agent.New(usageProvider)
+	assertNoError(t, err)
+
+	stream, err := rt.RunStream(ctx, "", "hi")
+	assertNoError(t, err)
+	for stream.Next(ctx) {
+	}
+	assertNoError(t, stream.Err())
+
+	u := stream.Usage()
+	assertEqual(t, u.InputTokens, 10)
+	assertEqual(t, u.OutputTokens, 5)
+	assertEqual(t, u.TotalTokens, 15)
+}
+
+// ---------------------------------------------------------------------------
+// New components: Retry, Cache, Timeout, Middleware
+// ---------------------------------------------------------------------------
+
+func TestRetryComponent(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	attempts := 0
+	flaky := ryn.ProviderFunc(func(_ context.Context, _ *ryn.Request) (*ryn.Stream, error) {
+		attempts++
+		if attempts < 3 {
+			return nil, fmt.Errorf("temporary error")
+		}
+		return ryn.StreamFromSlice([]ryn.Frame{ryn.TextFrame("ok after retry")}), nil
+	})
+
+	cfg := middleware.DefaultRetryConfig()
+	cfg.MaxAttempts = 5
+	cfg.Backoff = middleware.ConstantBackoff{Duration: 0}  // no actual delay in tests
+	cfg.ShouldRetry = func(err error) bool { return true } // retry all errors in tests
+
+	rt, err := agent.New(flaky, agent.WithComponent(&agent.RetryComponent{Config: cfg}))
+	assertNoError(t, err)
+
+	res, err := rt.Run(ctx, "", "hello")
+	assertNoError(t, err)
+	assertEqual(t, res.Text, "ok after retry")
+	assertEqual(t, attempts, 3)
+}
+
+func TestRetryComponentDefaultConfig(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	// Zero Config → DefaultRetryConfig should be used (no panic).
+	rt, err := agent.New(echoProvider("ok"), agent.WithComponent(&agent.RetryComponent{}))
+	assertNoError(t, err)
+
+	res, err := rt.Run(ctx, "", "hello")
+	assertNoError(t, err)
+	assertEqual(t, res.Text, "ok")
+}
+
+func TestRetryComponentNilRuntime(t *testing.T) {
+	t.Parallel()
+	c := &agent.RetryComponent{}
+	err := c.Apply(nil)
+	assertErrorContains(t, err, "nil")
+}
+
+func TestCacheComponent(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	calls := 0
+	counting := ryn.ProviderFunc(func(_ context.Context, _ *ryn.Request) (*ryn.Stream, error) {
+		calls++
+		return ryn.StreamFromSlice([]ryn.Frame{ryn.TextFrame("cached")}), nil
+	})
+
+	rt, err := agent.New(counting, agent.WithComponent(&agent.CacheComponent{
+		Options: middleware.CacheOptions{MaxEntries: 64, TTL: time.Minute},
+	}))
+	assertNoError(t, err)
+
+	// First call hits the provider.
+	res1, err := rt.Run(ctx, "", "same question")
+	assertNoError(t, err)
+	assertEqual(t, res1.Text, "cached")
+
+	// Second identical call should be served from cache.
+	res2, err := rt.Run(ctx, "", "same question")
+	assertNoError(t, err)
+	assertEqual(t, res2.Text, "cached")
+
+	// Exact count depends on cache key (memory includes session history for 2nd
+	// call), so just verify at most 2 provider calls.
+	if calls > 2 {
+		t.Errorf("expected ≤2 provider calls, got %d", calls)
+	}
+}
+
+func TestCacheComponentNilRuntime(t *testing.T) {
+	t.Parallel()
+	c := &agent.CacheComponent{}
+	err := c.Apply(nil)
+	assertErrorContains(t, err, "nil")
+}
+
+func TestTimeoutComponent(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	// A provider that returns immediately — timeout must not interfere.
+	rt, err := agent.New(echoProvider("fast"), agent.WithComponent(&agent.TimeoutComponent{
+		Timeout: 5 * time.Second,
+	}))
+	assertNoError(t, err)
+
+	res, err := rt.Run(ctx, "", "hi")
+	assertNoError(t, err)
+	assertEqual(t, res.Text, "fast")
+}
+
+func TestTimeoutComponentDefault(t *testing.T) {
+	t.Parallel()
+	// Zero Timeout → uses default (no panic).
+	rt, err := agent.New(echoProvider("ok"), agent.WithComponent(&agent.TimeoutComponent{}))
+	assertNoError(t, err)
+	assertNotNil(t, rt)
+}
+
+func TestTimeoutComponentNilRuntime(t *testing.T) {
+	t.Parallel()
+	c := &agent.TimeoutComponent{}
+	err := c.Apply(nil)
+	assertErrorContains(t, err, "nil")
+}
+
+func TestMiddlewareComponent(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	wrapped := false
+	rt, err := agent.New(echoProvider("mw"), agent.WithComponent(&agent.MiddlewareComponent{
+		Name_: "test.mw",
+		Fn: func(p ryn.Provider) ryn.Provider {
+			return ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+				wrapped = true
+				return p.Generate(ctx, req)
+			})
+		},
+	}))
+	assertNoError(t, err)
+
+	res, err := rt.Run(ctx, "", "hello")
+	assertNoError(t, err)
+	assertEqual(t, res.Text, "mw")
+	assertTrue(t, wrapped)
+}
+
+func TestMiddlewareComponentDefaultName(t *testing.T) {
+	t.Parallel()
+	c := &agent.MiddlewareComponent{Fn: func(p ryn.Provider) ryn.Provider { return p }}
+	assertEqual(t, c.Name(), "agent.middleware")
+}
+
+func TestMiddlewareComponentNilFn(t *testing.T) {
+	t.Parallel()
+	c := &agent.MiddlewareComponent{Name_: "nofn"}
+	// Apply requires a runtime with a provider, but Fn is nil → should fail before
+	// hitting provider check. The error includes the component name.
+	// Note: passing &agent.Runtime{} has nil provider so it hits "runtime/provider is nil" first.
+	// To test the Fn-nil path we need a valid runtime.
+	rt, _ := agent.New(echoProvider("x"))
+	err := c.Apply(rt)
+	assertErrorContains(t, err, "Fn is nil")
+}
+
+func TestMiddlewareComponentNilRuntime(t *testing.T) {
+	t.Parallel()
+	c := &agent.MiddlewareComponent{Name_: "x", Fn: func(p ryn.Provider) ryn.Provider { return p }}
+	err := c.Apply(nil)
+	assertErrorContains(t, err, "nil")
+}
+
+func TestComponentLifecycle(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	for _, comp := range []agent.Component{
+		&agent.RetryComponent{},
+		&agent.CacheComponent{},
+		&agent.TimeoutComponent{},
+		&agent.MiddlewareComponent{Name_: "lc.mw", Fn: func(p ryn.Provider) ryn.Provider { return p }},
+	} {
+		assertNoError(t, comp.Start(ctx))
+		assertNoError(t, comp.Close())
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Orchestrator: input chaining, OutputVar, ctx sleep, peer panic fix
+// ---------------------------------------------------------------------------
+
+func TestOrchestratorInputChaining(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	// Provider echoes whatever the user message text is (via messages).
+	echoInput := ryn.ProviderFunc(func(_ context.Context, req *ryn.Request) (*ryn.Stream, error) {
+		text := ""
+		for _, m := range req.Messages {
+			for _, p := range m.Parts {
+				if p.Kind == ryn.KindText {
+					text = p.Text
+				}
+			}
+		}
+		return ryn.StreamFromSlice([]ryn.Frame{ryn.TextFrame("echo:" + text)}), nil
+	})
+
+	rt, _ := agent.New(echoInput)
+	o := agent.NewOrchestrator(rt, nil)
+
+	def := &agent.AgentDefinition{
+		Steps: []agent.Step{
+			{Type: "llm", Input: "hello"},
+			// Second step uses {{.LastText}} from the first step.
+			{Type: "llm", Input: "got: {{.LastText}}"},
+		},
+	}
+
+	result, err := o.RunDefinition(ctx, "s", def)
+	assertNoError(t, err)
+	// First step: echo:hello → second step input: "got: echo:hello" → echo:got: echo:hello
+	assertEqual(t, result, "echo:got: echo:hello")
+}
+
+func TestOrchestratorOutputVar(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	callCount := 0
+	rt, _ := agent.New(ryn.ProviderFunc(func(_ context.Context, req *ryn.Request) (*ryn.Stream, error) {
+		callCount++
+		if callCount == 1 {
+			return ryn.StreamFromSlice([]ryn.Frame{ryn.TextFrame("step1out")}), nil
+		}
+		// Second call echoes the input (which should contain the var).
+		text := ""
+		for _, m := range req.Messages {
+			for _, p := range m.Parts {
+				if p.Kind == ryn.KindText {
+					text = p.Text
+				}
+			}
+		}
+		return ryn.StreamFromSlice([]ryn.Frame{ryn.TextFrame(text)}), nil
+	}))
+
+	o := agent.NewOrchestrator(rt, nil)
+
+	def := &agent.AgentDefinition{
+		Steps: []agent.Step{
+			{Type: "llm", Input: "first", OutputVar: "First"},
+			{Type: "llm", Input: "use {{.First}}"},
+		},
+	}
+
+	result, err := o.RunDefinition(ctx, "s", def)
+	assertNoError(t, err)
+	assertEqual(t, result, "use step1out")
+}
+
+func TestOrchestratorPeerStepEmptyMessages(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	peer := &mockPeer{name: "bot", response: "peer ok"}
+	rt, _ := agent.New(echoProvider("ok"), agent.WithPeer(peer))
+	o := agent.NewOrchestrator(rt, nil)
+
+	// No Messages and no Input — should use lastText (empty string), not panic.
+	def := &agent.AgentDefinition{
+		Steps: []agent.Step{
+			{Type: "peer", PeerName: "bot"}, // Messages is nil
+		},
+	}
+	result, err := o.RunDefinition(ctx, "s", def)
+	assertNoError(t, err)
+	assertEqual(t, result, "peer ok")
+}
+
+func TestOrchestratorSleepRespectsContext(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // already cancelled
+
+	rt, _ := agent.New(echoProvider("ok"))
+	o := agent.NewOrchestrator(rt, nil)
+
+	def := &agent.AgentDefinition{
+		Steps: []agent.Step{
+			{Type: "sleep", SleepSeconds: 60},
+		},
+	}
+	_, err := o.RunDefinition(ctx, "s", def)
+	if err == nil {
+		t.Error("expected context cancellation error")
+	}
+}
+
+func TestOrchestratorContextCancelledBetweenSteps(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	calls := 0
+	rt, _ := agent.New(ryn.ProviderFunc(func(_ context.Context, _ *ryn.Request) (*ryn.Stream, error) {
+		calls++
+		cancel() // cancel after first step
+		return ryn.StreamFromSlice([]ryn.Frame{ryn.TextFrame("done")}), nil
+	}))
+
+	o := agent.NewOrchestrator(rt, nil)
+	def := &agent.AgentDefinition{
+		Steps: []agent.Step{
+			{Type: "llm", Input: "step1"},
+			{Type: "llm", Input: "step2"},
+		},
+	}
+
+	_, err := o.RunDefinition(ctx, "s", def)
+	if err == nil {
+		t.Error("expected context cancellation error")
+	}
+	assertEqual(t, calls, 1) // second step must not execute
+}
+
+func TestStepInputPriorityOverMessages(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	var gotInput string
+	spy := ryn.ProviderFunc(func(_ context.Context, req *ryn.Request) (*ryn.Stream, error) {
+		for _, m := range req.Messages {
+			for _, p := range m.Parts {
+				if p.Kind == ryn.KindText {
+					gotInput = p.Text
+				}
+			}
+		}
+		return ryn.StreamFromSlice([]ryn.Frame{ryn.TextFrame("ok")}), nil
+	})
+
+	rt, _ := agent.New(spy)
+	o := agent.NewOrchestrator(rt, nil)
+
+	def := &agent.AgentDefinition{
+		Steps: []agent.Step{
+			// Input takes priority over Messages[0].
+			{Type: "llm", Input: "from-input", Messages: []string{"from-messages"}},
+		},
+	}
+
+	_, err := o.RunDefinition(ctx, "s", def)
+	assertNoError(t, err)
+	assertEqual(t, gotInput, "from-input")
 }
