@@ -13,6 +13,7 @@ require (
 require (
 	github.com/aws/aws-sdk-go-v2/internal/configsources v1.4.18 // indirect
 	github.com/aws/aws-sdk-go-v2/internal/endpoints/v2 v2.7.18 // indirect
+	github.com/google/uuid v1.6.0 // indirect
 )
 
 replace ryn.dev/ryn => ../..

@@ -332,11 +332,16 @@ func classifyError(err error) *ryn.Error {
 	var apiErr genai.APIError
 	if errors.As(err, &apiErr) {
 		code := ryn.ConvertHTTPStatusToCode(apiErr.Code)
-		msg := apiErr.Message
+		msg := firstLine(apiErr.Message)
 		if msg == "" {
 			msg = apiErr.Status
 		}
-		return ryn.WrapError(code, msg, err).
+		// Wrap a compact cause instead of the raw apiErr.
+		// genai.APIError.Error() dumps the full multiline Message plus a
+		// Details: []map[string]any rendering, producing unreadable noise.
+		// The compact wrapper keeps Error() clean while still allowing callers
+		// to reach the raw SDK error via errors.As(err, &genai.APIError{}).
+		return ryn.WrapError(code, msg, &compactAPIErr{raw: apiErr}).
 			WithProvider("google").
 			WithStatusCode(apiErr.Code)
 	}
@@ -351,6 +356,37 @@ func classifyError(err error) *ryn.Error {
 	}
 	return ryn.WrapError(ryn.ErrCodeStreamError, "stream error", err).
 		WithProvider("google")
+}
+
+// compactAPIErr wraps a genai.APIError with a short Error() string so that
+// ryn.Error.Error() doesn't duplicate the verbose message or dump Details.
+// The raw error is still reachable via errors.As.
+type compactAPIErr struct{ raw genai.APIError }
+
+func (e *compactAPIErr) Error() string {
+	if e.raw.Status != "" {
+		return fmt.Sprintf("HTTP %d (%s)", e.raw.Code, e.raw.Status)
+	}
+	return fmt.Sprintf("HTTP %d", e.raw.Code)
+}
+
+// As implements errors.As so callers can still do errors.As(err, &genai.APIError{}).
+func (e *compactAPIErr) As(target any) bool {
+	t, ok := target.(*genai.APIError)
+	if !ok {
+		return false
+	}
+	*t = e.raw
+	return true
+}
+
+// firstLine returns the first non-empty line of s, trimmed of whitespace.
+// Google API error messages are multi-line; the first line is the human summary.
+func firstLine(s string) string {
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		return strings.TrimSpace(s[:i])
+	}
+	return strings.TrimSpace(s)
 }
 
 // mapFinishReason converts a genai.FinishReason to the ryn canonical string.

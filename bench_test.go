@@ -402,7 +402,7 @@ func BenchmarkHooksComposite(b *testing.B) {
 	b.ResetTimer()
 
 	for b.Loop() {
-		_ = h.OnFrame(ctx, f)
+		_ = h.OnFrame(ctx, f, 0)
 	}
 }
 

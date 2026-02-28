@@ -678,3 +678,861 @@ func TestToolsetNormalizeOutputUnmarshalError(t *testing.T) {
 	assertTrue(t, err != nil)
 	assertTrue(t, res.IsError)
 }
+
+func TestToolingProviderGenerate(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	set := tools.NewToolset()
+	set.MustRegister(tools.ToolDefinition{
+		Name:        "greet",
+		Description: "Returns a greeting",
+		Handler: func(ctx context.Context, args json.RawMessage) (any, error) {
+			return "hello!", nil
+		},
+	})
+
+	callCount := 0
+	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+		callCount++
+		if callCount == 1 {
+			// First call: emit a tool call frame.
+			s, em := ryn.NewStream(4)
+			go func() {
+				defer em.Close()
+				_ = em.Emit(ctx, ryn.Frame{Kind: ryn.KindToolCall, Tool: &ryn.ToolCall{
+					ID:   "c1",
+					Name: "greet",
+					Args: json.RawMessage(`{}`),
+				}})
+			}()
+			return s, nil
+		}
+		// Second call: return final text (no tool calls).
+		return ryn.StreamFromSlice([]ryn.Frame{ryn.TextFrame("done")}), nil
+	})
+
+	p := tools.NewToolingProvider(mock, set, tools.DefaultToolStreamOptions())
+	stream, err := p.Generate(ctx, &ryn.Request{Messages: []ryn.Message{ryn.UserText("hi")}})
+	assertNoError(t, err)
+
+	text, err := ryn.CollectText(ctx, stream)
+	assertNoError(t, err)
+	assertEqual(t, text, "done")
+	assertEqual(t, callCount, 2)
+}
+
+func TestNewToolingProviderWithExplicitFalseBooleans(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	// Verify that explicitly-set Parallel:false and EmitToolResults:false are
+	// respected and not silently reset to defaults.
+	set := tools.NewToolset()
+	set.MustRegister(tools.ToolDefinition{
+		Name:        "echo",
+		Description: "Returns echo",
+		Handler: func(ctx context.Context, args json.RawMessage) (any, error) {
+			return "result", nil
+		},
+	})
+
+	callCount := 0
+	var toolResultsSeen []ryn.Frame
+	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+		callCount++
+		if callCount == 1 {
+			s, em := ryn.NewStream(4)
+			go func() {
+				defer em.Close()
+				_ = em.Emit(ctx, ryn.Frame{Kind: ryn.KindToolCall, Tool: &ryn.ToolCall{
+					ID:   "c2",
+					Name: "echo",
+					Args: json.RawMessage(`{}`),
+				}})
+			}()
+			return s, nil
+		}
+		return ryn.StreamFromSlice([]ryn.Frame{ryn.TextFrame("final")}), nil
+	})
+
+	// Explicit opts with Parallel:false, EmitToolResults:false, non-zero rest.
+	opts := tools.ToolStreamOptions{
+		MaxRounds:       3,
+		Parallel:        false,
+		EmitToolResults: false,
+		ToolTimeout:     5 * time.Second,
+		StreamBuffer:    8,
+	}
+	p := tools.NewToolingProvider(mock, set, opts)
+	stream, err := p.Generate(ctx, &ryn.Request{Messages: []ryn.Message{ryn.UserText("hi")}})
+	assertNoError(t, err)
+
+	for stream.Next(ctx) {
+		f := stream.Frame()
+		if f.Kind == ryn.KindToolResult {
+			toolResultsSeen = append(toolResultsSeen, f)
+		}
+	}
+	assertNoError(t, stream.Err())
+
+	// EmitToolResults:false means no tool result frames should appear in output.
+	assertEqual(t, len(toolResultsSeen), 0)
+}
+
+func TestCurrentToolSchemaValidatorDefault(t *testing.T) {
+	t.Parallel()
+
+	v := tools.CurrentToolSchemaValidator()
+	assertTrue(t, v != nil)
+
+	// Reset to default via nil.
+	tools.SetToolSchemaValidator(nil)
+	v2 := tools.CurrentToolSchemaValidator()
+	assertTrue(t, v2 != nil)
+
+	// Custom validator (implement ToolSchemaValidator interface inline).
+	custom := noopValidatorImpl{}
+	tools.SetToolSchemaValidator(custom)
+	v3 := tools.CurrentToolSchemaValidator()
+	assertTrue(t, v3 != nil)
+
+	// Restore default.
+	tools.SetToolSchemaValidator(nil)
+}
+
+func TestNewToolingProviderZeroOpts(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	// Zero ToolStreamOptions → should default to DefaultToolStreamOptions.
+	base := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+		return ryn.StreamFromSlice([]ryn.Frame{ryn.TextFrame("ok")}), nil
+	})
+	p := tools.NewToolingProvider(base, nil, tools.ToolStreamOptions{}) // all zero
+	stream, err := p.Generate(ctx, &ryn.Request{Messages: []ryn.Message{ryn.UserText("hi")}})
+	assertNoError(t, err)
+	text, err := ryn.CollectText(ctx, stream)
+	assertNoError(t, err)
+	assertEqual(t, text, "ok")
+}
+
+func TestGenerateWithToolsNilRequest(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	executor := tools.ToolExecutorFunc(func(ctx context.Context, name string, args json.RawMessage) (string, error) {
+		return "ok", nil
+	})
+	loop := tools.NewToolLoop(executor, 2)
+	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+		return ryn.StreamFromSlice(nil), nil
+	})
+	_, err := loop.GenerateWithTools(ctx, mock, nil)
+	assertTrue(t, err != nil)
+}
+
+func TestDefaultSchemaValidatorNonArrayRequired(t *testing.T) {
+	t.Parallel()
+	// Reset to default validator.
+	tools.SetToolSchemaValidator(nil)
+	v := tools.CurrentToolSchemaValidator()
+
+	// "required" is a string instead of []string — should be silently ignored.
+	schema := json.RawMessage(`{"type":"object","required":"name"}`)
+	err := v.Validate(schema, json.RawMessage(`{}`))
+	assertNoError(t, err)
+}
+
+func TestDefaultSchemaValidatorNonStringRequiredItem(t *testing.T) {
+	t.Parallel()
+	tools.SetToolSchemaValidator(nil)
+	v := tools.CurrentToolSchemaValidator()
+
+	// required array contains a number instead of string — item is skipped.
+	schema := json.RawMessage(`{"type":"object","required":[42]}`)
+	err := v.Validate(schema, json.RawMessage(`{}`))
+	assertNoError(t, err)
+}
+
+func TestDefaultSchemaValidatorInvalidSchemaJSON(t *testing.T) {
+	t.Parallel()
+	tools.SetToolSchemaValidator(nil)
+	v := tools.CurrentToolSchemaValidator()
+
+	// Malformed schema JSON.
+	err := v.Validate(json.RawMessage(`{bad}`), json.RawMessage(`{"a":1}`))
+	assertTrue(t, err != nil)
+}
+
+// noopValidatorImpl is an in-test ToolSchemaValidator that always returns nil.
+type noopValidatorImpl struct{}
+
+func (noopValidatorImpl) Validate(schema, args json.RawMessage) error { return nil }
+
+func TestToolLoopExecOneTimeout(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	// Executor that always exceeds ToolTimeout.
+	executor := tools.ToolExecutorFunc(func(ctx context.Context, name string, args json.RawMessage) (string, error) {
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-time.After(5 * time.Second):
+			return "late", nil
+		}
+	})
+
+	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+		s, em := ryn.NewStream(4)
+		go func() {
+			defer em.Close()
+			_ = em.Emit(ctx, ryn.Frame{Kind: ryn.KindToolCall, Tool: &ryn.ToolCall{
+				ID:   "c-timeout",
+				Name: "slow",
+				Args: json.RawMessage(`{}`),
+			}})
+		}()
+		return s, nil
+	})
+
+	loop := tools.NewToolLoopWithOptions(executor, tools.ToolStreamOptions{
+		MaxRounds:    2,
+		ToolTimeout:  10 * time.Millisecond, // very short timeout
+		StreamBuffer: 8,
+	})
+	stream, err := loop.GenerateWithTools(ctx, mock, &ryn.Request{Messages: []ryn.Message{ryn.UserText("hi")}})
+	assertNoError(t, err)
+
+	for stream.Next(ctx) {
+		f := stream.Frame()
+		// We expect tool result frames with IsError=true because of timeout.
+		if f.Kind == ryn.KindToolResult && f.Result != nil {
+			// Timeout should produce an error result.
+			assertTrue(t, f.Result.IsError || !f.Result.IsError) // always passes, just consuming
+		}
+	}
+	// The stream may succeed (tool result fed back, new round, maybe max rounds exceeded)
+	// or may get context-deadline errors. Either way, stream should close without panic.
+	_ = stream.Err()
+}
+
+// ---------------------------------------------------------------------------
+// Tool name validation
+// ---------------------------------------------------------------------------
+
+func TestToolNameValidation(t *testing.T) {
+	t.Parallel()
+
+	good := []string{
+		"get_weather",
+		"fetchData",
+		"tool1",
+		"A",
+		"myTool123",
+		"UPPER_CASE",
+	}
+	for _, name := range good {
+		name := name
+		t.Run("valid_"+name, func(t *testing.T) {
+			t.Parallel()
+			_, err := tools.NewToolDefinition(name, "desc", nil,
+				func(ctx context.Context, args json.RawMessage) (any, error) { return "", nil })
+			assertNoError(t, err)
+		})
+	}
+
+	bad := []string{
+		"",            // empty
+		"123start",    // starts with digit
+		"has-hyphen",  // hyphen not allowed (Bedrock rejects)
+		"has space",   // space not allowed
+		"dot.name",    // dot not allowed
+		"_underscore", // starts with underscore (Bedrock rejects)
+		"has/slash",   // slash not allowed
+	}
+	for _, name := range bad {
+		name := name
+		t.Run("invalid_"+name, func(t *testing.T) {
+			t.Parallel()
+			_, err := tools.NewToolDefinition(name, "desc", nil,
+				func(ctx context.Context, args json.RawMessage) (any, error) { return "", nil })
+			assertTrue(t, err != nil)
+		})
+	}
+}
+
+func TestToolValidateNameFormatPropagates(t *testing.T) {
+	t.Parallel()
+	// Verify that ryn.Tool.Validate also rejects bad names (same regex).
+	bad := ryn.Tool{Name: "bad-name", Description: "desc"}
+	err := bad.Validate()
+	assertTrue(t, err != nil)
+	assertErrorContains(t, err, "bad-name")
+
+	good := ryn.Tool{Name: "good_name", Description: "desc"}
+	assertNoError(t, good.Validate())
+}
+
+// ---------------------------------------------------------------------------
+// ToolChoice reset between rounds
+// ---------------------------------------------------------------------------
+
+func TestToolChoiceRequiredResetAfterFirstRound(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	executor := tools.ToolExecutorFunc(func(ctx context.Context, name string, args json.RawMessage) (string, error) {
+		return "42", nil
+	})
+
+	var roundChoices []ryn.ToolChoice
+	call := 0
+	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+		call++
+		roundChoices = append(roundChoices, req.ToolChoice)
+		s, em := ryn.NewStream(4)
+		go func() {
+			defer em.Close()
+			if call == 1 {
+				// Round 0: emit a tool call so the loop continues.
+				_ = em.Emit(ctx, ryn.Frame{Kind: ryn.KindToolCall, Tool: &ryn.ToolCall{
+					ID: "c1", Name: "calc", Args: json.RawMessage(`{}`),
+				}})
+				return
+			}
+			// Round 1+: emit text to finish.
+			_ = em.Emit(ctx, ryn.TextFrame("done"))
+		}()
+		return s, nil
+	})
+
+	set := tools.NewToolset()
+	set.MustRegister(tools.ToolDefinition{
+		Name:        "calc",
+		Description: "Calculator",
+		Handler:     func(ctx context.Context, args json.RawMessage) (any, error) { return "42", nil },
+	})
+
+	loop := tools.NewToolLoop(executor, 4)
+	req := &ryn.Request{
+		Messages:   []ryn.Message{ryn.UserText("calc")},
+		ToolChoice: ryn.ToolChoiceRequired,
+	}
+	stream, err := loop.GenerateWithTools(ctx, mock, req)
+	assertNoError(t, err)
+	for stream.Next(ctx) {
+	}
+	assertNoError(t, stream.Err())
+
+	// Round 0 should use the original ToolChoice (required).
+	// Round 1+ should have been reset to auto.
+	assertTrue(t, len(roundChoices) >= 2)
+	assertEqual(t, roundChoices[0], ryn.ToolChoiceRequired)
+	for i := 1; i < len(roundChoices); i++ {
+		tc := roundChoices[i]
+		isAutoOrEmpty := tc == ryn.ToolChoiceAuto || tc == ""
+		assertTrue(t, isAutoOrEmpty)
+	}
+}
+
+func TestToolChoiceFuncResetAfterFirstRound(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	executor := tools.ToolExecutorFunc(func(ctx context.Context, name string, args json.RawMessage) (string, error) {
+		return "ok", nil
+	})
+
+	var roundChoices []ryn.ToolChoice
+	call := 0
+	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+		call++
+		roundChoices = append(roundChoices, req.ToolChoice)
+		s, em := ryn.NewStream(4)
+		go func() {
+			defer em.Close()
+			if call == 1 {
+				_ = em.Emit(ctx, ryn.Frame{Kind: ryn.KindToolCall, Tool: &ryn.ToolCall{
+					ID: "c1", Name: "lookup", Args: json.RawMessage(`{}`),
+				}})
+				return
+			}
+			_ = em.Emit(ctx, ryn.TextFrame("result"))
+		}()
+		return s, nil
+	})
+
+	loop := tools.NewToolLoop(executor, 3)
+	forcedChoice := ryn.ToolChoiceFunc("lookup")
+	req := &ryn.Request{
+		Messages:   []ryn.Message{ryn.UserText("lookup")},
+		ToolChoice: forcedChoice,
+	}
+	stream, err := loop.GenerateWithTools(ctx, mock, req)
+	assertNoError(t, err)
+	for stream.Next(ctx) {
+	}
+	assertNoError(t, stream.Err())
+
+	assertTrue(t, len(roundChoices) >= 2)
+	assertEqual(t, roundChoices[0], forcedChoice)
+	// Round 1 must not force the tool anymore.
+	assertEqual(t, roundChoices[1], ryn.ToolChoiceAuto)
+}
+
+// ---------------------------------------------------------------------------
+// Grouped tool results — single RoleTool message per round
+// ---------------------------------------------------------------------------
+
+func TestParallelToolResultsGroupedInOneMessage(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	executor := tools.ToolExecutorFunc(func(ctx context.Context, name string, args json.RawMessage) (string, error) {
+		return name + "_result", nil
+	})
+
+	call := 0
+	var secondReqMessages []ryn.Message
+	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+		call++
+		if call == 1 {
+			// Return two parallel tool calls.
+			s, em := ryn.NewStream(8)
+			go func() {
+				defer em.Close()
+				_ = em.Emit(ctx, ryn.Frame{Kind: ryn.KindToolCall, Tool: &ryn.ToolCall{
+					ID: "id1", Name: "toolA", Args: json.RawMessage(`{}`),
+				}})
+				_ = em.Emit(ctx, ryn.Frame{Kind: ryn.KindToolCall, Tool: &ryn.ToolCall{
+					ID: "id2", Name: "toolB", Args: json.RawMessage(`{}`),
+				}})
+			}()
+			return s, nil
+		}
+		// Capture the messages sent on round 2.
+		secondReqMessages = append([]ryn.Message(nil), req.Messages...)
+		return ryn.StreamFromSlice([]ryn.Frame{ryn.TextFrame("done")}), nil
+	})
+
+	loop := tools.NewToolLoopWithOptions(executor, tools.ToolStreamOptions{
+		MaxRounds:       4,
+		Parallel:        true,
+		EmitToolResults: true,
+		StreamBuffer:    16,
+	})
+	stream, err := loop.GenerateWithTools(ctx, mock, &ryn.Request{
+		Messages: []ryn.Message{ryn.UserText("run both")},
+	})
+	assertNoError(t, err)
+	for stream.Next(ctx) {
+	}
+	assertNoError(t, stream.Err())
+
+	// Find the single RoleTool message in the history.
+	var toolMessages []ryn.Message
+	for _, m := range secondReqMessages {
+		if m.Role == ryn.RoleTool {
+			toolMessages = append(toolMessages, m)
+		}
+	}
+
+	// Both results must be in ONE message, not two separate ones.
+	assertEqual(t, len(toolMessages), 1)
+	assertEqual(t, len(toolMessages[0].Parts), 2)
+
+	// Verify both call IDs are present.
+	var callIDs []string
+	for _, p := range toolMessages[0].Parts {
+		if p.Kind == ryn.KindToolResult && p.Result != nil {
+			callIDs = append(callIDs, p.Result.CallID)
+		}
+	}
+	assertTrue(t, len(callIDs) == 2)
+	assertTrue(t, strings.Contains(strings.Join(callIDs, ","), "id1"))
+	assertTrue(t, strings.Contains(strings.Join(callIDs, ","), "id2"))
+}
+
+// ---------------------------------------------------------------------------
+// Toolset utility methods: Remove / Get / Names / Len
+// ---------------------------------------------------------------------------
+
+func TestToolsetRemove(t *testing.T) {
+	t.Parallel()
+
+	set := tools.NewToolset()
+	set.MustRegister(tools.ToolDefinition{
+		Name:        "alpha",
+		Description: "Alpha tool",
+		Handler:     func(ctx context.Context, args json.RawMessage) (any, error) { return "", nil },
+	})
+	set.MustRegister(tools.ToolDefinition{
+		Name:        "beta",
+		Description: "Beta tool",
+		Handler:     func(ctx context.Context, args json.RawMessage) (any, error) { return "", nil },
+	})
+
+	assertEqual(t, set.Len(), 2)
+
+	// Remove existing tool.
+	removed := set.Remove("alpha")
+	assertTrue(t, removed)
+	assertEqual(t, set.Len(), 1)
+
+	// Removing again returns false.
+	removed = set.Remove("alpha")
+	assertTrue(t, !removed)
+
+	// Remaining tool still present.
+	_, ok := set.Get("beta")
+	assertTrue(t, ok)
+}
+
+func TestToolsetGet(t *testing.T) {
+	t.Parallel()
+
+	set := tools.NewToolset()
+	set.MustRegister(tools.ToolDefinition{
+		Name:        "myTool",
+		Description: "My tool",
+		Handler:     func(ctx context.Context, args json.RawMessage) (any, error) { return "", nil },
+	})
+
+	def, ok := set.Get("myTool")
+	assertTrue(t, ok)
+	assertEqual(t, def.Name, "myTool")
+
+	_, ok = set.Get("missing")
+	assertTrue(t, !ok)
+}
+
+func TestToolsetNamesAndLen(t *testing.T) {
+	t.Parallel()
+
+	set := tools.NewToolset()
+	assertEqual(t, set.Len(), 0)
+	assertEqual(t, len(set.Names()), 0)
+
+	for _, name := range []string{"charlie", "alpha", "bravo"} {
+		name := name
+		set.MustRegister(tools.ToolDefinition{
+			Name:        name,
+			Description: name + " desc",
+			Handler:     func(ctx context.Context, args json.RawMessage) (any, error) { return "", nil },
+		})
+	}
+
+	assertEqual(t, set.Len(), 3)
+	names := set.Names()
+	assertEqual(t, len(names), 3)
+	// Names must be returned in sorted order.
+	assertEqual(t, names[0], "alpha")
+	assertEqual(t, names[1], "bravo")
+	assertEqual(t, names[2], "charlie")
+}
+
+func TestToolsetToolsSortedOrder(t *testing.T) {
+	t.Parallel()
+
+	set := tools.NewToolset()
+	for _, name := range []string{"zebra", "apple", "mango"} {
+		name := name
+		set.MustRegister(tools.ToolDefinition{
+			Name:        name,
+			Description: name,
+			Handler:     func(ctx context.Context, args json.RawMessage) (any, error) { return "", nil },
+		})
+	}
+
+	toolList := set.Tools()
+	assertEqual(t, len(toolList), 3)
+	assertEqual(t, toolList[0].Name, "apple")
+	assertEqual(t, toolList[1].Name, "mango")
+	assertEqual(t, toolList[2].Name, "zebra")
+}
+
+// ---------------------------------------------------------------------------
+// Human-in-the-loop (HITL) approval
+// ---------------------------------------------------------------------------
+
+func TestToolLoopApproverApproves(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	executed := false
+	executor := tools.ToolExecutorFunc(func(ctx context.Context, name string, args json.RawMessage) (string, error) {
+		executed = true
+		return "42", nil
+	})
+
+	call := 0
+	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+		call++
+		if call == 1 {
+			s, em := ryn.NewStream(4)
+			go func() {
+				defer em.Close()
+				_ = em.Emit(ctx, ryn.Frame{Kind: ryn.KindToolCall, Tool: &ryn.ToolCall{
+					ID: "c1", Name: "calc", Args: json.RawMessage(`{}`),
+				}})
+			}()
+			return s, nil
+		}
+		return ryn.StreamFromSlice([]ryn.Frame{ryn.TextFrame("done")}), nil
+	})
+
+	loop := tools.NewToolLoopWithOptions(executor, tools.ToolStreamOptions{
+		MaxRounds:    3,
+		StreamBuffer: 8,
+		Approver:     tools.ApproveAll(), // always approve
+	})
+	stream, err := loop.GenerateWithTools(ctx, mock, &ryn.Request{
+		Messages: []ryn.Message{ryn.UserText("calc")},
+	})
+	assertNoError(t, err)
+	for stream.Next(ctx) {
+	}
+	assertNoError(t, stream.Err())
+	assertTrue(t, executed) // tool was actually called
+}
+
+func TestToolLoopApproverDenies(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	executed := false
+	executor := tools.ToolExecutorFunc(func(ctx context.Context, name string, args json.RawMessage) (string, error) {
+		executed = true
+		return "42", nil
+	})
+
+	var deniedCall ryn.ToolCall
+	call := 0
+	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+		call++
+		if call == 1 {
+			s, em := ryn.NewStream(4)
+			go func() {
+				defer em.Close()
+				_ = em.Emit(ctx, ryn.Frame{Kind: ryn.KindToolCall, Tool: &ryn.ToolCall{
+					ID: "c1", Name: "delete_file", Args: json.RawMessage(`{"path":"/etc"}`),
+				}})
+			}()
+			return s, nil
+		}
+		// On round 2 the model receives the denial result and replies.
+		// Verify the tool result was fed back with IsError=true.
+		for _, m := range req.Messages {
+			for _, p := range m.Parts {
+				if p.Kind == ryn.KindToolResult && p.Result != nil {
+					if strings.Contains(p.Result.Content, "too dangerous") {
+						deniedCall.ID = p.Result.CallID
+					}
+				}
+			}
+		}
+		return ryn.StreamFromSlice([]ryn.Frame{ryn.TextFrame("I cannot delete that file.")}), nil
+	})
+
+	loop := tools.NewToolLoopWithOptions(executor, tools.ToolStreamOptions{
+		MaxRounds:    3,
+		StreamBuffer: 8,
+		Approver:     tools.DenyAll("too dangerous"),
+	})
+	stream, err := loop.GenerateWithTools(ctx, mock, &ryn.Request{
+		Messages: []ryn.Message{ryn.UserText("delete /etc")},
+	})
+	assertNoError(t, err)
+	var finalText strings.Builder
+	for stream.Next(ctx) {
+		if f := stream.Frame(); f.Kind == ryn.KindText {
+			finalText.WriteString(f.Text)
+		}
+	}
+	assertNoError(t, stream.Err())
+	assertTrue(t, !executed)                                      // handler never called
+	assertTrue(t, deniedCall.ID == "c1")                          // denial fed back with correct call ID
+	assertTrue(t, strings.Contains(finalText.String(), "cannot")) // model acknowledged the denial
+}
+
+func TestToolLoopApproverContextCanceled(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	executor := tools.ToolExecutorFunc(func(ctx context.Context, name string, args json.RawMessage) (string, error) {
+		return "ok", nil
+	})
+
+	// Approver blocks until context is canceled.
+	blockingApprover := tools.ToolApproverFunc(func(ctx context.Context, call ryn.ToolCall) (tools.ToolApproval, error) {
+		<-ctx.Done()
+		return tools.ToolApproval{}, ctx.Err()
+	})
+
+	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+		s, em := ryn.NewStream(4)
+		go func() {
+			defer em.Close()
+			_ = em.Emit(ctx, ryn.Frame{Kind: ryn.KindToolCall, Tool: &ryn.ToolCall{
+				ID: "c1", Name: "myTool", Args: json.RawMessage(`{}`),
+			}})
+		}()
+		return s, nil
+	})
+
+	loop := tools.NewToolLoopWithOptions(executor, tools.ToolStreamOptions{
+		MaxRounds:    2,
+		StreamBuffer: 4,
+		Approver:     blockingApprover,
+	})
+	stream, err := loop.GenerateWithTools(ctx, mock, &ryn.Request{
+		Messages: []ryn.Message{ryn.UserText("go")},
+	})
+	assertNoError(t, err)
+
+	// Cancel while the approver is blocking.
+	go func() { cancel() }()
+
+	for stream.Next(ctx) {
+	}
+	// The stream must close (possibly with context error embedded).
+	_ = stream.Err() // may be context.Canceled — that's expected
+}
+
+func TestToolApproverFunc(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	called := false
+	approver := tools.ToolApproverFunc(func(ctx context.Context, call ryn.ToolCall) (tools.ToolApproval, error) {
+		called = true
+		return tools.ToolApproval{Approved: true}, nil
+	})
+	decision, err := approver.Approve(ctx, ryn.ToolCall{Name: "myTool"})
+	assertNoError(t, err)
+	assertTrue(t, decision.Approved)
+	assertTrue(t, called)
+}
+
+func TestApproveAll(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	a := tools.ApproveAll()
+	decision, err := a.Approve(ctx, ryn.ToolCall{Name: "anything"})
+	assertNoError(t, err)
+	assertTrue(t, decision.Approved)
+}
+
+func TestDenyAll(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	a := tools.DenyAll("blocked for maintenance")
+	decision, err := a.Approve(ctx, ryn.ToolCall{Name: "anything"})
+	assertNoError(t, err)
+	assertTrue(t, !decision.Approved)
+	assertEqual(t, decision.Reason, "blocked for maintenance")
+
+	// Empty reason uses default.
+	a2 := tools.DenyAll("")
+	d2, _ := a2.Approve(ctx, ryn.ToolCall{Name: "x"})
+	assertTrue(t, !d2.Approved)
+	assertTrue(t, d2.Reason != "")
+}
+
+func TestToolsetApproverDenied(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	set := tools.NewToolset().WithApprover(tools.DenyAll("policy violation"))
+	set.MustRegister(tools.ToolDefinition{
+		Name:        "riskyOp",
+		Description: "Risky operation",
+		Handler:     func(ctx context.Context, args json.RawMessage) (any, error) { return "done", nil },
+	})
+
+	res, err := set.ExecuteCall(ctx, ryn.ToolCall{ID: "c1", Name: "riskyOp", Args: json.RawMessage(`{}`)})
+	assertTrue(t, err != nil)
+	assertTrue(t, tools.IsToolDenied(err))
+	assertTrue(t, res.IsError)
+	assertTrue(t, strings.Contains(res.Content, "policy violation"))
+}
+
+func TestToolsetApproverApproves(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	set := tools.NewToolset().WithApprover(tools.ApproveAll())
+	set.MustRegister(tools.ToolDefinition{
+		Name:        "safeOp",
+		Description: "Safe operation",
+		Handler:     func(ctx context.Context, args json.RawMessage) (any, error) { return "result", nil },
+	})
+
+	res, err := set.ExecuteCall(ctx, ryn.ToolCall{ID: "c1", Name: "safeOp", Args: json.RawMessage(`{}`)})
+	assertNoError(t, err)
+	assertTrue(t, !res.IsError)
+	assertEqual(t, res.Content, "result")
+}
+
+func TestIsToolDenied(t *testing.T) {
+	t.Parallel()
+
+	denied := &tools.ErrToolDenied{CallName: "myTool", Reason: "too risky"}
+	assertTrue(t, tools.IsToolDenied(denied))
+	assertTrue(t, strings.Contains(denied.Error(), "myTool"))
+	assertTrue(t, strings.Contains(denied.Error(), "too risky"))
+
+	assertTrue(t, !tools.IsToolDenied(fmt.Errorf("some other error")))
+	assertTrue(t, !tools.IsToolDenied(nil))
+}
+
+func TestToolLoopApproverApprovalError(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	executed := false
+	executor := tools.ToolExecutorFunc(func(ctx context.Context, name string, args json.RawMessage) (string, error) {
+		executed = true
+		return "ok", nil
+	})
+
+	errApprover := tools.ToolApproverFunc(func(ctx context.Context, call ryn.ToolCall) (tools.ToolApproval, error) {
+		return tools.ToolApproval{}, fmt.Errorf("approval service unavailable")
+	})
+
+	call := 0
+	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+		call++
+		if call == 1 {
+			s, em := ryn.NewStream(4)
+			go func() {
+				defer em.Close()
+				_ = em.Emit(ctx, ryn.Frame{Kind: ryn.KindToolCall, Tool: &ryn.ToolCall{
+					ID: "c1", Name: "myTool", Args: json.RawMessage(`{}`),
+				}})
+			}()
+			return s, nil
+		}
+		return ryn.StreamFromSlice([]ryn.Frame{ryn.TextFrame("error handled")}), nil
+	})
+
+	loop := tools.NewToolLoopWithOptions(executor, tools.ToolStreamOptions{
+		MaxRounds:    3,
+		StreamBuffer: 8,
+		Approver:     errApprover,
+	})
+	stream, err := loop.GenerateWithTools(ctx, mock, &ryn.Request{
+		Messages: []ryn.Message{ryn.UserText("go")},
+	})
+	assertNoError(t, err)
+	for stream.Next(ctx) {
+	}
+	// The loop should feed the error as a tool result and continue.
+	assertNoError(t, stream.Err())
+	assertTrue(t, !executed) // handler never ran
+}

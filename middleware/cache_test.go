@@ -333,3 +333,248 @@ func TestCacheHitWithUsage(t *testing.T) {
 	u := s2.Usage()
 	assertTrue(t, u.InputTokens > 0 || u.OutputTokens > 0)
 }
+
+func TestCacheMissForwardsUsage(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	// Provider emits a usage frame alongside text.
+	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+		out, em := ryn.NewStream(8)
+		go func() {
+			defer em.Close()
+			_ = em.Emit(ctx, ryn.TextFrame("hello"))
+			u := ryn.Usage{InputTokens: 10, OutputTokens: 5, TotalTokens: 15}
+			_ = em.Emit(ctx, ryn.UsageFrame(&u))
+		}()
+		return out, nil
+	})
+
+	cache := middleware.NewCache(middleware.CacheOptions{MaxEntries: 100})
+	provider := cache.Wrap(mock)
+
+	req := &ryn.Request{Model: "m", Messages: []ryn.Message{ryn.UserText("usage-test")}}
+
+	// Cache miss: usage frame emitted by provider should be forwarded to caller.
+	s, err := provider.Generate(ctx, req)
+	assertNoError(t, err)
+	text, err := ryn.CollectText(ctx, s)
+	assertNoError(t, err)
+	assertEqual(t, text, "hello")
+
+	u := s.Usage()
+	assertEqual(t, u.InputTokens, 10)
+	assertEqual(t, u.OutputTokens, 5)
+	assertEqual(t, u.TotalTokens, 15)
+}
+
+func TestCachePutUpdateExisting(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	callCount := 0
+	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+		callCount++
+		text := fmt.Sprintf("response-%d", callCount)
+		return ryn.StreamFromSlice([]ryn.Frame{ryn.TextFrame(text)}), nil
+	})
+
+	// Use a custom key function that always returns the same key,
+	// so the second distinct request ends up in the same cache slot.
+	var fixedKey [32]byte
+	fixedKey[0] = 42
+	cache := middleware.NewCache(middleware.CacheOptions{
+		MaxEntries: 100,
+		KeyFn:      func(*ryn.Request) [32]byte { return fixedKey },
+	})
+	provider := cache.Wrap(mock)
+
+	req := &ryn.Request{Model: "m", Messages: []ryn.Message{ryn.UserText("first")}}
+
+	// First call: miss, stores "response-1".
+	s1, err := provider.Generate(ctx, req)
+	assertNoError(t, err)
+	ryn.CollectText(ctx, s1)
+	assertEqual(t, callCount, 1)
+
+	// Second call with same forced key: hit, returns "response-1".
+	s2, err := provider.Generate(ctx, req)
+	assertNoError(t, err)
+	text2, _ := ryn.CollectText(ctx, s2)
+	assertEqual(t, text2, "response-1")
+	assertEqual(t, callCount, 1) // still only 1 upstream call
+
+	// Invalidate to force a fresh miss that updates the existing slot.
+	cache.Clear()
+	s3, err := provider.Generate(ctx, req)
+	assertNoError(t, err)
+	text3, _ := ryn.CollectText(ctx, s3)
+	assertEqual(t, text3, "response-2")
+	assertEqual(t, callCount, 2)
+}
+
+func TestCacheMissForwardsResponse(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	// Provider sets a ResponseMeta on its stream.
+	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+		out, em := ryn.NewStream(4)
+		go func() {
+			defer em.Close()
+			_ = em.Emit(ctx, ryn.TextFrame("text"))
+			em.SetResponse(&ryn.ResponseMeta{Model: "model-x", FinishReason: "stop"})
+		}()
+		return out, nil
+	})
+
+	cache := middleware.NewCache(middleware.CacheOptions{MaxEntries: 100})
+	provider := cache.Wrap(mock)
+	req := &ryn.Request{Model: "model-x", Messages: []ryn.Message{ryn.UserText("x")}}
+
+	// Cache miss — response meta should be forwarded.
+	s, err := provider.Generate(ctx, req)
+	assertNoError(t, err)
+	ryn.CollectText(ctx, s)
+	resp := s.Response()
+	assertNotNil(t, resp)
+	assertEqual(t, resp.FinishReason, "stop")
+
+	// Cache hit — response meta should also be forwarded from cache.
+	s2, err := provider.Generate(ctx, req)
+	assertNoError(t, err)
+	ryn.CollectText(ctx, s2)
+	resp2 := s2.Response()
+	assertNotNil(t, resp2)
+	assertEqual(t, resp2.FinishReason, "stop")
+}
+
+func TestCacheRemoveMiddleEntry(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	// Build 3 entries in the same shard then access the MIDDLE entry to
+	// trigger remove() on a node that has both prev AND next (covers the
+	// e.next.prev = e.prev branch in remove()).
+	keySeq := 0
+	cache := middleware.NewCache(middleware.CacheOptions{
+		MaxEntries: 2048,
+		KeyFn: func(req *ryn.Request) [32]byte {
+			var k [32]byte
+			k[0] = 0 // always shard 0
+			k[1] = byte(keySeq)
+			keySeq++
+			return k
+		},
+	})
+	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+		return ryn.StreamFromSlice([]ryn.Frame{ryn.TextFrame(req.Model)}), nil
+	})
+	wrapped := cache.Wrap(mock)
+	req := func(m string) *ryn.Request {
+		return &ryn.Request{Model: m, Messages: []ryn.Message{ryn.UserText("x")}}
+	}
+
+	// Insert A (key=0), B (key=1), C (key=2).
+	// After inserts: head=C, middle=B, tail=A.
+	for _, m := range []string{"A", "B", "C"} {
+		s, _ := wrapped.Generate(ctx, req(m))
+		ryn.CollectText(ctx, s)
+	}
+	assertEqual(t, cache.Len(), 3)
+
+	// Re-access B (key=1): this is a hit → moveToFront(B).
+	// B is the MIDDLE entry (prev=C, next=A), so remove(B) hits e.next.prev = e.prev.
+	// Reset keySeq so B's key (=1) is generated on the next call.
+	keySeq = 1
+	s, _ := wrapped.Generate(ctx, req("B-again"))
+	text, _ := ryn.CollectText(ctx, s)
+	assertEqual(t, text, "B") // served from cache
+	hits, _ := cache.Stats()
+	assertTrue(t, hits >= 1)
+}
+
+func TestCachePutUpdateExistingConcurrent(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	// Use a slow provider so two concurrent misses race to store the same key,
+	// triggering the update-existing branch in put().
+	ready := make(chan struct{})
+	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+		<-ready // block until both goroutines start
+		return ryn.StreamFromSlice([]ryn.Frame{ryn.TextFrame("ok")}), nil
+	})
+
+	var fixedKey [32]byte
+	fixedKey[0] = 77
+	cache := middleware.NewCache(middleware.CacheOptions{
+		MaxEntries: 100,
+		TTL:        time.Minute, // enable TTL so the update-existing TTL branch is exercised too
+		KeyFn:      func(*ryn.Request) [32]byte { return fixedKey },
+	})
+	provider := cache.Wrap(mock)
+	req := &ryn.Request{Model: "m", Messages: []ryn.Message{ryn.UserText("x")}}
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		s, err := provider.Generate(ctx, req)
+		assertNoError(t, err)
+		ryn.CollectText(ctx, s)
+	}()
+	go func() {
+		defer wg.Done()
+		s, err := provider.Generate(ctx, req)
+		assertNoError(t, err)
+		ryn.CollectText(ctx, s)
+	}()
+
+	// Release both goroutines simultaneously so they both miss, both put.
+	close(ready)
+	wg.Wait()
+
+	// At least 1 entry should be in cache regardless of which goroutine "won".
+	assertTrue(t, cache.Len() >= 1)
+}
+
+func TestCacheWrapEmitEarlyReturn(t *testing.T) {
+	t.Parallel()
+
+	// The miss goroutine calls em.Emit(ctx, f) for each frame; if ctx is
+	// cancelled while the output buffer (size 32) is full, Emit returns an
+	// error and the goroutine takes the early-return path.
+	// Strategy: produce 64 frames (> buffer 32) so Emit blocks, then let the
+	// caller context expire via a very short deadline.
+	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+		frames := make([]ryn.Frame, 64)
+		for i := range frames {
+			frames[i] = ryn.TextFrame(fmt.Sprintf("f%d", i))
+		}
+		return ryn.StreamFromSlice(frames), nil
+	})
+
+	var fixedKey [32]byte
+	fixedKey[0] = 88
+	cache := middleware.NewCache(middleware.CacheOptions{
+		MaxEntries: 100,
+		KeyFn:      func(*ryn.Request) [32]byte { return fixedKey },
+	})
+	provider := cache.Wrap(mock)
+	req := &ryn.Request{Model: "m", Messages: []ryn.Message{ryn.UserText("x")}}
+
+	// Use a very short deadline — fires while the miss goroutine is blocked
+	// on a full output channel, causing em.Emit to return ctx.Err().
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Millisecond)
+	defer cancel()
+
+	stream, err := provider.Generate(ctx, req)
+	assertNoError(t, err)
+
+	// Sleep briefly so the deadline fires before we start draining.
+	time.Sleep(5 * time.Millisecond)
+	for stream.Next(context.Background()) {
+	}
+	_ = stream.Err()
+}

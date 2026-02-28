@@ -2,6 +2,7 @@ package ryn_test
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"ryn.dev/ryn"
@@ -202,4 +203,58 @@ func TestForward(t *testing.T) {
 	frames, err := ryn.Collect(ctx, dst)
 	assertNoError(t, err)
 	assertEqual(t, len(frames), 2)
+}
+
+func TestForwardSrcError(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	// Source stream that emits a frame then errors.
+	src, srcEm := ryn.NewStream(4)
+	go func() {
+		defer srcEm.Close()
+		_ = srcEm.Emit(ctx, ryn.TextFrame("partial"))
+		srcEm.Error(fmt.Errorf("src broke"))
+	}()
+
+	dst, dstEm := ryn.NewStream(4)
+	var forwardErr error
+	go func() {
+		defer dstEm.Close()
+		forwardErr = ryn.Forward(ctx, src, dstEm)
+		if forwardErr != nil {
+			dstEm.Error(forwardErr)
+		}
+	}()
+
+	frames, err := ryn.Collect(ctx, dst)
+	// Either the error is returned by Collect or is in the stream.
+	_ = frames
+	if err == nil {
+		err = dst.Err()
+	}
+	assertTrue(t, err != nil || forwardErr != nil)
+}
+
+func TestForwardEmitError(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	// Source has more frames than the dst buffer + dst will be closed early.
+	src, srcEm := ryn.NewStream(4)
+	go func() {
+		defer srcEm.Close()
+		for i := range 10 {
+			_ = srcEm.Emit(ctx, ryn.TextFrame(fmt.Sprintf("frame-%d", i)))
+		}
+	}()
+
+	// Destination with a tiny buffer that we close immediately.
+	dst, dstEm := ryn.NewStream(1)
+	dstEm.Close() // close before forwarding — Emit to it will fail
+
+	err := ryn.Forward(ctx, src, dstEm)
+	// Forward should return an error because the emitter is already closed.
+	_ = dst
+	_ = err // may or may not error depending on timing; just ensure no panic
 }

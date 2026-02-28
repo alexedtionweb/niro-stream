@@ -3,6 +3,7 @@ package ryn
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 )
 
 // ErrorCode categorizes runtime errors for proper handling.
@@ -62,6 +63,37 @@ func (e *Error) Error() string {
 // Unwrap returns the underlying error for error chaining.
 func (e *Error) Unwrap() error {
 	return e.Err
+}
+
+// LogValue implements [slog.LogValuer] so *Error emits structured attributes
+// when passed to any slog call:
+//
+//	slog.Error("generate failed", "err", err)
+//	// → err.code=429 err.provider=google err.message="Quota exceeded" err.retryable=true
+func (e *Error) LogValue() slog.Value {
+	if e == nil {
+		return slog.AnyValue(nil)
+	}
+	attrs := []slog.Attr{
+		slog.Int("code", int(e.Code)),
+		slog.String("message", e.Message),
+	}
+	if e.Provider != "" {
+		attrs = append(attrs, slog.String("provider", e.Provider))
+	}
+	if e.StatusCode != 0 {
+		attrs = append(attrs, slog.Int("http_status", e.StatusCode))
+	}
+	if e.Retryable {
+		attrs = append(attrs, slog.Bool("retryable", true))
+	}
+	if e.RequestID != "" {
+		attrs = append(attrs, slog.String("request_id", e.RequestID))
+	}
+	if e.Err != nil {
+		attrs = append(attrs, slog.String("cause", e.Err.Error()))
+	}
+	return slog.GroupValue(attrs...)
 }
 
 // Is implements errors.Is for semantic error matching.

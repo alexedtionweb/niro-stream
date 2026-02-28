@@ -75,10 +75,9 @@ func NewTracingProvider(p ryn.Provider) *TracingProvider {
 
 // Generate implements Provider with automatic trace context injection.
 func (tp *TracingProvider) Generate(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+	// GetTraceContext always returns a non-empty RequestID (auto-generated
+	// when absent). Always store it back so the downstream provider sees it.
 	trace := GetTraceContext(ctx)
-	if trace.RequestID == "" {
-		trace.RequestID = GenerateRequestID()
-		ctx = WithTraceContext(ctx, trace)
-	}
+	ctx = WithTraceContext(ctx, trace)
 	return tp.provider.Generate(ctx, req)
 }

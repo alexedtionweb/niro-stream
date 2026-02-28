@@ -1,10 +1,8 @@
-package middleware
+package ryn
 
 import (
 	"context"
 	"time"
-
-	"ryn.dev/ryn"
 )
 
 // TimeoutConfig configures timeout behavior.
@@ -53,13 +51,16 @@ func WithGenerationTimeout(ctx context.Context, timeout time.Duration) (context.
 }
 
 // TimeoutProvider wraps a Provider with generation timeout enforcement.
+//
+// The timeout covers the entire generation lifecycle: from the initial
+// API call through streaming until the last frame is consumed.
 type TimeoutProvider struct {
-	provider ryn.Provider
+	provider Provider
 	timeout  time.Duration
 }
 
 // NewTimeoutProvider creates a Provider that enforces generation timeouts.
-func NewTimeoutProvider(p ryn.Provider, timeout time.Duration) *TimeoutProvider {
+func NewTimeoutProvider(p Provider, timeout time.Duration) *TimeoutProvider {
 	if timeout <= 0 {
 		timeout = 5 * time.Minute
 	}
@@ -67,7 +68,11 @@ func NewTimeoutProvider(p ryn.Provider, timeout time.Duration) *TimeoutProvider 
 }
 
 // Generate implements Provider with timeout enforcement.
-func (tp *TimeoutProvider) Generate(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+//
+// The timeout context is propagated into the underlying stream so that
+// it remains active for the full duration of stream consumption — not
+// just the initial Generate call.
+func (tp *TimeoutProvider) Generate(ctx context.Context, req *Request) (*Stream, error) {
 	tctx, cancel := context.WithTimeout(ctx, tp.timeout)
 
 	stream, err := tp.provider.Generate(tctx, req)
@@ -76,7 +81,9 @@ func (tp *TimeoutProvider) Generate(ctx context.Context, req *ryn.Request) (*ryn
 		return nil, err
 	}
 
-	out, emitter := ryn.NewStream(32)
+	// Wrap the stream: forward all frames under the timeout context,
+	// and call cancel() when the stream is fully consumed.
+	out, emitter := NewStream(32)
 	go func() {
 		defer cancel()
 		defer emitter.Close()
@@ -90,36 +97,16 @@ func (tp *TimeoutProvider) Generate(ctx context.Context, req *ryn.Request) (*ryn
 			emitter.Error(err)
 			return
 		}
+		// Propagate response metadata
 		if resp := stream.Response(); resp != nil {
 			emitter.SetResponse(resp)
 		}
+		// Re-emit accumulated usage so the outer stream accumulates it
 		usage := stream.Usage()
 		if usage.InputTokens > 0 || usage.OutputTokens > 0 || usage.TotalTokens > 0 {
-			_ = emitter.Emit(tctx, ryn.UsageFrame(&usage))
+			_ = emitter.Emit(tctx, UsageFrame(&usage))
 		}
 	}()
 
 	return out, nil
-}
-
-// Composed combines multiple provider wrappers (timeout, tracing, retry).
-// Useful for building a production-ready provider from building blocks.
-// Apply order: retry (outermost) → timeout → tracing → base.
-func Composed(p ryn.Provider, timeout time.Duration, retryConfig *RetryConfig) ryn.Provider {
-	var composed ryn.Provider = p
-
-	// Innermost: tracing
-	composed = NewTracingProvider(composed)
-
-	// Middle: timeout
-	if timeout > 0 {
-		composed = NewTimeoutProvider(composed, timeout)
-	}
-
-	// Outermost: retry
-	if retryConfig != nil {
-		composed = WrapWithSmartRetry(composed, *retryConfig)
-	}
-
-	return composed
 }

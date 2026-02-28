@@ -99,8 +99,9 @@ func (r *Runtime) wrapStream(ctx context.Context, src *ryn.Stream, model string,
 		for src.Next(ctx) {
 			f := src.Frame()
 
-			// Hook per-frame
-			if err := r.hook.OnFrame(ctx, f); err != nil {
+			// Hook per-frame with wall-clock elapsed since generation start.
+			// Receivers can extract TTFT from the first KindText frame.
+			if err := r.hook.OnFrame(ctx, f, time.Since(start)); err != nil {
 				emitter.Error(err)
 				r.hook.OnError(ctx, err)
 				return

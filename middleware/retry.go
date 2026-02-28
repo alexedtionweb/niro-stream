@@ -168,7 +168,16 @@ func (rp *RetryProvider) Generate(ctx context.Context, req *ryn.Request) (*ryn.S
 			rp.config.OnRetry(attempt+1, err)
 		}
 
-		// Wait with context awareness
+		// Log the retry at Warn level so operators see transient failures without
+		// noise from routine success paths. LogWarn propagates ctx so
+		// context-aware adapters (e.g. OpenTelemetry) can correlate the record
+		// with the originating request.
+		ryn.LogWarn(ctx, "ryn/retry: retrying",
+			"attempt", attempt+1,
+			"max", rp.config.MaxAttempts,
+			"delay", delay.String(),
+			"err", err,
+		)
 		timer := time.NewTimer(delay)
 		select {
 		case <-ctx.Done():

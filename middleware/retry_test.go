@@ -236,6 +236,21 @@ func TestRetryExhaustsAllAttempts(t *testing.T) {
 	assertEqual(t, calls, 3)
 }
 
+func TestExponentialBackoffMaxDelayClamped(t *testing.T) {
+	t.Parallel()
+
+	// Use a small MaxDelay so that attempt=5 exceeds it: 1ms * 2^5 = 32ms > 10ms.
+	backoff := middleware.ExponentialBackoff{
+		InitialDelay: 1 * time.Millisecond,
+		Multiplier:   2.0,
+		MaxDelay:     10 * time.Millisecond,
+		Jitter:       false,
+	}
+
+	d := backoff.Delay(5) // 1ms * 32 = 32ms → clamped to 10ms
+	assertEqual(t, d, 10*time.Millisecond)
+}
+
 func TestRetryContextPreCancelled(t *testing.T) {
 	t.Parallel()
 

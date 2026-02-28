@@ -1480,3 +1480,86 @@ func TestGenerate_DefaultModel(t *testing.T) {
 		t.Fatalf("stream: %v", err)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// classifyError: clean single-line message and errors.As chain
+// ---------------------------------------------------------------------------
+
+// TestClassifyError_MultilineMessageTruncated verifies that a multiline Google
+// API error message (quota violations listed on separate lines) is trimmed to
+// just the first line so that log.Printf("stream: %v", err) stays on one line
+// and does not dump the raw Details map.
+func TestClassifyError_MultilineMessageTruncated(t *testing.T) {
+	multilineMsg := "Quota exceeded.\n* metric: foo\nPlease retry in 5s."
+	body := `{"error":{"code":429,"message":"` + multilineMsg + `","status":"RESOURCE_EXHAUSTED"}}`
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusTooManyRequests)
+		fmt.Fprintln(w, body)
+	}))
+	defer srv.Close()
+
+	p := newTestProvider(t, srv.URL)
+	stream, err := p.Generate(context.Background(), &ryn.Request{Messages: []ryn.Message{ryn.UserText("hi")}})
+	if err == nil {
+		for stream.Next(context.Background()) {
+		}
+		err = stream.Err()
+	}
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+
+	errStr := err.Error()
+	// Must be a single line — no newlines.
+	if strings.Contains(errStr, "\n") {
+		t.Errorf("error string contains newline; want single line.\nGot: %q", errStr)
+	}
+	// Must not contain the raw SDK Details: dump.
+	if strings.Contains(errStr, "Details:") {
+		t.Errorf("error string contains Details dump: %q", errStr)
+	}
+	// Must not contain the SDK \"Message:\" label (only in genai.APIError.Error()).
+	if strings.Contains(errStr, "Message:") {
+		t.Errorf("error string repeats SDK Message: field: %q", errStr)
+	}
+	// The first-line human summary must be present.
+	if !strings.Contains(errStr, "Quota exceeded.") {
+		t.Errorf("error string missing human summary: %q", errStr)
+	}
+}
+
+// TestClassifyError_ErrorsAsPreservesRawSDKError verifies that errors.As can
+// still reach the raw genai.APIError for callers who need structured details
+// (e.g. retry delay from RetryInfo, specific quota metric names).
+func TestClassifyError_ErrorsAsPreservesRawSDKError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusTooManyRequests)
+		fmt.Fprintln(w, `{"error":{"code":429,"message":"Rate limited","status":"RESOURCE_EXHAUSTED"}}`)
+	}))
+	defer srv.Close()
+
+	p := newTestProvider(t, srv.URL)
+	stream, err := p.Generate(context.Background(), &ryn.Request{Messages: []ryn.Message{ryn.UserText("hi")}})
+	if err == nil {
+		for stream.Next(context.Background()) {
+		}
+		err = stream.Err()
+	}
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+
+	var apiErr genai.APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("errors.As(err, &genai.APIError{}) = false; want true\nerr = %v", err)
+	}
+	if apiErr.Code != 429 {
+		t.Errorf("apiErr.Code = %d, want 429", apiErr.Code)
+	}
+	if apiErr.Status != "RESOURCE_EXHAUSTED" {
+		t.Errorf("apiErr.Status = %q, want RESOURCE_EXHAUSTED", apiErr.Status)
+	}
+}

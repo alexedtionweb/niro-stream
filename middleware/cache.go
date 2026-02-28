@@ -179,6 +179,13 @@ func (c *Cache) Wrap(p ryn.Provider) ryn.Provider {
 			if resp != nil {
 				em.SetResponse(resp)
 			}
+			// KindUsage frames are consumed internally by the stream (not
+			// returned via Frame()), so re-emit the aggregated usage to the
+			// output stream so cache-miss callers see token counts.
+			if usage.InputTokens > 0 || usage.OutputTokens > 0 || usage.TotalTokens > 0 {
+				u := usage
+				_ = em.Emit(ctx, ryn.UsageFrame(&u))
+			}
 			c.put(key, collected, resp, usage)
 		}()
 		return out, nil

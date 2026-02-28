@@ -122,3 +122,15 @@ func TestUsageReset(t *testing.T) {
 	assertEqual(t, u.TotalTokens, 0)
 	assertEqual(t, len(u.Detail), 0) // map cleared, not nil
 }
+
+func TestPutUsageNil(t *testing.T) {
+	t.Parallel()
+	// PutUsage(nil) should be a no-op and not panic.
+	ryn.PutUsage(nil)
+}
+
+func TestPutResponseMetaNil(t *testing.T) {
+	t.Parallel()
+	// PutResponseMeta(nil) should be a no-op and not panic.
+	ryn.PutResponseMeta(nil)
+}

@@ -83,7 +83,7 @@ func TestRuntimeWithHook(t *testing.T) {
 			endCalled.Store(true)
 			assertEqual(t, info.Model, "test-model")
 		},
-		onFrame: func(ctx context.Context, f ryn.Frame) error {
+		onFrame: func(ctx context.Context, f ryn.Frame, elapsed time.Duration) error {
 			frameCnt.Add(1)
 			return nil
 		},
@@ -175,11 +175,11 @@ func TestRuntimeStreamErrorWithHook(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 
-	var errorCalled bool
+	var errorCalled atomic.Bool
 
 	fullH := &fullTestHook{
 		onError: func(ctx context.Context, err error) {
-			errorCalled = true
+			errorCalled.Store(true)
 		},
 	}
 
@@ -205,7 +205,7 @@ func TestRuntimeStreamErrorWithHook(t *testing.T) {
 	time.Sleep(20 * time.Millisecond) // allow goroutine to fire
 
 	assertTrue(t, stream.Err() != nil)
-	assertTrue(t, errorCalled)
+	assertTrue(t, errorCalled.Load())
 }
 
 func TestRuntimeHookOnFrameError(t *testing.T) {
@@ -213,7 +213,7 @@ func TestRuntimeHookOnFrameError(t *testing.T) {
 	ctx := context.Background()
 
 	fullH := &fullTestHook{
-		onFrame: func(ctx context.Context, f ryn.Frame) error {
+		onFrame: func(ctx context.Context, f ryn.Frame, elapsed time.Duration) error {
 			return fmt.Errorf("frame rejected")
 		},
 	}

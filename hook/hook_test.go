@@ -16,7 +16,7 @@ type countingHook struct {
 	onFrame func()
 }
 
-func (h *countingHook) OnFrame(_ context.Context, _ ryn.Frame) error {
+func (h *countingHook) OnFrame(_ context.Context, _ ryn.Frame, _ time.Duration) error {
 	if h.onFrame != nil {
 		h.onFrame()
 	}
@@ -28,7 +28,7 @@ func TestNoOpHookSatisfiesInterface(t *testing.T) {
 	var h hook.Hook = hook.NoOpHook{}
 	ctx := h.OnGenerateStart(context.Background(), hook.GenerateStartInfo{})
 	assertNotNil(t, ctx)
-	assertEqual(t, h.OnFrame(ctx, ryn.TextFrame("x")), nil)
+	assertEqual(t, h.OnFrame(ctx, ryn.TextFrame("x"), 0), nil)
 }
 
 func TestNoOpHookAllMethods(t *testing.T) {
@@ -40,7 +40,7 @@ func TestNoOpHookAllMethods(t *testing.T) {
 	h.OnToolCall(ctx, ryn.ToolCall{})
 	h.OnToolResult(ctx, ryn.ToolResult{}, 0)
 	h.OnError(ctx, errors.New("err"))
-	assertEqual(t, h.OnFrame(ctx, ryn.TextFrame("x")), nil)
+	assertEqual(t, h.OnFrame(ctx, ryn.TextFrame("x"), 0), nil)
 }
 
 func TestHooksComposition(t *testing.T) {
@@ -55,8 +55,8 @@ func TestHooksComposition(t *testing.T) {
 	ctx := context.Background()
 
 	combined.OnGenerateStart(ctx, hook.GenerateStartInfo{})
-	combined.OnFrame(ctx, ryn.TextFrame("a"))
-	combined.OnFrame(ctx, ryn.TextFrame("b"))
+	combined.OnFrame(ctx, ryn.TextFrame("a"), 0)
+	combined.OnFrame(ctx, ryn.TextFrame("b"), 0)
 
 	assertEqual(t, int(count1.Load()), 2)
 	assertEqual(t, int(count2.Load()), 2)
@@ -140,14 +140,14 @@ func TestMultiHookOnFrameFirstErrorPropagates(t *testing.T) {
 
 	// h1 returns an error, h2 should still be called but first error propagates
 	var h2Called atomic.Bool
-	h1 := &fullHook{onFrame: func(_ context.Context, _ ryn.Frame) error { return firstErr }}
-	h2 := &fullHook{onFrame: func(_ context.Context, _ ryn.Frame) error {
+	h1 := &fullHook{onFrame: func(_ context.Context, _ ryn.Frame, _ time.Duration) error { return firstErr }}
+	h2 := &fullHook{onFrame: func(_ context.Context, _ ryn.Frame, _ time.Duration) error {
 		h2Called.Store(true)
 		return nil
 	}}
 
 	combined := hook.Compose(h1, h2)
-	err := combined.OnFrame(context.Background(), ryn.TextFrame("x"))
+	err := combined.OnFrame(context.Background(), ryn.TextFrame("x"), 0)
 	assertEqual(t, err, firstErr)
 	assertTrue(t, h2Called.Load()) // h2 was still called
 }
@@ -187,7 +187,7 @@ type fullHook struct {
 	hook.NoOpHook
 	onStart      func(ctx context.Context, info hook.GenerateStartInfo) context.Context
 	onEnd        func(ctx context.Context, info hook.GenerateEndInfo)
-	onFrame      func(ctx context.Context, f ryn.Frame) error
+	onFrame      func(ctx context.Context, f ryn.Frame, elapsed time.Duration) error
 	onToolCall   func(ctx context.Context, call ryn.ToolCall)
 	onToolResult func(ctx context.Context, result ryn.ToolResult, elapsed time.Duration)
 	onError      func(ctx context.Context, err error)
@@ -206,9 +206,9 @@ func (h *fullHook) OnGenerateEnd(ctx context.Context, info hook.GenerateEndInfo)
 	}
 }
 
-func (h *fullHook) OnFrame(ctx context.Context, f ryn.Frame) error {
+func (h *fullHook) OnFrame(ctx context.Context, f ryn.Frame, elapsed time.Duration) error {
 	if h.onFrame != nil {
-		return h.onFrame(ctx, f)
+		return h.onFrame(ctx, f, elapsed)
 	}
 	return nil
 }

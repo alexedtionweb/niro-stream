@@ -253,3 +253,52 @@ func TestCloneMessageWithData(t *testing.T) {
 	assertNotNil(t, got.Messages[0].Parts[2].Result)
 	assertEqual(t, got.Messages[0].Parts[2].Result.CallID, "call1")
 }
+
+func TestCloneRequestDeepCopiesOptionPointers(t *testing.T) {
+t.Parallel()
+ctx := context.Background()
+
+temp := 0.7
+topP := 0.9
+topK := 40
+freq := 0.1
+pres := 0.2
+
+req := &ryn.Request{
+Model:    "m",
+Messages: []ryn.Message{ryn.UserText("hi")},
+Options: ryn.Options{
+Temperature:      &temp,
+TopP:             &topP,
+TopK:             &topK,
+FrequencyPenalty: &freq,
+PresencePenalty:  &pres,
+},
+}
+
+reg := registry.New()
+var cloned *ryn.Request
+reg.Register("a", ryn.ProviderFunc(func(ctx context.Context, r *ryn.Request) (*ryn.Stream, error) {
+cloned = r
+// Mutate the cloned request's pointer fields in-place.
+*r.Options.Temperature = 0.1
+*r.Options.TopP = 0.1
+*r.Options.TopK = 1
+*r.Options.FrequencyPenalty = 0.1
+*r.Options.PresencePenalty = 0.1
+return ryn.StreamFromSlice([]ryn.Frame{ryn.TextFrame("ok")}), nil
+}))
+
+router := registry.NewMultiTenantProvider(reg, registry.WithDefaultClient("a"))
+s, err := router.Generate(ctx, req)
+assertNoError(t, err)
+ryn.CollectText(ctx, s)
+assertNotNil(t, cloned)
+
+// Original request's pointer fields must be unchanged.
+assertEqual(t, *req.Options.Temperature, 0.7)
+assertEqual(t, *req.Options.TopP, 0.9)
+assertEqual(t, *req.Options.TopK, 40)
+assertEqual(t, *req.Options.FrequencyPenalty, 0.1)
+assertEqual(t, *req.Options.PresencePenalty, 0.2)
+}

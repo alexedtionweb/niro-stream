@@ -496,7 +496,7 @@ func TestOrchestratorToolStepExecError(t *testing.T) {
 
 	schema, _ := json.Marshal(map[string]any{"type": "object"})
 	def, _ := tools.NewToolDefinition(
-		"fail-tool",
+		"fail_tool",
 		"always fails",
 		json.RawMessage(schema),
 		func(ctx context.Context, rawArgs json.RawMessage) (any, error) {
@@ -511,7 +511,7 @@ func TestOrchestratorToolStepExecError(t *testing.T) {
 	o := agent.NewOrchestrator(rt, ts)
 
 	agentDef := &agent.AgentDefinition{
-		Steps: []agent.Step{{Type: "tool", ToolName: "fail-tool", ToolArgs: json.RawMessage(`{}`)}},
+		Steps: []agent.Step{{Type: "tool", ToolName: "fail_tool", ToolArgs: json.RawMessage(`{}`)}},
 	}
 	_, err := o.RunDefinition(ctx, "s1", agentDef)
 	assertErrorContains(t, err, "tool execution failed")
@@ -710,7 +710,7 @@ func TestNewDuplicateComponent(t *testing.T) {
 	assertErrorContains(t, err, "already registered")
 }
 
-func TestRuntimeRunStreamError(t *testing.T) {
+func TestRuntimeRunWithStreamError(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 
@@ -757,4 +757,108 @@ func TestOrchestratorPeerStepError(t *testing.T) {
 	}
 	_, err := o.RunDefinition(ctx, "s1", def)
 	assertErrorContains(t, err, "peer is down")
+}
+
+// ---------------------------------------------------------------------------
+// RunStream
+// ---------------------------------------------------------------------------
+
+func TestRuntimeRunStream(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	rt, err := agent.New(echoProvider("hello from stream"))
+	assertNoError(t, err)
+
+	stream, err := rt.RunStream(ctx, "", "hi")
+	assertNoError(t, err)
+	assertTrue(t, stream != nil)
+
+	var got strings.Builder
+	for stream.Next(ctx) {
+		if f := stream.Frame(); f.Kind == ryn.KindText {
+			got.WriteString(f.Text)
+		}
+	}
+	assertNoError(t, stream.Err())
+	assertEqual(t, got.String(), "hello from stream")
+}
+
+func TestRuntimeRunStreamSavesMemory(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	mem := agent.NewInMemoryMemory()
+	rt, err := agent.New(echoProvider("streaming answer"), agent.WithMemory(mem))
+	assertNoError(t, err)
+
+	stream, err := rt.RunStream(ctx, "sess1", "question")
+	assertNoError(t, err)
+
+	// Drain the stream fully so memory is saved.
+	for stream.Next(ctx) {
+	}
+	assertNoError(t, stream.Err())
+
+	// History must now contain the user turn and the assistant turn.
+	history, err := mem.Load(ctx, "sess1")
+	assertNoError(t, err)
+	assertEqual(t, len(history), 2)
+	assertEqual(t, string(history[0].Role), "user")
+	assertEqual(t, string(history[1].Role), "assistant")
+
+	// Second turn must build on the saved history.
+	stream2, err := rt.RunStream(ctx, "sess1", "follow-up")
+	assertNoError(t, err)
+	for stream2.Next(ctx) {
+	}
+	assertNoError(t, stream2.Err())
+
+	history2, _ := mem.Load(ctx, "sess1")
+	// 2 from first turn + 2 from second turn = 4
+	assertEqual(t, len(history2), 4)
+}
+
+func TestRuntimeRunStreamNilProvider(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	var rt *agent.Runtime
+	_, err := rt.RunStream(ctx, "", "hi")
+	assertTrue(t, err != nil)
+}
+
+func TestRuntimeRunStreamProviderError(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	rt, err := agent.New(errorProvider("provider crashed"))
+	assertNoError(t, err)
+
+	_, err = rt.RunStream(ctx, "", "hi")
+	assertErrorContains(t, err, "provider crashed")
+}
+
+func TestRuntimeRunStreamError(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	streamErrProvider := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+		out, em := ryn.NewStream(4)
+		go func() {
+			defer em.Close()
+			em.Error(fmt.Errorf("stream failed"))
+		}()
+		return out, nil
+	})
+
+	rt, err := agent.New(streamErrProvider)
+	assertNoError(t, err)
+
+	// RunStream: error surfaces from stream.Err(), not from RunStream itself.
+	stream, err := rt.RunStream(ctx, "", "hello")
+	assertNoError(t, err) // provider connect succeeded
+	for stream.Next(ctx) {
+	}
+	assertErrorContains(t, stream.Err(), "stream failed")
 }

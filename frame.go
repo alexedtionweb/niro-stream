@@ -126,6 +126,31 @@ func ControlFrame(sig Signal) Frame {
 	return Frame{Kind: KindControl, Signal: sig}
 }
 
+// --- Audio format MIME types ---
+//
+// These constants encode sample rate, bit depth, and channel count in a
+// single MIME string carried by Frame.Mime / Part.Mime. All formats are
+// raw uncompressed PCM (little-endian signed 16-bit, mono) unless noted.
+//
+// Use them with AudioFrame and AudioPart so consumers can decode without
+// additional out-of-band configuration.
+const (
+	// AudioPCM8k is 8 kHz 16-bit mono PCM — telephony grade (PSTN / G.711-compatible).
+	AudioPCM8k = "audio/pcm;rate=8000;bits=16;channels=1"
+
+	// AudioPCM16k is 16 kHz 16-bit mono PCM — standard ASR / Nova Sonic input.
+	AudioPCM16k = "audio/pcm;rate=16000;bits=16;channels=1"
+
+	// AudioPCM24k is 24 kHz 16-bit mono PCM — Nova Sonic output, OpenAI Realtime.
+	AudioPCM24k = "audio/pcm;rate=24000;bits=16;channels=1"
+
+	// AudioPCM44k is 44.1 kHz 16-bit mono PCM — CD quality.
+	AudioPCM44k = "audio/pcm;rate=44100;bits=16;channels=1"
+
+	// AudioPCM48k is 48 kHz 16-bit mono PCM — WebRTC / studio quality.
+	AudioPCM48k = "audio/pcm;rate=48000;bits=16;channels=1"
+)
+
 // --- Tool types ---
 
 // ToolCall represents an LLM's request to invoke a tool.

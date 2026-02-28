@@ -2,7 +2,19 @@ package ryn
 
 import (
 	"fmt"
+	"regexp"
 )
+
+// toolNameRe is the cross-provider safe tool name pattern.
+//
+// The most restrictive major provider (Amazon Bedrock) requires:
+//   - First character must be a letter (a-z or A-Z).
+//   - Remaining characters must be letters, digits, or underscores.
+//
+// OpenAI and Anthropic allow hyphens too, but using this stricter pattern
+// guarantees compatibility with all providers without needing per-provider
+// validation logic. Use underscores instead of hyphens in tool names.
+var toolNameRe = regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9_]*$`)
 
 // Validate checks if the Request is valid and returns a detailed Error if not.
 // This should be called before invoking Provider.Generate.
@@ -126,6 +138,9 @@ func (p *Part) Validate() error {
 func (t *Tool) Validate() error {
 	if t.Name == "" {
 		return fmt.Errorf("Tool.Name is required")
+	}
+	if !toolNameRe.MatchString(t.Name) {
+		return fmt.Errorf("Tool.Name %q is invalid: must start with a letter and contain only letters, digits, and underscores (required for cross-provider compatibility)", t.Name)
 	}
 	if t.Description == "" {
 		return fmt.Errorf("Tool.Description is required")

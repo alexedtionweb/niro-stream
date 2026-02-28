@@ -25,7 +25,11 @@ import (
 func Fan(ctx context.Context, fns ...func(context.Context) (*ryn.Stream, error)) *ryn.Stream {
 	out, emitter := ryn.NewStream(32)
 
-	var wg sync.WaitGroup
+	var (
+		wg       sync.WaitGroup
+		mu       sync.Mutex
+		firstErr error
+	)
 	wg.Add(len(fns))
 
 	for _, fn := range fns {
@@ -33,7 +37,11 @@ func Fan(ctx context.Context, fns ...func(context.Context) (*ryn.Stream, error))
 			defer wg.Done()
 			s, err := fn(ctx)
 			if err != nil {
-				emitter.Error(err)
+				mu.Lock()
+				if firstErr == nil {
+					firstErr = err
+				}
+				mu.Unlock()
 				return
 			}
 			for s.Next(ctx) {
@@ -42,14 +50,22 @@ func Fan(ctx context.Context, fns ...func(context.Context) (*ryn.Stream, error))
 				}
 			}
 			if err := s.Err(); err != nil {
-				emitter.Error(err)
+				mu.Lock()
+				if firstErr == nil {
+					firstErr = err
+				}
+				mu.Unlock()
 			}
 		}()
 	}
 
 	go func() {
 		wg.Wait()
-		emitter.Close()
+		if firstErr != nil {
+			emitter.Error(firstErr)
+		} else {
+			emitter.Close()
+		}
 	}()
 
 	return out

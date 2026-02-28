@@ -2,6 +2,7 @@ package middleware_test
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -101,4 +102,81 @@ func TestTracingProviderPreservesExistingTrace(t *testing.T) {
 
 	// Existing trace should be preserved.
 	assertEqual(t, receivedID, existingID)
+}
+
+func TestTracingProviderInjectsTraceIntoCtx(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background() // no trace
+
+	// Verify the trace context is stored in the ctx passed to the downstream
+	// provider, so derived child contexts inherit the same RequestID.
+	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+		// GetTraceContext on the received ctx should return the stored trace.
+		t1 := middleware.GetTraceContext(ctx)
+		// Create a derived context (simulating downstream middleware).
+		derived, cancel := context.WithCancel(ctx)
+		defer cancel()
+		t2 := middleware.GetTraceContext(derived)
+		if t1.RequestID != t2.RequestID {
+			t.Errorf("trace not stored in ctx: parent=%v child=%v", t1.RequestID, t2.RequestID)
+		}
+		assertTrue(t, t1.RequestID != "")
+		return ryn.StreamFromSlice([]ryn.Frame{ryn.TextFrame("ok")}), nil
+	})
+
+	provider := middleware.NewTracingProvider(mock)
+	stream, err := provider.Generate(ctx, &ryn.Request{Messages: []ryn.Message{ryn.UserText("test")}})
+	assertNoError(t, err)
+	text, _ := ryn.CollectText(ctx, stream)
+	assertEqual(t, text, "ok")
+}
+
+func TestTracingProviderUserIDPreserved(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	ctx = middleware.WithTraceContext(ctx, middleware.TraceContext{
+		RequestID: middleware.GenerateRequestID(),
+		UserID:    "user-42",
+		SessionID: "sess-1",
+	})
+
+	var gotUID, gotSID string
+	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+		trace := middleware.GetTraceContext(ctx)
+		gotUID = trace.UserID
+		gotSID = trace.SessionID
+		return ryn.StreamFromSlice([]ryn.Frame{ryn.TextFrame("ok")}), nil
+	})
+
+	provider := middleware.NewTracingProvider(mock)
+	stream, err := provider.Generate(ctx, &ryn.Request{Messages: []ryn.Message{ryn.UserText("x")}})
+	assertNoError(t, err)
+	ryn.CollectText(ctx, stream)
+	assertNoError(t, err)
+
+	assertEqual(t, gotUID, "user-42")
+	assertEqual(t, gotSID, "sess-1")
+}
+
+func TestTracingProviderNilProvider(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	// TracingProvider wraps a nil provider — Generate should return an error
+	// or panic gracefully (depends on downstream). We test that TracingProvider
+	// itself doesn't panic and that the error propagates.
+	var panicked bool
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				panicked = true
+			}
+		}()
+		tp := middleware.NewTracingProvider(ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+			return nil, fmt.Errorf("downstream error")
+		}))
+		_, err := tp.Generate(ctx, &ryn.Request{Messages: []ryn.Message{ryn.UserText("x")}})
+		assertTrue(t, err != nil)
+	}()
+	assertTrue(t, !panicked)
 }

@@ -175,6 +175,27 @@ func cloneRequest(req *ryn.Request) *ryn.Request {
 	if len(req.Options.Stop) > 0 {
 		out.Options.Stop = append([]string(nil), req.Options.Stop...)
 	}
+	// Deep-clone pointer fields so mutators cannot corrupt the caller's Options.
+	if req.Options.Temperature != nil {
+		v := *req.Options.Temperature
+		out.Options.Temperature = &v
+	}
+	if req.Options.TopP != nil {
+		v := *req.Options.TopP
+		out.Options.TopP = &v
+	}
+	if req.Options.TopK != nil {
+		v := *req.Options.TopK
+		out.Options.TopK = &v
+	}
+	if req.Options.FrequencyPenalty != nil {
+		v := *req.Options.FrequencyPenalty
+		out.Options.FrequencyPenalty = &v
+	}
+	if req.Options.PresencePenalty != nil {
+		v := *req.Options.PresencePenalty
+		out.Options.PresencePenalty = &v
+	}
 	return &out
 }
 

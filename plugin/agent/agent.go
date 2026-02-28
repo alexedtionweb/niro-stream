@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 
 	"ryn.dev/ryn"
@@ -132,21 +133,32 @@ func (rt *Runtime) Close() error {
 	return rt.host.CloseAll()
 }
 
-// Run executes one conversational turn.
+// loadMessages returns the full message slice for a turn: history + the new
+// user message. It is the single place that touches session memory on load.
+func (rt *Runtime) loadMessages(ctx context.Context, sessionID, input string) ([]ryn.Message, error) {
+	messages := make([]ryn.Message, 0, 8)
+	if rt.memory != nil && sessionID != "" {
+		history, err := rt.memory.Load(ctx, sessionID)
+		if err != nil {
+			return nil, err
+		}
+		messages = append(messages, history...)
+	}
+	messages = append(messages, ryn.UserText(input))
+	return messages, nil
+}
+
+// Run executes one conversational turn and blocks until the full response is
+// collected. Use RunStream when you need to emit tokens as they arrive.
 func (rt *Runtime) Run(ctx context.Context, sessionID string, input string) (TurnResult, error) {
 	if rt == nil || rt.provider == nil {
 		return TurnResult{}, fmt.Errorf("agent: runtime/provider is nil")
 	}
 
-	messages := make([]ryn.Message, 0, 8)
-	if rt.memory != nil && sessionID != "" {
-		history, err := rt.memory.Load(ctx, sessionID)
-		if err != nil {
-			return TurnResult{}, err
-		}
-		messages = append(messages, history...)
+	messages, err := rt.loadMessages(ctx, sessionID, input)
+	if err != nil {
+		return TurnResult{}, err
 	}
-	messages = append(messages, ryn.UserText(input))
 
 	req := &ryn.Request{
 		Model:    rt.model,
@@ -176,6 +188,72 @@ func (rt *Runtime) Run(ctx context.Context, sessionID string, input string) (Tur
 	}
 
 	return res, nil
+}
+
+// RunStream executes a conversational turn and returns a live stream of frames.
+// This is the preferred path for real-time output (voice, chat UI, code streaming).
+//
+// Memory is saved automatically once the stream is fully consumed by the caller.
+// If the context is canceled mid-stream (e.g. user disconnects), the partial
+// response is discarded and memory is NOT updated — the turn is treated as if it
+// never happened.
+//
+// Example — stream to an HTTP response:
+//
+//	stream, err := rt.RunStream(ctx, sessionID, userInput)
+//	for stream.Next(ctx) {
+//		fmt.Fprint(w, stream.Frame().Text)
+//	}
+func (rt *Runtime) RunStream(ctx context.Context, sessionID string, input string) (*ryn.Stream, error) {
+	if rt == nil || rt.provider == nil {
+		return nil, fmt.Errorf("agent: runtime/provider is nil")
+	}
+
+	messages, err := rt.loadMessages(ctx, sessionID, input)
+	if err != nil {
+		return nil, err
+	}
+
+	req := &ryn.Request{
+		Model:    rt.model,
+		Messages: messages,
+	}
+
+	src, err := rt.provider.Generate(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+
+	out, emitter := ryn.NewStream(32)
+	go func() {
+		defer emitter.Close()
+		var buf strings.Builder
+		for src.Next(ctx) {
+			f := src.Frame()
+			if f.Kind == ryn.KindText {
+				buf.WriteString(f.Text)
+			}
+			if err := emitter.Emit(ctx, f); err != nil {
+				// Consumer stopped reading (context canceled or closed).
+				// Do not save partial history.
+				return
+			}
+		}
+		if err := src.Err(); err != nil {
+			emitter.Error(err)
+			return
+		}
+		if resp := src.Response(); resp != nil {
+			emitter.SetResponse(resp)
+		}
+		// Save memory only after the full response has been delivered.
+		if rt.memory != nil && sessionID != "" {
+			nextHistory := append(messages, ryn.AssistantText(buf.String()))
+			// Ignore save errors — the stream has already been delivered.
+			_ = rt.memory.Save(ctx, sessionID, nextHistory)
+		}
+	}()
+	return out, nil
 }
 
 // CallPeer executes an agent-to-agent call.

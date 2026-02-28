@@ -9,6 +9,7 @@ import (
 // pipe is the shared state between a Stream and its Emitter.
 type pipe struct {
 	ch     chan Frame
+	done   chan struct{} // closed when the emitter is closed; guards ch close
 	err    atomic.Pointer[error]
 	once   sync.Once
 	closed atomic.Bool
@@ -105,20 +106,16 @@ type Emitter struct {
 //
 // Emit is safe to call concurrently with Close — a concurrent close
 // returns ErrClosed instead of panicking.
-func (e *Emitter) Emit(ctx context.Context, f Frame) (err error) {
+func (e *Emitter) Emit(ctx context.Context, f Frame) error {
 	if e.p.closed.Load() {
 		return ErrClosed
 	}
-	// Recover from send-on-closed-channel if Close() races between
-	// the check above and the channel send below (TOCTOU).
-	defer func() {
-		if r := recover(); r != nil {
-			err = ErrClosed
-		}
-	}()
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
+	case <-e.p.done:
+		// Emitter was closed concurrently.
+		return ErrClosed
 	case e.p.ch <- f:
 		return nil
 	}
@@ -141,6 +138,7 @@ func (e *Emitter) Error(err error) {
 func (e *Emitter) Close() {
 	e.p.once.Do(func() {
 		e.p.closed.Store(true)
+		close(e.p.done) // unblock any Emit calls waiting in select
 		close(e.p.ch)
 	})
 }
@@ -159,7 +157,7 @@ func (e *Emitter) Close() {
 //   - 16: general streaming (good default)
 //   - 64: batch-style processing
 func NewStream(bufSize int) (*Stream, *Emitter) {
-	p := &pipe{ch: make(chan Frame, bufSize)}
+	p := &pipe{ch: make(chan Frame, bufSize), done: make(chan struct{})}
 	return &Stream{p: p}, &Emitter{p: p}
 }
 

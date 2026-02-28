@@ -30,9 +30,12 @@ type Hook interface {
 	OnGenerateEnd(ctx context.Context, info GenerateEndInfo)
 
 	// OnFrame is called for each frame emitted by the provider.
+	// elapsed is the wall-clock duration since OnGenerateStart. Use it to
+	// measure time-to-first-token (TTFT) and inter-token jitter — critical
+	// metrics for real-time and telephony applications.
 	// This is the per-token hook — keep it extremely fast.
 	// A nil return is fine; return a non-nil error to abort the stream.
-	OnFrame(ctx context.Context, f ryn.Frame) error
+	OnFrame(ctx context.Context, f ryn.Frame, elapsed time.Duration) error
 
 	// OnToolCall is called when a tool call is about to be executed.
 	OnToolCall(ctx context.Context, call ryn.ToolCall)
@@ -108,10 +111,10 @@ func (m *multiHook) OnGenerateEnd(ctx context.Context, info GenerateEndInfo) {
 	}
 }
 
-func (m *multiHook) OnFrame(ctx context.Context, f ryn.Frame) error {
+func (m *multiHook) OnFrame(ctx context.Context, f ryn.Frame, elapsed time.Duration) error {
 	var firstErr error
 	for _, h := range m.hooks {
-		if err := h.OnFrame(ctx, f); err != nil && firstErr == nil {
+		if err := h.OnFrame(ctx, f, elapsed); err != nil && firstErr == nil {
 			firstErr = err
 		}
 	}
@@ -151,7 +154,7 @@ func (NoOpHook) OnGenerateStart(ctx context.Context, _ GenerateStartInfo) contex
 	return ctx
 }
 func (NoOpHook) OnGenerateEnd(context.Context, GenerateEndInfo)              {}
-func (NoOpHook) OnFrame(context.Context, ryn.Frame) error                    { return nil }
+func (NoOpHook) OnFrame(context.Context, ryn.Frame, time.Duration) error     { return nil }
 func (NoOpHook) OnToolCall(context.Context, ryn.ToolCall)                    {}
 func (NoOpHook) OnToolResult(context.Context, ryn.ToolResult, time.Duration) {}
 func (NoOpHook) OnError(context.Context, error)                              {}

@@ -233,7 +233,9 @@ func buildParams(model string, req *ryn.Request) oai.ChatCompletionNewParams {
 	// Messages
 	msgs := req.EffectiveMessages()
 	for _, msg := range msgs {
-		params.Messages = append(params.Messages, convertMessage(msg))
+		// RoleTool messages may carry multiple tool results (one per parallel tool
+		// call). OpenAI expects one tool message per result, so we expand them.
+		params.Messages = append(params.Messages, convertMessages(msg)...)
 	}
 
 	// Options
@@ -296,6 +298,27 @@ func buildParams(model string, req *ryn.Request) oai.ChatCompletionNewParams {
 	}
 
 	return params
+}
+
+// convertMessages converts a ryn.Message to one or more OpenAI message params.
+// RoleTool messages may contain multiple tool results (from parallel tool calls
+// in one round). OpenAI requires one tool message per result, so this function
+// expands them. All other roles produce exactly one param.
+func convertMessages(msg ryn.Message) []oai.ChatCompletionMessageParamUnion {
+	if msg.Role == ryn.RoleTool {
+		var out []oai.ChatCompletionMessageParamUnion
+		for _, p := range msg.Parts {
+			if p.Kind == ryn.KindToolResult && p.Result != nil {
+				out = append(out, oai.ToolMessage(p.Result.Content, p.Result.CallID))
+			}
+		}
+		if len(out) == 0 {
+			// Fallback: malformed message with no tool result parts.
+			out = append(out, oai.ToolMessage(extractText(msg), ""))
+		}
+		return out
+	}
+	return []oai.ChatCompletionMessageParamUnion{convertMessage(msg)}
 }
 
 func convertMessage(msg ryn.Message) oai.ChatCompletionMessageParamUnion {

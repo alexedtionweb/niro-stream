@@ -3,7 +3,6 @@ package tools
 import (
 	"context"
 	"encoding/json"
-	"sync"
 	"time"
 
 	"ryn.dev/ryn"
@@ -38,6 +37,10 @@ type ToolStreamOptions struct {
 	EmitToolResults bool
 	ToolTimeout     time.Duration
 	StreamBuffer    int
+	// Approver is an optional human-in-the-loop gate.
+	// When set, every tool call is passed to Approver.Approve before execution.
+	// A nil Approver means all calls proceed without review.
+	Approver ToolApprover
 }
 
 // DefaultToolStreamOptions returns low-latency defaults.
@@ -74,6 +77,7 @@ func NewToolLoopWithOptions(executor ToolExecutor, opts ToolStreamOptions) *Tool
 	if opts.StreamBuffer > 0 {
 		d.StreamBuffer = opts.StreamBuffer
 	}
+	d.Approver = opts.Approver
 	return &ToolLoop{executor: executor, opts: d}
 }
 
@@ -108,6 +112,16 @@ func (tl *ToolLoop) run(ctx context.Context, provider ryn.Provider, req *ryn.Req
 	for round := 0; round < tl.opts.MaxRounds; round++ {
 		cur.Messages = messages
 
+		// After the first round relax ToolChoice so the model can produce a
+		// final text response instead of being forced into another tool call.
+		// ToolChoiceRequired and func:name choices only make sense for round 0.
+		if round > 0 {
+			tc := cur.ToolChoice
+			if tc == ryn.ToolChoiceRequired || (len(tc) > 5 && tc[:5] == "func:") {
+				cur.ToolChoice = ryn.ToolChoiceAuto
+			}
+		}
+
 		stream, err := provider.Generate(ctx, &cur)
 		if err != nil {
 			return err
@@ -115,13 +129,31 @@ func (tl *ToolLoop) run(ctx context.Context, provider ryn.Provider, req *ryn.Req
 
 		assistantText := make([]byte, 0, 512)
 		toolCalls := make([]ryn.ToolCall, 0, 2)
+
+		// Parallel streaming dispatch: fire a goroutine for each tool call the
+		// moment its KindToolCall frame arrives — before the stream finishes.
+		// This overlaps tool execution with the tail of the LLM response,
+		// eliminating the "full drain then execute" latency penalty.
+		//
+		// Provider note: OpenAI and Bedrock emit KindToolCall mid-stream so
+		// goroutines fire early. Anthropic emits all tool calls after the last
+		// text token (SDK accumulator limitation), so the overlap is smaller
+		// but the goroutines still start before the stream channel closes.
+		var resultChans []chan ryn.ToolResult
+
 		for stream.Next(ctx) {
 			f := stream.Frame()
 			if f.Kind == ryn.KindText {
 				assistantText = append(assistantText, f.Text...)
 			}
 			if f.Kind == ryn.KindToolCall && f.Tool != nil {
-				toolCalls = append(toolCalls, *f.Tool)
+				call := *f.Tool
+				toolCalls = append(toolCalls, call)
+				if tl.opts.Parallel {
+					ch := make(chan ryn.ToolResult, 1)
+					resultChans = append(resultChans, ch)
+					go func(c ryn.ToolCall) { ch <- tl.execOne(ctx, c) }(call)
+				}
 			}
 			if err := out.Emit(ctx, f); err != nil {
 				return err
@@ -131,6 +163,17 @@ func (tl *ToolLoop) run(ctx context.Context, provider ryn.Provider, req *ryn.Req
 			return err
 		}
 		lastResp = stream.Response()
+
+		// Re-emit the inner stream's usage to the outer stream so callers of
+		// GenerateWithTools see correct token counts via stream.Usage().
+		// KindUsage frames are silently consumed by stream.Next() and never
+		// forwarded to out.Emit, so we must re-emit them explicitly here.
+		if u := stream.Usage(); u.InputTokens > 0 || u.OutputTokens > 0 || u.TotalTokens > 0 {
+			uCopy := u
+			if err := out.Emit(ctx, ryn.Frame{Kind: ryn.KindUsage, Usage: &uCopy}); err != nil {
+				return err
+			}
+		}
 
 		assistantMsg := assistantFromRound(string(assistantText), toolCalls)
 		if len(assistantMsg.Parts) > 0 {
@@ -144,19 +187,38 @@ func (tl *ToolLoop) run(ctx context.Context, provider ryn.Provider, req *ryn.Req
 			return nil
 		}
 
-		results := tl.executeTools(ctx, toolCalls)
+		// Collect tool results. Parallel mode drains the pre-fired channels;
+		// a ctx.Done() case here lets us abort immediately if the caller
+		// hangs up (e.g. barge-in on a voice call) without waiting for tools.
+		var results []ryn.ToolResult
+		if tl.opts.Parallel && len(resultChans) > 0 {
+			results = make([]ryn.ToolResult, len(resultChans))
+			for i, ch := range resultChans {
+				select {
+				case r := <-ch:
+					results[i] = r
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+			}
+		} else {
+			results = tl.executeTools(ctx, toolCalls)
+		}
+
+		// Group all tool results into a single RoleTool message.
+		// Anthropic requires every result for a single assistant turn to appear
+		// in one user-turn message. OpenAI and Bedrock providers split
+		// multi-part messages during encoding so they are unaffected.
+		toolMsgParts := make([]ryn.Part, 0, len(results))
 		for i := range results {
 			tr := results[i]
-			messages = append(messages, ryn.Message{
-				Role: ryn.RoleTool,
-				Parts: []ryn.Part{{
-					Kind: ryn.KindToolResult,
-					Result: &ryn.ToolResult{
-						CallID:  tr.CallID,
-						Content: tr.Content,
-						IsError: tr.IsError,
-					},
-				}},
+			toolMsgParts = append(toolMsgParts, ryn.Part{
+				Kind: ryn.KindToolResult,
+				Result: &ryn.ToolResult{
+					CallID:  tr.CallID,
+					Content: tr.Content,
+					IsError: tr.IsError,
+				},
 			})
 			if tl.opts.EmitToolResults {
 				res := tr
@@ -165,9 +227,9 @@ func (tl *ToolLoop) run(ctx context.Context, provider ryn.Provider, req *ryn.Req
 				}
 			}
 		}
+		messages = append(messages, ryn.Message{Role: ryn.RoleTool, Parts: toolMsgParts})
 	}
 
-	out.SetResponse(&ryn.ResponseMeta{FinishReason: "tool_calls"})
 	return ryn.NewErrorf(ryn.ErrCodeStreamError, "tool loop exceeded max rounds (%d)", tl.opts.MaxRounds)
 }
 
@@ -183,28 +245,44 @@ func assistantFromRound(text string, calls []ryn.ToolCall) ryn.Message {
 	return ryn.Message{Role: ryn.RoleAssistant, Parts: parts}
 }
 
+// executeTools runs calls serially (the parallel path fires goroutines in run()).
+// It bails early on context cancellation so a cancelled caller (e.g. voice
+// barge-in) doesn't burn resources on tools that will be discarded.
 func (tl *ToolLoop) executeTools(ctx context.Context, calls []ryn.ToolCall) []ryn.ToolResult {
 	results := make([]ryn.ToolResult, len(calls))
-	if !tl.opts.Parallel || len(calls) <= 1 {
-		for i := range calls {
-			results[i] = tl.execOne(ctx, calls[i])
-		}
-		return results
-	}
-	var wg sync.WaitGroup
-	wg.Add(len(calls))
 	for i := range calls {
-		i := i
-		go func() {
-			defer wg.Done()
-			results[i] = tl.execOne(ctx, calls[i])
-		}()
+		if err := ctx.Err(); err != nil {
+			for j := i; j < len(calls); j++ {
+				results[j] = ryn.ToolResult{
+					CallID:  calls[j].ID,
+					Content: err.Error(),
+					IsError: true,
+				}
+			}
+			return results
+		}
+		results[i] = tl.execOne(ctx, calls[i])
 	}
-	wg.Wait()
 	return results
 }
 
 func (tl *ToolLoop) execOne(ctx context.Context, call ryn.ToolCall) ryn.ToolResult {
+	// HITL: approval gate runs outside the tool timeout so the human has the
+	// full outer context deadline to respond, not the tool execution window.
+	if tl.opts.Approver != nil {
+		decision, err := tl.opts.Approver.Approve(ctx, call)
+		if err != nil {
+			return ryn.ToolResult{CallID: call.ID, Content: "approval error: " + err.Error(), IsError: true}
+		}
+		if !decision.Approved {
+			reason := decision.Reason
+			if reason == "" {
+				reason = "tool call was not approved"
+			}
+			return ryn.ToolResult{CallID: call.ID, Content: reason, IsError: true}
+		}
+	}
+
 	execCtx := ctx
 	cancel := func() {}
 	if tl.opts.ToolTimeout > 0 {
