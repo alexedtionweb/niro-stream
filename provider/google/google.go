@@ -1,56 +1,65 @@
-// Package google implements a Ryn Provider backed by the official
-// Google Generative AI Go SDK (github.com/google/generative-ai-go).
+// Package google implements a Ryn Provider backed by the unified
+// Google GenAI Go SDK (google.golang.org/genai).
 //
-// This is an opt-in provider module. Import it only when you need
-// Google Gemini models:
+// It supports two backends:
 //
-//	go get ryn.dev/ryn/provider/google
+//   - Google AI (Gemini API / AI Studio): authenticated with an API key.
+//   - Vertex AI: authenticated with Application Default Credentials.
 //
-// # SDK Access
+// # Google AI
 //
-// Use [Provider.Client] to access the underlying SDK client directly.
-// Use [WithRequestHook] or pass a [RequestHook] as Request.Extra to
-// modify the GenerativeModel before each request.
-//
-// # Usage
-//
-//	llm, _ := google.New(os.Getenv("GOOGLE_API_KEY"))
+//	llm, _ := google.New(os.Getenv("GEMINI_API_KEY"))
 //	defer llm.Close()
-//	stream, err := llm.Generate(ctx, &ryn.Request{
-//	    Model: "gemini-2.0-flash",
-//	    Messages: []ryn.Message{ryn.UserText("Hello")},
-//	})
+//
+// # Vertex AI
+//
+//	llm, _ := google.NewVertexAI("my-project", "us-central1")
+//	defer llm.Close()
+//
+// # Gemini Live (real-time bidirectional)
+//
+// Gemini Live uses a WebSocket-based protocol that is separate from the
+// request/response Provider interface. Access the raw SDK client to use it:
+//
+//	session, err := llm.Client().Live.Connect(ctx, model, nil)
+//
+// # SDK hooks
+//
+// Use [WithRequestHook] to inspect or modify the GenerateContentConfig before
+// each call. Use [RequestHook] as Request.Extra for per-request overrides.
 package google
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"iter"
+	"net/http"
+	"strings"
 
-	"github.com/google/generative-ai-go/genai"
-	"google.golang.org/api/iterator"
-	goption "google.golang.org/api/option"
+	"google.golang.org/genai"
 
 	"ryn.dev/ryn"
 )
 
-// RequestHook allows modifying the GenerativeModel before each request.
-// Use this to set SDK-specific parameters not exposed by ryn.Request.
+// RequestHook lets callers inspect or modify the GenerateContentConfig and
+// model name before every generate call.
 //
-// Provider-level:
+// Provider-level (all requests):
 //
-//	google.New(key, google.WithRequestHook(func(m *genai.GenerativeModel) {
-//	    m.SafetySettings = []*genai.SafetySetting{...}
+//	google.New(key, google.WithRequestHook(func(model string, cfg *genai.GenerateContentConfig) {
+//	    cfg.CandidateCount = 1
 //	}))
 //
 // Per-request (via Request.Extra):
 //
 //	stream, _ := llm.Generate(ctx, &ryn.Request{
 //	    Messages: msgs,
-//	    Extra: google.RequestHook(func(m *genai.GenerativeModel) { ... }),
+//	    Extra: google.RequestHook(func(model string, cfg *genai.GenerateContentConfig) { ... }),
 //	})
-type RequestHook func(model *genai.GenerativeModel)
+type RequestHook func(model string, cfg *genai.GenerateContentConfig)
 
-// Provider implements ryn.Provider using the Google Generative AI SDK.
+// Provider implements ryn.Provider using the Google GenAI SDK.
 type Provider struct {
 	client *genai.Client
 	model  string
@@ -63,136 +72,227 @@ var _ ryn.Provider = (*Provider)(nil)
 type Option func(*providerConfig)
 
 type providerConfig struct {
-	model   string
-	apiOpts []goption.ClientOption
-	hooks   []RequestHook
+	model       string
+	httpClient  *http.Client
+	httpOptions *genai.HTTPOptions
+	hooks       []RequestHook
 }
 
-// WithModel sets the default model.
+// WithModel sets the default model name (default: "gemini-2.0-flash").
 func WithModel(model string) Option {
 	return func(c *providerConfig) { c.model = model }
 }
 
-// WithClientOption appends a Google API client option.
-func WithClientOption(opt goption.ClientOption) Option {
-	return func(c *providerConfig) {
-		c.apiOpts = append(c.apiOpts, opt)
-	}
+// WithHTTPClient sets a custom *http.Client for all requests.
+// Primarily useful for testing (e.g. httptest.NewServer) and proxy setups.
+func WithHTTPClient(client *http.Client) Option {
+	return func(c *providerConfig) { c.httpClient = client }
 }
 
-// WithRequestHook registers a function called with the GenerativeModel
-// before each request. Multiple hooks are called in registration order.
+// WithHTTPOptions sets low-level HTTP options on the underlying client.
+// Use HTTPOptions.BaseURL to point at a test server or a proxy endpoint.
+func WithHTTPOptions(opts genai.HTTPOptions) Option {
+	return func(c *providerConfig) { c.httpOptions = &opts }
+}
+
+// WithRequestHook registers a hook invoked with the model name and
+// GenerateContentConfig before every request. Multiple hooks run in order.
 func WithRequestHook(fn RequestHook) Option {
-	return func(c *providerConfig) {
-		c.hooks = append(c.hooks, fn)
-	}
+	return func(c *providerConfig) { c.hooks = append(c.hooks, fn) }
 }
 
-// New creates a Google Gemini provider.
+// ---------------------------------------------------------------------------
+// Constructors
+// ---------------------------------------------------------------------------
+
+// New creates a Google AI (Gemini API / AI Studio) provider.
+//
+// apiKey must be non-empty. Get one at https://ai.google.dev/gemini-api/docs/api-key.
+// The GEMINI_API_KEY or GOOGLE_API_KEY environment variable is also read
+// automatically by the SDK if the key is not supplied here.
 func New(apiKey string, opts ...Option) (*Provider, error) {
-	cfg := &providerConfig{model: "gemini-2.0-flash"}
-	for _, o := range opts {
-		o(cfg)
+	if strings.TrimSpace(apiKey) == "" {
+		return nil, ryn.NewError(ryn.ErrCodeAuthenticationFailed,
+			"ryn/google: API key is required").WithProvider("google")
 	}
 
-	clientOpts := append([]goption.ClientOption{goption.WithAPIKey(apiKey)}, cfg.apiOpts...)
-	client, err := genai.NewClient(context.Background(), clientOpts...)
+	cfg := applyOpts(opts)
+
+	cc := &genai.ClientConfig{
+		APIKey:  apiKey,
+		Backend: genai.BackendGeminiAPI,
+	}
+	applyHTTP(cc, cfg)
+
+	client, err := genai.NewClient(context.Background(), cc)
 	if err != nil {
-		return nil, fmt.Errorf("ryn/google: new client: %w", err)
+		return nil, ryn.WrapError(ryn.ErrCodeProviderError,
+			"ryn/google: create client", err).WithProvider("google")
 	}
-
 	return &Provider{client: client, model: cfg.model, hooks: cfg.hooks}, nil
 }
 
-// NewFromClient creates a provider from an existing Google AI client.
-func NewFromClient(client *genai.Client, model string) *Provider {
-	return &Provider{client: client, model: model}
+// NewVertexAI creates a Vertex AI provider for the given GCP project and
+// region. Authentication uses Application Default Credentials (ADC).
+//
+// Run `gcloud auth application-default login` to set up local credentials.
+// In Cloud Run / GKE the workload identity is picked up automatically.
+//
+// projectID: GCP project (or set GOOGLE_CLOUD_PROJECT env var).
+// location:  GCP region, e.g. "us-central1" (or set GOOGLE_CLOUD_LOCATION).
+func NewVertexAI(projectID, location string, opts ...Option) (*Provider, error) {
+	if strings.TrimSpace(projectID) == "" {
+		return nil, ryn.NewError(ryn.ErrCodeInvalidRequest,
+			"ryn/google: Vertex AI project ID is required").WithProvider("google")
+	}
+	if strings.TrimSpace(location) == "" {
+		return nil, ryn.NewError(ryn.ErrCodeInvalidRequest,
+			"ryn/google: Vertex AI location is required").WithProvider("google")
+	}
+
+	cfg := applyOpts(opts)
+
+	cc := &genai.ClientConfig{
+		Backend:  genai.BackendVertexAI,
+		Project:  projectID,
+		Location: location,
+	}
+	applyHTTP(cc, cfg)
+
+	client, err := genai.NewClient(context.Background(), cc)
+	if err != nil {
+		return nil, ryn.WrapError(ryn.ErrCodeProviderError,
+			"ryn/google: create Vertex AI client", err).WithProvider("google")
+	}
+	return &Provider{client: client, model: cfg.model, hooks: cfg.hooks}, nil
 }
 
-// Client returns the underlying Google Generative AI client.
-// Use for direct SDK access when the ryn abstraction is insufficient.
+// NewFromClient creates a provider from a pre-built *genai.Client.
+// Use this when you need full control over client construction (custom
+// credentials, interceptors, etc.).
+func NewFromClient(client *genai.Client, model string, hooks ...RequestHook) *Provider {
+	return &Provider{client: client, model: model, hooks: hooks}
+}
+
+// ---------------------------------------------------------------------------
+// Provider interface
+// ---------------------------------------------------------------------------
+
+// Client returns the underlying *genai.Client.
+//
+// Use this to access APIs not exposed by the ryn.Provider interface, such as
+// Gemini Live real-time sessions:
+//
+//	session, err := provider.Client().Live.Connect(ctx, model, config)
 func (p *Provider) Client() *genai.Client { return p.client }
 
-// Close releases resources held by the provider.
-func (p *Provider) Close() error {
-	return p.client.Close()
-}
+// Close is a no-op for this provider. The underlying HTTP client used by
+// the Google GenAI SDK is stateless and requires no explicit teardown.
+// The method exists to satisfy common io.Closer patterns.
+func (p *Provider) Close() error { return nil }
 
 // Generate implements ryn.Provider.
 func (p *Provider) Generate(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+	if err := req.Validate(); err != nil {
+		return nil, err
+	}
+
 	modelName := req.Model
 	if modelName == "" {
 		modelName = p.model
 	}
 
-	model := p.client.GenerativeModel(modelName)
-	configureModel(model, req)
+	config := buildConfig(req)
 
-	// Provider-level hooks
 	for _, h := range p.hooks {
-		h(model)
+		h(modelName, config)
 	}
-	// Per-request hook via Extra
 	if hook, ok := req.Extra.(RequestHook); ok {
-		hook(model)
+		hook(modelName, config)
 	}
 
-	// Prepare content from messages
-	content, history := buildContent(req)
+	contents := buildContents(req)
+	if len(contents) == 0 {
+		return nil, ryn.NewError(ryn.ErrCodeInvalidRequest,
+			"ryn/google: request must contain at least one non-system message").
+			WithProvider("google")
+	}
 
-	cs := model.StartChat()
-	cs.History = history
-
-	iter := cs.SendMessageStream(ctx, content...)
+	seq := p.client.Models.GenerateContentStream(ctx, modelName, contents, config)
 
 	stream, emitter := ryn.NewStream(32)
-	go consume(ctx, iter, emitter)
+	go consume(ctx, seq, emitter, modelName)
 	return stream, nil
 }
 
-func consume(ctx context.Context, iter *genai.GenerateContentResponseIterator, out *ryn.Emitter) {
+// ---------------------------------------------------------------------------
+// Internal: stream consumer
+// ---------------------------------------------------------------------------
+
+func consume(
+	ctx context.Context,
+	seq iter.Seq2[*genai.GenerateContentResponse, error],
+	out *ryn.Emitter,
+	modelName string,
+) {
 	defer out.Close()
 
 	var totalInput, totalOutput int32
+	var finishReason string
+	var modelVersion string
+	var responseID string
+	var callIndex int
 
-	for {
-		resp, err := iter.Next()
-		if err == iterator.Done {
-			break
-		}
+	for resp, err := range seq {
 		if err != nil {
-			out.Error(fmt.Errorf("ryn/google: stream: %w", err))
+			out.Error(classifyError(err))
 			return
 		}
 
-		// Usage metadata
 		if resp.UsageMetadata != nil {
 			totalInput = resp.UsageMetadata.PromptTokenCount
 			totalOutput = resp.UsageMetadata.CandidatesTokenCount
+		}
+		if resp.ModelVersion != "" {
+			modelVersion = resp.ModelVersion
+		}
+		if resp.ResponseID != "" {
+			responseID = resp.ResponseID
 		}
 
 		if len(resp.Candidates) == 0 {
 			continue
 		}
-
 		cand := resp.Candidates[0]
+
+		if cand.FinishReason != "" && cand.FinishReason != genai.FinishReasonUnspecified {
+			finishReason = mapFinishReason(cand.FinishReason)
+		}
+
 		if cand.Content == nil {
 			continue
 		}
 
 		for _, part := range cand.Content.Parts {
-			switch v := part.(type) {
-			case genai.Text:
-				if err := out.Emit(ctx, ryn.TextFrame(string(v))); err != nil {
+			if part.Text != "" {
+				if err := out.Emit(ctx, ryn.TextFrame(part.Text)); err != nil {
 					return
 				}
-
-			case genai.FunctionCall:
-				args, _ := ryn.JSONMarshal(v.Args)
-				tc := &ryn.ToolCall{
-					Name: v.Name,
-					Args: args,
+			} else if part.FunctionCall != nil {
+				fc := part.FunctionCall
+				// Use the SDK-provided call ID when available (Gemini assigns
+				// these in the new SDK). Fall back to a name-based ID.
+				id := fc.ID
+				if id == "" {
+					id = fc.Name
+					if callIndex > 0 {
+						id = fmt.Sprintf("%s_%d", fc.Name, callIndex)
+					}
 				}
+				callIndex++
+
+				args, _ := ryn.JSONMarshal(fc.Args)
+				tc := &ryn.ToolCall{ID: id, Name: fc.Name, Args: args}
 				if err := out.Emit(ctx, ryn.ToolCallFrame(tc)); err != nil {
 					return
 				}
@@ -200,151 +300,250 @@ func consume(ctx context.Context, iter *genai.GenerateContentResponseIterator, o
 		}
 	}
 
-	// Emit final usage
+	if finishReason == "" {
+		finishReason = "stop"
+	}
+	if modelVersion == "" {
+		modelVersion = modelName
+	}
+
 	usage := &ryn.Usage{
 		InputTokens:  int(totalInput),
 		OutputTokens: int(totalOutput),
 		TotalTokens:  int(totalInput + totalOutput),
 	}
 	_ = out.Emit(ctx, ryn.UsageFrame(usage))
-
 	out.SetResponse(&ryn.ResponseMeta{
-		Usage: *usage,
+		Model:        modelVersion,
+		FinishReason: finishReason,
+		ID:           responseID,
+		Usage:        *usage,
 	})
 }
 
-func configureModel(model *genai.GenerativeModel, req *ryn.Request) {
-	// System instruction
-	if req.SystemPrompt != "" {
-		model.SystemInstruction = genai.NewUserContent(genai.Text(req.SystemPrompt))
+// ---------------------------------------------------------------------------
+// Internal: error classification
+// ---------------------------------------------------------------------------
+
+// classifyError maps a raw SDK error to a typed *ryn.Error with the correct
+// error code, retryability flag, and provider tag.
+func classifyError(err error) *ryn.Error {
+	// New SDK returns genai.APIError (value type) for HTTP errors.
+	var apiErr genai.APIError
+	if errors.As(err, &apiErr) {
+		code := ryn.ConvertHTTPStatusToCode(apiErr.Code)
+		msg := apiErr.Message
+		if msg == "" {
+			msg = apiErr.Status
+		}
+		return ryn.WrapError(code, msg, err).
+			WithProvider("google").
+			WithStatusCode(apiErr.Code)
 	}
 
-	// Options
+	if errors.Is(err, context.DeadlineExceeded) {
+		return ryn.WrapError(ryn.ErrCodeTimeout, "request timed out", err).
+			WithProvider("google")
+	}
+	if errors.Is(err, context.Canceled) {
+		return ryn.WrapError(ryn.ErrCodeContextCancelled, "context cancelled", err).
+			WithProvider("google")
+	}
+	return ryn.WrapError(ryn.ErrCodeStreamError, "stream error", err).
+		WithProvider("google")
+}
+
+// mapFinishReason converts a genai.FinishReason to the ryn canonical string.
+func mapFinishReason(r genai.FinishReason) string {
+	switch r {
+	case genai.FinishReasonStop:
+		return "stop"
+	case genai.FinishReasonMaxTokens:
+		return "length"
+	case genai.FinishReasonSafety,
+		genai.FinishReasonRecitation,
+		genai.FinishReasonLanguage,
+		genai.FinishReasonBlocklist,
+		genai.FinishReasonProhibitedContent,
+		genai.FinishReasonSPII,
+		genai.FinishReasonImageSafety:
+		return "content_filter"
+	case genai.FinishReasonMalformedFunctionCall,
+		genai.FinishReasonOther:
+		return "other"
+	default:
+		return "stop"
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Internal: request building
+// ---------------------------------------------------------------------------
+
+// buildConfig converts a ryn.Request into a *genai.GenerateContentConfig.
+func buildConfig(req *ryn.Request) *genai.GenerateContentConfig {
+	cfg := &genai.GenerateContentConfig{}
+
+	if req.SystemPrompt != "" {
+		cfg.SystemInstruction = &genai.Content{
+			Role:  "user",
+			Parts: []*genai.Part{{Text: req.SystemPrompt}},
+		}
+	}
+
 	if req.Options.MaxTokens > 0 {
-		n := int32(req.Options.MaxTokens)
-		model.MaxOutputTokens = &n
+		cfg.MaxOutputTokens = int32(req.Options.MaxTokens)
 	}
 	if req.Options.Temperature != nil {
 		t := float32(*req.Options.Temperature)
-		model.Temperature = &t
+		cfg.Temperature = &t
 	}
 	if req.Options.TopP != nil {
 		p := float32(*req.Options.TopP)
-		model.TopP = &p
+		cfg.TopP = &p
 	}
 	if req.Options.TopK != nil {
-		k := int32(*req.Options.TopK)
-		model.TopK = &k
+		k := float32(*req.Options.TopK)
+		cfg.TopK = &k
 	}
 	if len(req.Options.Stop) > 0 {
-		model.StopSequences = req.Options.Stop
+		cfg.StopSequences = req.Options.Stop
 	}
 
 	// Response format
 	switch req.ResponseFormat {
 	case "json":
-		model.ResponseMIMEType = "application/json"
+		cfg.ResponseMIMEType = "application/json"
+	case "json_schema":
+		cfg.ResponseMIMEType = "application/json"
+		if len(req.ResponseSchema) > 0 {
+			var schema genai.Schema
+			if err := ryn.JSONUnmarshal(req.ResponseSchema, &schema); err == nil {
+				cfg.ResponseSchema = &schema
+			}
+		}
 	}
 
-	// Tools
+	// Tools + ToolChoice
 	if len(req.Tools) > 0 {
-		var funcDecls []*genai.FunctionDeclaration
-		for _, tool := range req.Tools {
+		var decls []*genai.FunctionDeclaration
+		for _, t := range req.Tools {
 			fd := &genai.FunctionDeclaration{
-				Name:        tool.Name,
-				Description: tool.Description,
+				Name:        t.Name,
+				Description: t.Description,
 			}
-			if len(tool.Parameters) > 0 {
+			if len(t.Parameters) > 0 {
 				var schema genai.Schema
-				_ = ryn.JSONUnmarshal(tool.Parameters, &schema)
-				fd.Parameters = &schema
+				if err := ryn.JSONUnmarshal(t.Parameters, &schema); err == nil {
+					fd.Parameters = &schema
+				}
 			}
-			funcDecls = append(funcDecls, fd)
+			decls = append(decls, fd)
 		}
-		model.Tools = []*genai.Tool{{FunctionDeclarations: funcDecls}}
+		cfg.Tools = []*genai.Tool{{FunctionDeclarations: decls}}
+
+		switch req.ToolChoice {
+		case ryn.ToolChoiceNone:
+			cfg.ToolConfig = &genai.ToolConfig{
+				FunctionCallingConfig: &genai.FunctionCallingConfig{
+					Mode: genai.FunctionCallingConfigModeNone,
+				},
+			}
+		case ryn.ToolChoiceRequired:
+			cfg.ToolConfig = &genai.ToolConfig{
+				FunctionCallingConfig: &genai.FunctionCallingConfig{
+					Mode: genai.FunctionCallingConfigModeAny,
+				},
+			}
+		default:
+			// ToolChoiceAuto — SDK default, no explicit config needed.
+			// ToolChoiceFunc("name") — restrict to a single function.
+			if s := string(req.ToolChoice); strings.HasPrefix(s, "func:") {
+				name := strings.TrimPrefix(s, "func:")
+				cfg.ToolConfig = &genai.ToolConfig{
+					FunctionCallingConfig: &genai.FunctionCallingConfig{
+						Mode:                 genai.FunctionCallingConfigModeAny,
+						AllowedFunctionNames: []string{name},
+					},
+				}
+			}
+		}
 	}
+
+	return cfg
 }
 
-func buildContent(req *ryn.Request) ([]genai.Part, []*genai.Content) {
-	msgs := req.Messages
-
-	// Filter out system messages (handled via SystemInstruction)
-	var filtered []ryn.Message
-	for _, msg := range msgs {
+// buildContents converts Request.Messages into []*genai.Content for the API.
+// System messages are handled via GenerateContentConfig.SystemInstruction
+// and are excluded from the content array.
+func buildContents(req *ryn.Request) []*genai.Content {
+	var contents []*genai.Content
+	for _, msg := range req.Messages {
 		if msg.Role == ryn.RoleSystem {
 			continue
 		}
-		filtered = append(filtered, msg)
-	}
-
-	if len(filtered) == 0 {
-		return nil, nil
-	}
-
-	// Last message becomes the input; rest is history
-	last := filtered[len(filtered)-1]
-	history := filtered[:len(filtered)-1]
-
-	var histContent []*genai.Content
-	for _, msg := range history {
 		c := convertToContent(msg)
-		histContent = append(histContent, c)
+		if c != nil {
+			contents = append(contents, c)
+		}
 	}
-
-	return convertParts(last), histContent
+	return contents
 }
 
+// convertToContent maps a ryn.Message to a *genai.Content.
+//
+// Role mapping:
+//   - RoleUser      → "user"
+//   - RoleAssistant → "model"
+//   - RoleTool      → "user"  (FunctionResponse must be in a "user" turn per SDK)
 func convertToContent(msg ryn.Message) *genai.Content {
 	role := "user"
-	switch msg.Role {
-	case ryn.RoleAssistant:
+	if msg.Role == ryn.RoleAssistant {
 		role = "model"
-	case ryn.RoleTool:
-		role = "function"
 	}
-	return &genai.Content{
-		Role:  role,
-		Parts: convertParts(msg),
+	parts := convertParts(msg)
+	if len(parts) == 0 {
+		return nil
 	}
+	return &genai.Content{Role: role, Parts: parts}
 }
 
-func convertParts(msg ryn.Message) []genai.Part {
-	var parts []genai.Part
+// convertParts converts message parts to []*genai.Part.
+// An empty text part is added when the converted list would otherwise be empty
+// to satisfy the SDK requirement of at least one part per Content.
+func convertParts(msg ryn.Message) []*genai.Part {
+	var parts []*genai.Part
 	for _, p := range msg.Parts {
 		switch p.Kind {
 		case ryn.KindText:
-			parts = append(parts, genai.Text(p.Text))
+			parts = append(parts, &genai.Part{Text: p.Text})
 
-		case ryn.KindImage:
+		case ryn.KindImage, ryn.KindAudio, ryn.KindVideo:
 			if len(p.Data) > 0 {
-				parts = append(parts, genai.Blob{
-					MIMEType: p.Mime,
-					Data:     p.Data,
-				})
-			}
-
-		case ryn.KindAudio:
-			if len(p.Data) > 0 {
-				parts = append(parts, genai.Blob{
-					MIMEType: p.Mime,
-					Data:     p.Data,
-				})
-			}
-
-		case ryn.KindVideo:
-			if len(p.Data) > 0 {
-				parts = append(parts, genai.Blob{
-					MIMEType: p.Mime,
-					Data:     p.Data,
+				parts = append(parts, &genai.Part{
+					InlineData: &genai.Blob{MIMEType: p.Mime, Data: p.Data},
 				})
 			}
 
 		case ryn.KindToolResult:
 			if p.Result != nil {
-				name := p.Result.CallID
-				parts = append(parts, genai.FunctionResponse{
-					Name:     name,
-					Response: map[string]any{"result": p.Result.Content},
+				// Gemini API convention: use "output" key for results and
+				// "error" key for errors. The model understands both.
+				var response map[string]any
+				if p.Result.IsError {
+					response = map[string]any{"error": p.Result.Content}
+				} else {
+					response = map[string]any{"output": p.Result.Content}
+				}
+				parts = append(parts, &genai.Part{
+					FunctionResponse: &genai.FunctionResponse{
+						// ID correlates this response with the FunctionCall.ID.
+						// Name should be the function name; we store the call ID
+						// there since it encodes the name (see consume()).
+						ID:       p.Result.CallID,
+						Name:     p.Result.CallID,
+						Response: response,
+					},
 				})
 			}
 
@@ -352,15 +551,39 @@ func convertParts(msg ryn.Message) []genai.Part {
 			if p.Tool != nil {
 				var args map[string]any
 				_ = ryn.JSONUnmarshal(p.Tool.Args, &args)
-				parts = append(parts, genai.FunctionCall{
-					Name: p.Tool.Name,
-					Args: args,
+				parts = append(parts, &genai.Part{
+					FunctionCall: &genai.FunctionCall{
+						ID:   p.Tool.ID,
+						Name: p.Tool.Name,
+						Args: args,
+					},
 				})
 			}
 		}
 	}
 	if len(parts) == 0 {
-		parts = append(parts, genai.Text(""))
+		parts = append(parts, &genai.Part{Text: ""})
 	}
 	return parts
+}
+
+// ---------------------------------------------------------------------------
+// Internal helpers
+// ---------------------------------------------------------------------------
+
+func applyOpts(opts []Option) *providerConfig {
+	cfg := &providerConfig{model: "gemini-2.0-flash"}
+	for _, o := range opts {
+		o(cfg)
+	}
+	return cfg
+}
+
+func applyHTTP(cc *genai.ClientConfig, cfg *providerConfig) {
+	if cfg.httpClient != nil {
+		cc.HTTPClient = cfg.httpClient
+	}
+	if cfg.httpOptions != nil {
+		cc.HTTPOptions = *cfg.httpOptions
+	}
 }
