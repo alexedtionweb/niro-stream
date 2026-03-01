@@ -40,6 +40,9 @@ type Part struct {
 
 	// Tool result (KindToolResult) — for tool messages
 	Result *ToolResult
+
+	// Provider-specific/experimental payload (KindCustom)
+	Custom *ExperimentalFrame
 }
 
 // --- Message constructors ---
@@ -122,4 +125,9 @@ func ToolCallPart(call *ToolCall) Part {
 // ToolResultPart creates a tool result Part (for tool messages).
 func ToolResultPart(result *ToolResult) Part {
 	return Part{Kind: KindToolResult, Result: result}
+}
+
+// CustomPart creates a Part carrying an experimental/provider-specific payload.
+func CustomPart(custom *ExperimentalFrame) Part {
+	return Part{Kind: KindCustom, Custom: custom}
 }

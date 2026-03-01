@@ -86,4 +86,10 @@ func TestPartConstructors(t *testing.T) {
 		assertEqual(t, p.Kind, niro.KindToolResult)
 		assertEqual(t, p.Result.Content, "success")
 	})
+
+	t.Run("CustomPart", func(t *testing.T) {
+		p := niro.CustomPart(&niro.ExperimentalFrame{Type: "reasoning_summary", Data: "ok"})
+		assertEqual(t, p.Kind, niro.KindCustom)
+		assertEqual(t, p.Custom.Type, "reasoning_summary")
+	})
 }

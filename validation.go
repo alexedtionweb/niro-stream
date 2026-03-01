@@ -129,6 +129,15 @@ func (p *Part) Validate() error {
 		}
 		return p.Result.Validate()
 
+	case KindCustom:
+		if p.Custom == nil {
+			return fmt.Errorf("KindCustom requires Custom payload")
+		}
+		if p.Custom.Type == "" {
+			return fmt.Errorf("KindCustom requires Custom.Type")
+		}
+		return nil
+
 	default:
 		return fmt.Errorf("unknown Kind %d", p.Kind)
 	}

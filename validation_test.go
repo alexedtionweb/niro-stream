@@ -190,6 +190,24 @@ func TestPartValidation(t *testing.T) {
 		assertNil(t, p.Validate())
 	})
 
+	t.Run("CustomNil", func(t *testing.T) {
+		p := niro.Part{Kind: niro.KindCustom}
+		assertNotNil(t, p.Validate())
+	})
+
+	t.Run("CustomMissingType", func(t *testing.T) {
+		p := niro.Part{
+			Kind:   niro.KindCustom,
+			Custom: &niro.ExperimentalFrame{Data: "x"},
+		}
+		assertNotNil(t, p.Validate())
+	})
+
+	t.Run("CustomValid", func(t *testing.T) {
+		p := niro.CustomPart(&niro.ExperimentalFrame{Type: "reasoning_summary", Data: "x"})
+		assertNil(t, p.Validate())
+	})
+
 	t.Run("UnknownKind", func(t *testing.T) {
 		p := niro.Part{Kind: niro.Kind(99)}
 		assertNotNil(t, p.Validate())

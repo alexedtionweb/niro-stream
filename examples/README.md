@@ -16,6 +16,7 @@ can swap backends without editing code.
 | **Google Gemini**  | `GEMINI_API_KEY`               | Get one at [aistudio.google.com](https://aistudio.google.com/apikey) |
 | **Amazon Bedrock** | `AWS_REGION` + AWS credentials | See [credential chain](#bedrock-credentials)                         |
 | **Ollama (local)** | _(none)_                       | Ollama must be running on `localhost:11434`                          |
+| **ElevenLabs**     | `ELEVENLABS_API_KEY`           | Used by the `elevenlabs` demo (TTS + STT)                             |
 
 ### Bedrock credentials
 
@@ -205,6 +206,29 @@ OPENAI_API_KEY=sk-...  go run ./tools
 loop := tools.NewToolLoop(ts, 5 /* maxRounds */)
 stream, err := loop.GenerateWithTools(ctx, llm, req)
 // stream contains only the final text response — tool round-trips are hidden
+```
+
+---
+
+### `elevenlabs` — TTS + STT (speech)
+
+Demonstrates:
+
+- **TTS**: synthesize text into an audio file (streams audio frames)
+- **STT (batch)**: transcribe an audio file into text (HTTP)
+- **STT (realtime)**: transcribe streamed audio frames into text (WebSocket)
+
+```bash
+ELEVENLABS_API_KEY=...  go run ./elevenlabs tts -text "Hello from Niro" -out hello.mp3
+ELEVENLABS_API_KEY=...  go run ./elevenlabs stt -in sample.wav
+ELEVENLABS_API_KEY=...  go run ./elevenlabs stt-stream -in sample.pcm
+```
+
+For `stt-stream`, the recommended input is **raw PCM** (`s16le`, mono, 16kHz).
+Example conversion:
+
+```bash
+ffmpeg -i input.wav -f s16le -ac 1 -ar 16000 sample.pcm
 ```
 
 ---

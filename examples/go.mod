@@ -5,13 +5,14 @@ go 1.24.0
 toolchain go1.24.2
 
 require (
-	github.com/aws/aws-sdk-go-v2/config v1.27.27
 	github.com/alexedtionweb/niro-stream v0.0.0
 	github.com/alexedtionweb/niro-stream/provider/anthropic v0.0.0
 	github.com/alexedtionweb/niro-stream/provider/bedrock v0.0.0-00010101000000-000000000000
+	github.com/alexedtionweb/niro-stream/provider/elevenlabs v0.0.0
 	github.com/alexedtionweb/niro-stream/provider/google v0.0.0-00010101000000-000000000000
 	github.com/alexedtionweb/niro-stream/provider/openai v0.0.0
 	github.com/alexedtionweb/niro-stream/provider/realtime v0.0.0-00010101000000-000000000000
+	github.com/aws/aws-sdk-go-v2/config v1.27.27
 )
 
 require (
@@ -60,6 +61,7 @@ replace (
 	github.com/alexedtionweb/niro-stream => ..
 	github.com/alexedtionweb/niro-stream/provider/anthropic => ../provider/anthropic
 	github.com/alexedtionweb/niro-stream/provider/bedrock => ../provider/bedrock
+	github.com/alexedtionweb/niro-stream/provider/elevenlabs => ../provider/elevenlabs
 	github.com/alexedtionweb/niro-stream/provider/google => ../provider/google
 	github.com/alexedtionweb/niro-stream/provider/openai => ../provider/openai
 	github.com/alexedtionweb/niro-stream/provider/realtime => ../provider/realtime

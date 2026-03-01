@@ -13,6 +13,7 @@ const (
 	KindToolCall                   // Tool invocation request from LLM
 	KindToolResult                 // Tool invocation result
 	KindUsage                      // Token usage report
+	KindCustom                     // Experimental/provider-specific payload
 	KindControl                    // Pipeline control signal
 )
 
@@ -33,6 +34,8 @@ func (k Kind) String() string {
 		return "tool_result"
 	case KindUsage:
 		return "usage"
+	case KindCustom:
+		return "custom"
 	case KindControl:
 		return "control"
 	default:
@@ -50,14 +53,22 @@ func (k Kind) String() string {
 // Frames are passed by value through channels. They are small and
 // most fields are zero for any given Kind.
 type Frame struct {
-	Kind   Kind        // Discriminator — always check this first
-	Text   string      // Token text (KindText)
-	Data   []byte      // Binary payload (KindAudio, KindImage, KindVideo)
-	Mime   string      // MIME type for Data (e.g. "audio/pcm", "image/png")
-	Tool   *ToolCall   // Tool call request (KindToolCall)
-	Result *ToolResult // Tool call result (KindToolResult)
-	Usage  *Usage      // Token usage (KindUsage) — emitted by providers at end of stream
-	Signal Signal      // Control signal (KindControl)
+	Kind   Kind               // Discriminator — always check this first
+	Text   string             // Token text (KindText)
+	Data   []byte             // Binary payload (KindAudio, KindImage, KindVideo)
+	Mime   string             // MIME type for Data (e.g. "audio/pcm", "image/png")
+	Tool   *ToolCall          // Tool call request (KindToolCall)
+	Result *ToolResult        // Tool call result (KindToolResult)
+	Usage  *Usage             // Token usage (KindUsage) — emitted by providers at end of stream
+	Custom *ExperimentalFrame // Provider-specific/experimental payload (KindCustom)
+	Signal Signal             // Control signal (KindControl)
+}
+
+// ExperimentalFrame carries provider-specific data without expanding core kinds.
+// Type is an application/provider-defined discriminator (e.g. "reasoning_summary").
+type ExperimentalFrame struct {
+	Type string
+	Data any
 }
 
 // Signal represents a pipeline control signal.
@@ -119,6 +130,11 @@ func ToolResultFrame(result *ToolResult) Frame {
 // UsageFrame creates a Frame carrying token usage data.
 func UsageFrame(u *Usage) Frame {
 	return Frame{Kind: KindUsage, Usage: u}
+}
+
+// CustomFrame creates a Frame carrying an experimental/provider-specific payload.
+func CustomFrame(c *ExperimentalFrame) Frame {
+	return Frame{Kind: KindCustom, Custom: c}
 }
 
 // ControlFrame creates a Frame carrying a control signal.
@@ -200,6 +216,13 @@ type Usage struct {
 	// E.g. cached tokens, audio tokens, reasoning tokens.
 	Detail map[string]int
 }
+
+const (
+	// UsageReasoningTokens is the standard key for reasoning token count.
+	UsageReasoningTokens = "reasoning_tokens"
+	// UsageReasoningCost is the standard key for provider-reported reasoning cost units.
+	UsageReasoningCost = "reasoning_cost"
+)
 
 // Add accumulates usage from another Usage into this one.
 func (u *Usage) Add(other *Usage) {

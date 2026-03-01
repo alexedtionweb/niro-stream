@@ -15,6 +15,7 @@ import (
 //   - Emit KindText frames for each text token delta
 //   - Emit KindToolCall frames for completed tool calls
 //   - Emit KindUsage frames with token counts (consumed automatically by Stream)
+//   - Optionally emit KindCustom frames for provider-specific extensions
 //   - Set ResponseMeta via Emitter.SetResponse before closing
 //   - Respect context cancellation
 //
@@ -124,6 +125,9 @@ type Options struct {
 	FrequencyPenalty *float64 // Frequency penalty (OpenAI)
 	PresencePenalty  *float64 // Presence penalty (OpenAI)
 	Stop             []string // Stop sequences
+	// ExperimentalReasoning enables provider-specific reasoning extensions.
+	// Providers may emit KindCustom frames (summaries/traces) when enabled.
+	ExperimentalReasoning bool
 }
 
 // --- Option helpers ---

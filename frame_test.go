@@ -61,6 +61,13 @@ func TestFrameConstructors(t *testing.T) {
 		assertEqual(t, f.Kind, niro.KindControl)
 		assertEqual(t, f.Signal, niro.SignalFlush)
 	})
+
+	t.Run("CustomFrame", func(t *testing.T) {
+		c := &niro.ExperimentalFrame{Type: "reasoning_summary", Data: "condensed trace"}
+		f := niro.CustomFrame(c)
+		assertEqual(t, f.Kind, niro.KindCustom)
+		assertEqual(t, f.Custom.Type, "reasoning_summary")
+	})
 }
 
 func TestKindString(t *testing.T) {
@@ -76,6 +83,7 @@ func TestKindString(t *testing.T) {
 		{niro.KindToolCall, "tool_call"},
 		{niro.KindToolResult, "tool_result"},
 		{niro.KindUsage, "usage"},
+		{niro.KindCustom, "custom"},
 		{niro.KindControl, "control"},
 		{niro.Kind(0), "unknown"},
 	}
@@ -108,9 +116,9 @@ func TestUsageAdd(t *testing.T) {
 	assertEqual(t, u.Detail["cached"], 5)
 
 	// Add with detail again
-	u.Add(&niro.Usage{Detail: map[string]int{"cached": 3, "reasoning": 10}})
+	u.Add(&niro.Usage{Detail: map[string]int{"cached": 3, niro.UsageReasoningTokens: 10}})
 	assertEqual(t, u.Detail["cached"], 8)
-	assertEqual(t, u.Detail["reasoning"], 10)
+	assertEqual(t, u.Detail[niro.UsageReasoningTokens], 10)
 
 	// Add nil is safe
 	u.Add(nil)
