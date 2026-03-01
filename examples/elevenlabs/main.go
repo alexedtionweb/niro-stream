@@ -229,7 +229,9 @@ func runSTTStream(args []string) {
 		defer emitter.Close()
 		for off := 0; off < len(audio); off += *frameBytes {
 			end := min(off+*frameBytes, len(audio))
-			_ = emitter.Emit(ctx, niro.AudioFrame(audio[off:end], niro.AudioPCM16k))
+			if err := emitter.Emit(ctx, niro.AudioFrame(audio[off:end], niro.AudioPCM16k)); err != nil {
+				return
+			}
 			if *frameDelay > 0 {
 				time.Sleep(*frameDelay)
 			}

@@ -55,6 +55,7 @@ Frame is the fundamental unit of data. It is a **tagged union** — a single str
 │ Tool     │ *ToolCall — tool invocation from LLM           │
 │ Result   │ *ToolResult — tool execution result            │
 │ Usage    │ *Usage — token usage report                    │
+│ Custom   │ *ExperimentalFrame — extension payload         │
 │ Signal   │ Signal — control (flush, eot, abort)           │
 └──────────┴───────────────────────────────────────────────┘
 ```
@@ -81,6 +82,7 @@ The Frame is the universal carrier. A single Stream can carry interleaved text, 
 | `KindToolCall`   | `Tool`         | `*ToolCall` pointer       | No            |
 | `KindToolResult` | `Result`       | `*ToolResult` pointer     | No            |
 | `KindUsage`      | `Usage`        | `*Usage` pointer          | Auto-consumed |
+| `KindCustom`     | `Custom`       | `*ExperimentalFrame`      | Optional      |
 | `KindControl`    | `Signal`       | Zero (uint8)              | No            |
 
 ## Stream & Emitter
@@ -135,6 +137,11 @@ for stream.Next(ctx) {
 }
 usage := stream.Usage() // {InputTokens: 10, OutputTokens: 1}
 ```
+
+Reasoning/accounting metadata uses stable keys in `Usage.Detail`, including:
+
+- `niro.UsageReasoningTokens`
+- `niro.UsageReasoningCost`
 
 ### ResponseMeta
 
@@ -258,6 +265,8 @@ type Request struct {
     Extra          any             // Provider-specific SDK hooks (see below)
 }
 ```
+
+`Options.ExperimentalReasoning` is an explicit opt-in gate for provider reasoning extensions. Unsupported providers should return an error rather than silently ignoring it.
 
 `EffectiveMessages()` returns Messages with SystemPrompt prepended as a system message.
 

@@ -88,6 +88,13 @@ func New(baseURL, apiKey string, opts ...Option) *Provider {
 
 // Generate implements niro.Provider.
 func (p *Provider) Generate(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
+	if req == nil {
+		return nil, fmt.Errorf("niro/compat: nil request")
+	}
+	if req.Options.ExperimentalReasoning {
+		return nil, fmt.Errorf("niro/compat: experimental reasoning is not supported")
+	}
+
 	model := req.Model
 	if model == "" {
 		model = p.model

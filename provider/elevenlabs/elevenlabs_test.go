@@ -1000,3 +1000,66 @@ func TestTranscribeStreamWSAPIKey(t *testing.T) {
 		t.Errorf("API key = %q, want %q", seenKey, "secret-key-123")
 	}
 }
+
+func TestReadAPIErrorBodyLimit(t *testing.T) {
+	huge := strings.Repeat("x", 8000)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(huge))
+	}))
+	defer srv.Close()
+
+	p := newTestProvider(srv)
+	_, err := p.Synthesize(context.Background(), &niro.TTSRequest{Text: "hello"})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	got := err.Error()
+	if !strings.Contains(got, "400") {
+		t.Fatalf("expected status code in error, got %q", got)
+	}
+	// Should be bounded by readAPIError limit instead of dumping full body.
+	if len(got) > 4300 {
+		t.Fatalf("error too large (%d chars), expected bounded body", len(got))
+	}
+}
+
+func TestTranscribeStreamAbruptServerCloseReturnsError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upgrader := websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }}
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		// Abrupt close without normal close frame.
+		_ = conn.UnderlyingConn().Close()
+	}))
+	defer srv.Close()
+
+	audioStream, audioEmitter := niro.NewStream(1)
+	go func() {
+		defer audioEmitter.Close()
+		_ = audioEmitter.Emit(context.Background(), niro.AudioFrame([]byte{1, 2}, niro.AudioPCM16k))
+	}()
+
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
+	p := New("test-key", WithWSURL(wsURL))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	stream, err := p.Transcribe(ctx, &niro.STTRequest{
+		AudioStream: audioStream,
+		InputFormat: niro.AudioPCM16k,
+	})
+	if err != nil {
+		t.Fatalf("Transcribe: %v", err)
+	}
+	_, gotErr := collect(ctx, stream)
+	if gotErr == nil {
+		t.Fatal("expected stream error for abrupt ws close")
+	}
+	if !strings.Contains(gotErr.Error(), "ws") {
+		t.Fatalf("expected ws-related error, got %v", gotErr)
+	}
+}

@@ -449,6 +449,103 @@ func TestCacheMissForwardsResponse(t *testing.T) {
 	assertEqual(t, resp2.FinishReason, "stop")
 }
 
+func TestCacheHitMutationIsolation(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	mock := niro.ProviderFunc(func(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
+		out, em := niro.NewStream(4)
+		go func() {
+			defer em.Close()
+			_ = em.Emit(ctx, niro.TextFrame("text"))
+			_ = em.Emit(ctx, niro.UsageFrame(&niro.Usage{
+				InputTokens:  1,
+				OutputTokens: 2,
+				TotalTokens:  3,
+				Detail:       map[string]int{"cached": 1},
+			}))
+			em.SetResponse(&niro.ResponseMeta{
+				Model: "model-x",
+				ProviderMeta: map[string]any{
+					"trace_id": "abc",
+				},
+			})
+		}()
+		return out, nil
+	})
+
+	cache := middleware.NewCache(middleware.CacheOptions{MaxEntries: 100})
+	provider := cache.Wrap(mock)
+	req := &niro.Request{Model: "model-x", Messages: []niro.Message{niro.UserText("x")}}
+
+	// Warm cache.
+	s1, err := provider.Generate(ctx, req)
+	assertNoError(t, err)
+	_, _ = niro.CollectText(ctx, s1)
+
+	// Hit and mutate returned metadata/usage.
+	s2, err := provider.Generate(ctx, req)
+	assertNoError(t, err)
+	_, _ = niro.CollectText(ctx, s2)
+	resp2 := s2.Response()
+	assertNotNil(t, resp2)
+	resp2.ProviderMeta["trace_id"] = "mutated"
+	u2 := s2.Usage()
+	u2.Detail["cached"] = 999
+
+	// Next hit must remain unchanged.
+	s3, err := provider.Generate(ctx, req)
+	assertNoError(t, err)
+	_, _ = niro.CollectText(ctx, s3)
+	resp3 := s3.Response()
+	assertNotNil(t, resp3)
+	assertEqual(t, resp3.ProviderMeta["trace_id"], "abc")
+	assertEqual(t, s3.Usage().Detail["cached"], 1)
+}
+
+func TestCacheHitFrameIsolation(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	audioBytes := []byte{1, 2, 3, 4}
+	toolArgs := []byte(`{"city":"NYC"}`)
+	mock := niro.ProviderFunc(func(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
+		return niro.StreamFromSlice([]niro.Frame{
+			niro.AudioFrame(audioBytes, "audio/pcm"),
+			niro.ToolCallFrame(&niro.ToolCall{ID: "c1", Name: "weather", Args: toolArgs}),
+		}), nil
+	})
+
+	cache := middleware.NewCache(middleware.CacheOptions{MaxEntries: 100})
+	provider := cache.Wrap(mock)
+	req := &niro.Request{Model: "m", Messages: []niro.Message{niro.UserText("x")}}
+
+	// Warm.
+	s1, err := provider.Generate(ctx, req)
+	assertNoError(t, err)
+	frames1, err := niro.Collect(ctx, s1)
+	assertNoError(t, err)
+	assertEqual(t, len(frames1), 2)
+
+	// Hit and mutate frame payloads in-place.
+	s2, err := provider.Generate(ctx, req)
+	assertNoError(t, err)
+	frames2, err := niro.Collect(ctx, s2)
+	assertNoError(t, err)
+	assertEqual(t, len(frames2), 2)
+	frames2[0].Data[0] = 99
+	frames2[1].Tool.Args[2] = 'X'
+
+	// Next hit should not observe mutation.
+	s3, err := provider.Generate(ctx, req)
+	assertNoError(t, err)
+	frames3, err := niro.Collect(ctx, s3)
+	assertNoError(t, err)
+	assertEqual(t, len(frames3), 2)
+	assertEqual(t, frames3[0].Data[0], byte(1))
+	assertEqual(t, string(frames3[1].Tool.Args), `{"city":"NYC"}`)
+}
+
 func TestCacheRemoveMiddleEntry(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

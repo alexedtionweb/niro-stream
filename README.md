@@ -173,6 +173,17 @@ niro.AudioFrame(pcmChunk, "audio/pcm")                           // audio
 niro.ImageFrame(pngBytes, "image/png")                            // image
 niro.ToolCallFrame(&niro.ToolCall{ID: "1", Name: "fn", Args: j})  // tool call
 niro.UsageFrame(&niro.Usage{InputTokens: 10, OutputTokens: 50})   // usage report
+niro.CustomFrame(&niro.ExperimentalFrame{
+    Type: "reasoning_summary",
+    Data: "condensed reasoning output",
+}) // provider-specific extension
+```
+
+For reasoning accounting, use stable usage-detail keys:
+
+```go
+usage.Detail[niro.UsageReasoningTokens] = 128
+usage.Detail[niro.UsageReasoningCost] = 42 // provider-defined units
 ```
 
 ### Stream & Emitter
@@ -196,6 +207,10 @@ for stream.Next(ctx) {
 **Usage auto-accumulation**: KindUsage frames are consumed silently by `stream.Next()` and accumulated in `stream.Usage()`. Providers emit them; your application reads the totals after streaming.
 
 **ResponseMeta**: Providers set model name, finish reason, and response ID via `Emitter.SetResponse()`. Access it after streaming with `stream.Response()`.
+
+### Experimental reasoning
+
+`Options.ExperimentalReasoning` is an opt-in flag for provider-specific reasoning extensions (for example, `KindCustom` summaries/traces). Providers that do not support it should return an explicit error instead of silently ignoring the option.
 
 ### Processor & Pipeline
 

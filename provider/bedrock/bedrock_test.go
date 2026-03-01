@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -1156,6 +1157,68 @@ func TestGenerate_UnknownError(t *testing.T) {
 
 func TestFinishReason_Unknown(t *testing.T) {
 	assertFinishReason(t, "some_future_reason", "other")
+}
+
+func TestGenerate_NilRequest(t *testing.T) {
+	p := &Provider{}
+	_, err := p.Generate(context.Background(), nil)
+	if err == nil || !contains(err.Error(), "nil request") {
+		t.Fatalf("expected nil request error, got %v", err)
+	}
+}
+
+func TestGenerate_ExperimentalReasoningUnsupported(t *testing.T) {
+	p := &Provider{}
+	_, err := p.Generate(context.Background(), &niro.Request{
+		Messages: []niro.Message{niro.UserText("hi")},
+		Options:  niro.Options{ExperimentalReasoning: true},
+	})
+	if err == nil || !contains(err.Error(), "experimental reasoning") {
+		t.Fatalf("expected experimental reasoning error, got %v", err)
+	}
+}
+
+func TestGenerate_ConcurrentRequests(t *testing.T) {
+	p := newProvider(func(r *http.Request) (*http.Response, error) {
+		return streamResp(
+			textDelta(0, "ok"),
+			blockStop(0),
+			msgStop("end_turn"),
+			metadataEvt(2, 1),
+		), nil
+	})
+	ctx := context.Background()
+
+	var wg sync.WaitGroup
+	errCh := make(chan error, 20)
+	for i := 0; i < 20; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			stream, err := p.Generate(ctx, &niro.Request{
+				Messages: []niro.Message{niro.UserText("hi")},
+			})
+			if err != nil {
+				errCh <- err
+				return
+			}
+			text, err := niro.CollectText(ctx, stream)
+			if err != nil {
+				errCh <- err
+				return
+			}
+			if text != "ok" {
+				errCh <- errors.New("unexpected text")
+			}
+		}()
+	}
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
 }
 
 // ---------------------------------------------------------------------------

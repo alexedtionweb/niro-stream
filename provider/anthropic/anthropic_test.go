@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -1256,5 +1257,62 @@ func TestGenerate_EmptyContentStream(t *testing.T) {
 	}
 	if len(frames) != 0 {
 		t.Errorf("expected 0 frames, got %d", len(frames))
+	}
+}
+
+func TestGenerate_NilRequest(t *testing.T) {
+	p := New("test-key")
+	_, err := p.Generate(context.Background(), nil)
+	if err == nil || !strings.Contains(err.Error(), "nil request") {
+		t.Fatalf("expected nil request error, got %v", err)
+	}
+}
+
+func TestGenerate_ExperimentalReasoningUnsupported(t *testing.T) {
+	p := New("test-key")
+	_, err := p.Generate(context.Background(), &niro.Request{
+		Messages: []niro.Message{niro.UserText("hi")},
+		Options:  niro.Options{ExperimentalReasoning: true},
+	})
+	if err == nil || !strings.Contains(err.Error(), "experimental reasoning") {
+		t.Fatalf("expected experimental reasoning error, got %v", err)
+	}
+}
+
+func TestGenerate_ConcurrentRequests(t *testing.T) {
+	p := newProvider(t, func(r *http.Request) (int, string, string) {
+		return 200, sseTextStream("id1", "claude-sonnet-4-5", "ok"), ""
+	})
+	ctx := context.Background()
+
+	var wg sync.WaitGroup
+	errCh := make(chan error, 24)
+	for i := 0; i < 24; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			stream, err := p.Generate(ctx, &niro.Request{
+				Messages: []niro.Message{niro.UserText("hi")},
+			})
+			if err != nil {
+				errCh <- err
+				return
+			}
+			text, err := collectText(t, stream)
+			if err != nil {
+				errCh <- err
+				return
+			}
+			if text != "ok" {
+				errCh <- fmt.Errorf("unexpected text %q", text)
+			}
+		}()
+	}
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 }

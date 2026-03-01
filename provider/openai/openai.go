@@ -129,6 +129,13 @@ func (p *Provider) Client() oai.Client { return p.client }
 
 // Generate implements niro.Provider.
 func (p *Provider) Generate(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
+	if req == nil {
+		return nil, fmt.Errorf("niro/openai: nil request")
+	}
+	if req.Options.ExperimentalReasoning {
+		return nil, fmt.Errorf("niro/openai: experimental reasoning is not supported")
+	}
+
 	model := req.Model
 	if model == "" {
 		model = p.model

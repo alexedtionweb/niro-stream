@@ -2,8 +2,7 @@
 // backed by the ElevenLabs HTTP and WebSocket APIs.
 //
 // The provider uses a shared high-performance [transport.Default] HTTP
-// transport with connection pooling. Audio bytes are read directly from
-// the HTTP response body into pooled buffers — no intermediate copies.
+// transport with connection pooling.
 //
 // # TTS (text-to-speech)
 //
@@ -52,6 +51,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/gorilla/websocket"
 
@@ -61,13 +61,14 @@ import (
 )
 
 const (
-	defaultBaseURL  = "https://api.elevenlabs.io/v1"
-	defaultWSURL    = "wss://api.elevenlabs.io/v1/speech-to-text/realtime"
-	defaultVoice    = "Rachel"
-	defaultModel    = "eleven_multilingual_v2"
-	defaultSTTModel = "scribe_v1"
-	defaultFormat   = "ogg_opus"
-	readBufSize     = 8192 // 8 KB per read — matches typical TLS record
+	defaultBaseURL     = "https://api.elevenlabs.io/v1"
+	defaultWSURL       = "wss://api.elevenlabs.io/v1/speech-to-text/realtime"
+	defaultVoice       = "Rachel"
+	defaultModel       = "eleven_multilingual_v2"
+	defaultSTTModel    = "scribe_v1"
+	defaultFormat      = "ogg_opus"
+	readBufSize        = 8192 // 8 KB per read — matches typical TLS record
+	wsHandshakeTimeout = 10 * time.Second
 )
 
 // ── TTS request body ────────────────────────────────────────────────────────
@@ -321,8 +322,8 @@ func (p *Provider) Synthesize(ctx context.Context, req *niro.TTSRequest) (*niro.
 }
 
 // consumeTTS reads audio chunks from the HTTP body and emits them as
-// KindAudio frames using pooled buffers. Zero intermediate copies —
-// we read directly into a pool buffer and emit it.
+// KindAudio frames. Each emitted frame owns its []byte so downstream
+// consumers can retain data safely.
 func (p *Provider) consumeTTS(ctx context.Context, body io.ReadCloser, out *niro.Emitter, mime string) {
 	defer out.Close()
 	defer body.Close()
@@ -331,9 +332,12 @@ func (p *Provider) consumeTTS(ctx context.Context, body io.ReadCloser, out *niro
 		buf := p.bp.Get(readBufSize)
 		n, err := body.Read(buf)
 		if n > 0 {
-			f := niro.Frame{Kind: niro.KindAudio, Data: buf[:n], Mime: mime}
+			data := make([]byte, n)
+			copy(data, buf[:n])
+			p.bp.Put(buf)
+
+			f := niro.Frame{Kind: niro.KindAudio, Data: data, Mime: mime}
 			if emitErr := out.Emit(ctx, f); emitErr != nil {
-				p.bp.Put(buf)
 				return
 			}
 		} else {
@@ -394,9 +398,13 @@ func (p *Provider) transcribeBatch(ctx context.Context, req *niro.STTRequest) (*
 	body.Grow(300 + len(audio))
 	w := multipart.NewWriter(&body)
 
-	_ = w.WriteField("model_id", model)
+	if err := w.WriteField("model_id", model); err != nil {
+		return nil, fmt.Errorf("niro/elevenlabs: multipart model_id: %w", err)
+	}
 	if lang != "" {
-		_ = w.WriteField("language_code", lang)
+		if err := w.WriteField("language_code", lang); err != nil {
+			return nil, fmt.Errorf("niro/elevenlabs: multipart language_code: %w", err)
+		}
 	}
 
 	ext := extFromMIME(req.InputFormat)
@@ -404,8 +412,12 @@ func (p *Provider) transcribeBatch(ctx context.Context, req *niro.STTRequest) (*
 	if err != nil {
 		return nil, fmt.Errorf("niro/elevenlabs: %w", err)
 	}
-	_, _ = part.Write(audio)
-	_ = w.Close()
+	if _, err := part.Write(audio); err != nil {
+		return nil, fmt.Errorf("niro/elevenlabs: multipart file write: %w", err)
+	}
+	if err := w.Close(); err != nil {
+		return nil, fmt.Errorf("niro/elevenlabs: multipart close: %w", err)
+	}
 
 	u := p.baseURL + "/speech-to-text"
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, u, &body)
@@ -474,8 +486,12 @@ func (p *Provider) transcribeStream(ctx context.Context, req *niro.STTRequest) (
 	header := http.Header{}
 	header.Set("xi-api-key", p.apiKey)
 
+	handshakeTimeout := p.client.Timeout
+	if handshakeTimeout <= 0 {
+		handshakeTimeout = wsHandshakeTimeout
+	}
 	dialer := websocket.Dialer{
-		HandshakeTimeout: p.client.Timeout,
+		HandshakeTimeout: handshakeTimeout,
 	}
 	conn, _, err := dialer.DialContext(ctx, u.String(), header)
 	if err != nil {
@@ -582,10 +598,12 @@ func (p *Provider) sttWriteLoop(ctx context.Context, cancel context.CancelFunc, 
 		return
 	}
 
-	_ = conn.WriteMessage(
+	if err := conn.WriteMessage(
 		websocket.CloseMessage,
 		websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""),
-	)
+	); err != nil && ctx.Err() == nil {
+		out.Error(fmt.Errorf("niro/elevenlabs: ws close: %w", err))
+	}
 }
 
 // isFinalMessageType checks known ElevenLabs final transcript message types.
@@ -603,9 +621,8 @@ func isFinalMessageType(t string) bool {
 // readAPIError reads and formats an ElevenLabs API error response.
 func readAPIError(resp *http.Response) error {
 	defer resp.Body.Close()
-	b := make([]byte, 4096)
-	n, _ := io.ReadFull(resp.Body, b)
-	return fmt.Errorf("niro/elevenlabs: status %d: %s", resp.StatusCode, bytes.TrimSpace(b[:n]))
+	b, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	return fmt.Errorf("niro/elevenlabs: status %d: %s", resp.StatusCode, bytes.TrimSpace(b))
 }
 
 // mimeFromFormat converts an ElevenLabs output_format parameter to a MIME type.

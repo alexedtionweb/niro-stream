@@ -147,6 +147,13 @@ func (p *Provider) Client() *bedrockruntime.Client { return p.client }
 
 // Generate implements niro.Provider.
 func (p *Provider) Generate(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
+	if req == nil {
+		return nil, niro.NewError(niro.ErrCodeInvalidRequest, "niro/bedrock: nil request").WithProvider("bedrock")
+	}
+	if req.Options.ExperimentalReasoning {
+		return nil, niro.NewError(niro.ErrCodeInvalidRequest, "niro/bedrock: experimental reasoning is not supported").WithProvider("bedrock")
+	}
+
 	if err := req.Validate(); err != nil {
 		return nil, err
 	}

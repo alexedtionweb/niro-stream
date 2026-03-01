@@ -238,7 +238,7 @@ func (c *Cache) get(key [32]byte) ([]niro.Frame, *niro.ResponseMeta, niro.Usage,
 		return nil, nil, niro.Usage{}, false
 	}
 	s.list.moveToFront(e)
-	return e.frames, e.resp, e.usage, true
+	return cloneFrames(e.frames), cloneResponseMeta(e.resp), cloneUsage(e.usage), true
 }
 
 func (c *Cache) put(key [32]byte, frames []niro.Frame, resp *niro.ResponseMeta, usage niro.Usage) {
@@ -248,9 +248,9 @@ func (c *Cache) put(key [32]byte, frames []niro.Frame, resp *niro.ResponseMeta, 
 
 	if e, ok := s.entries[key]; ok {
 		s.list.moveToFront(e)
-		e.frames = frames
-		e.resp = resp
-		e.usage = usage
+		e.frames = cloneFrames(frames)
+		e.resp = cloneResponseMeta(resp)
+		e.usage = cloneUsage(usage)
 		if c.opts.TTL > 0 {
 			e.expires = time.Now().Add(c.opts.TTL)
 		}
@@ -259,9 +259,9 @@ func (c *Cache) put(key [32]byte, frames []niro.Frame, resp *niro.ResponseMeta, 
 
 	e := &cacheEntry{
 		key:    key,
-		frames: frames,
-		resp:   resp,
-		usage:  usage,
+		frames: cloneFrames(frames),
+		resp:   cloneResponseMeta(resp),
+		usage:  cloneUsage(usage),
 	}
 	if c.opts.TTL > 0 {
 		e.expires = time.Now().Add(c.opts.TTL)
@@ -294,4 +294,68 @@ func defaultCacheKey(req *niro.Request) [32]byte {
 	var out [32]byte
 	copy(out[:], h.Sum(nil))
 	return out
+}
+
+func cloneFrames(frames []niro.Frame) []niro.Frame {
+	if len(frames) == 0 {
+		return nil
+	}
+	out := make([]niro.Frame, len(frames))
+	for i := range frames {
+		out[i] = cloneFrame(frames[i])
+	}
+	return out
+}
+
+func cloneFrame(f niro.Frame) niro.Frame {
+	c := f
+	if len(f.Data) > 0 {
+		c.Data = append([]byte(nil), f.Data...)
+	}
+	if f.Tool != nil {
+		tc := *f.Tool
+		if len(f.Tool.Args) > 0 {
+			tc.Args = append([]byte(nil), f.Tool.Args...)
+		}
+		c.Tool = &tc
+	}
+	if f.Result != nil {
+		tr := *f.Result
+		c.Result = &tr
+	}
+	if f.Usage != nil {
+		u := cloneUsage(*f.Usage)
+		c.Usage = &u
+	}
+	if f.Custom != nil {
+		custom := *f.Custom
+		c.Custom = &custom
+	}
+	return c
+}
+
+func cloneResponseMeta(resp *niro.ResponseMeta) *niro.ResponseMeta {
+	if resp == nil {
+		return nil
+	}
+	c := *resp
+	c.Usage = cloneUsage(resp.Usage)
+	if len(resp.ProviderMeta) > 0 {
+		c.ProviderMeta = make(map[string]any, len(resp.ProviderMeta))
+		for k, v := range resp.ProviderMeta {
+			c.ProviderMeta[k] = v
+		}
+	}
+	return &c
+}
+
+func cloneUsage(u niro.Usage) niro.Usage {
+	c := u
+	if len(u.Detail) > 0 {
+		c.Detail = make(map[string]int, len(u.Detail))
+		for k, v := range u.Detail {
+			c.Detail[k] = v
+		}
+	}
+	return c
 }

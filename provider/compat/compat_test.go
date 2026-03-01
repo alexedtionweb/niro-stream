@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/alexedtionweb/niro-stream"
@@ -471,5 +472,75 @@ func TestCompatUsageOnlyChunk(t *testing.T) {
 	usage := stream.Usage()
 	if usage.TotalTokens != 8 {
 		t.Errorf("expected total_tokens=8, got %d", usage.TotalTokens)
+	}
+}
+
+func TestCompatGenerateNilRequest(t *testing.T) {
+	t.Parallel()
+	p := compat.New("http://localhost:1", "")
+	_, err := p.Generate(context.Background(), nil)
+	if err == nil || !strings.Contains(err.Error(), "nil request") {
+		t.Fatalf("expected nil request error, got %v", err)
+	}
+}
+
+func TestCompatGenerateExperimentalReasoningUnsupported(t *testing.T) {
+	t.Parallel()
+	p := compat.New("http://localhost:1", "")
+	_, err := p.Generate(context.Background(), &niro.Request{
+		Messages: []niro.Message{niro.UserText("hi")},
+		Options:  niro.Options{ExperimentalReasoning: true},
+	})
+	if err == nil || !strings.Contains(err.Error(), "experimental reasoning") {
+		t.Fatalf("expected experimental reasoning error, got %v", err)
+	}
+}
+
+func TestCompatConcurrentRequests(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		flusher, _ := w.(http.Flusher)
+		fmt.Fprint(w, `data: {"id":"resp1","model":"m","choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`+"\n\n")
+		flusher.Flush()
+		fmt.Fprint(w, "data: [DONE]\n\n")
+		flusher.Flush()
+	}))
+	defer srv.Close()
+
+	llm := compat.New(srv.URL, "test-key")
+	ctx := context.Background()
+
+	var wg sync.WaitGroup
+	errCh := make(chan error, 20)
+	for i := 0; i < 20; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			stream, err := llm.Generate(ctx, &niro.Request{
+				Messages: []niro.Message{niro.UserText("hi")},
+			})
+			if err != nil {
+				errCh <- err
+				return
+			}
+			text, err := niro.CollectText(ctx, stream)
+			if err != nil {
+				errCh <- err
+				return
+			}
+			if text != "ok" {
+				errCh <- fmt.Errorf("unexpected text %q", text)
+			}
+		}()
+	}
+
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 }
