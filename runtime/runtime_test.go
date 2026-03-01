@@ -119,6 +119,83 @@ func TestRuntimeWithHook(t *testing.T) {
 	assertEqual(t, int(frameCnt.Load()), 2)
 }
 
+func TestRuntimeWithHook_UsesResponseModelOnEnd(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	var endModel string
+	h := &testHook{
+		onEnd: func(ctx context.Context, info hook.GenerateEndInfo) {
+			endModel = info.Model
+		},
+	}
+
+	mock := niro.ProviderFunc(func(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
+		s, e := niro.NewStream(4)
+		go func() {
+			defer e.Close()
+			_ = e.Emit(ctx, niro.TextFrame("ok"))
+			e.SetResponse(&niro.ResponseMeta{Model: "gemini-2.5-pro-preview", FinishReason: "stop"})
+		}()
+		return s, nil
+	})
+
+	rt := runtime.New(mock).WithHook(h)
+	stream, err := rt.Generate(ctx, &niro.Request{
+		Model:    "gemini",
+		Messages: []niro.Message{niro.UserText("hi")},
+	})
+	assertNoError(t, err)
+
+	_, err = niro.CollectText(ctx, stream)
+	assertNoError(t, err)
+
+	time.Sleep(20 * time.Millisecond)
+	assertEqual(t, endModel, "gemini-2.5-pro-preview")
+}
+
+func TestRuntimeWithHook_DoesNotDoubleCountUsageFromResponse(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	var endUsage niro.Usage
+	h := &testHook{
+		onEnd: func(ctx context.Context, info hook.GenerateEndInfo) {
+			endUsage = info.Usage
+		},
+	}
+
+	mock := niro.ProviderFunc(func(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
+		s, e := niro.NewStream(4)
+		go func() {
+			defer e.Close()
+			u := niro.Usage{InputTokens: 10, OutputTokens: 5, TotalTokens: 15}
+			_ = e.Emit(ctx, niro.UsageFrame(&u))
+			e.SetResponse(&niro.ResponseMeta{
+				Model: "m",
+				Usage: niro.Usage{InputTokens: 10, OutputTokens: 5, TotalTokens: 15},
+			})
+		}()
+		return s, nil
+	})
+
+	rt := runtime.New(mock).WithHook(h)
+	stream, err := rt.Generate(ctx, &niro.Request{
+		Model:    "m",
+		Messages: []niro.Message{niro.UserText("hi")},
+	})
+	assertNoError(t, err)
+
+	for stream.Next(ctx) {
+	}
+	assertNoError(t, stream.Err())
+
+	time.Sleep(20 * time.Millisecond)
+	assertEqual(t, endUsage.InputTokens, 10)
+	assertEqual(t, endUsage.OutputTokens, 5)
+	assertEqual(t, endUsage.TotalTokens, 15)
+}
+
 func TestRuntimeProviderError(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

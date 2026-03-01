@@ -10,7 +10,7 @@ import (
 )
 
 // Hook provides observability into Niro operations.
-// Implement this interface for telemetry, logging, cost tracking,
+// Implement this interface for telemetry, logging,
 // or integration with platforms like Langfuse, Datadog, or OpenTelemetry.
 //
 // All methods are called synchronously in the hot path.
@@ -64,7 +64,6 @@ type GenerateEndInfo struct {
 	Model        string        // Model actually used
 	RequestID    string        // Unique request ID for tracing
 	Usage        niro.Usage    // Token usage
-	Cost         niro.Cost     // Cost information (tokens × model pricing)
 	FinishReason string        // Why generation stopped
 	Duration     time.Duration // Wall-clock duration
 	ResponseID   string        // Provider-assigned response ID

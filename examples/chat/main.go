@@ -85,7 +85,7 @@ func main() {
 	}
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level})))
 
-	llm := mustProvider(ctx)
+	llm, modelName, providerName := mustProvider(ctx)
 	ts := buildToolset()
 	loop := tools.NewToolLoop(ts, 8)
 
@@ -97,7 +97,7 @@ func main() {
 		time.Now().Format("Monday, 2 January 2006"),
 	)
 
-	printBanner()
+	printBanner(providerName, modelName)
 
 	var (
 		history  []niro.Message
@@ -144,6 +144,7 @@ func main() {
 		history = append(history, niro.UserText(input))
 
 		req := ts.Apply(&niro.Request{
+			Model:        modelName,
 			SystemPrompt: systemPrompt,
 			Messages:     history,
 			Options:      niro.Options{MaxTokens: 1024, Temperature: niro.Temp(0.7)},
@@ -244,12 +245,7 @@ func streamResponse(ctx context.Context, stream *niro.Stream) string {
 
 // ── UI helpers ────────────────────────────────────────────────────────────────
 
-func printBanner() {
-	provider := os.Getenv("PROVIDER")
-	if provider == "" {
-		provider = "openai"
-	}
-	model := os.Getenv("MODEL")
+func printBanner(provider, model string) {
 	title := "Chat  —  " + provider
 	if model != "" {
 		title += " / " + model
@@ -760,15 +756,24 @@ func isAlpha(c byte) bool {
 
 // ── Provider factory ──────────────────────────────────────────────────────────
 
-func mustProvider(ctx context.Context) niro.Provider {
-	switch strings.ToLower(os.Getenv("PROVIDER")) {
+func mustProvider(ctx context.Context) (niro.Provider, string, string) {
+	providerName := strings.ToLower(strings.TrimSpace(os.Getenv("PROVIDER")))
+	if providerName == "" {
+		providerName = "openai"
+	}
+	modelName := strings.TrimSpace(os.Getenv("MODEL"))
+
+	switch providerName {
 	case "", "openai":
 		key := os.Getenv("OPENAI_API_KEY")
 		if key == "" {
 			fmt.Fprintln(os.Stderr, col(colRed, "error: OPENAI_API_KEY is not set"))
 			os.Exit(1)
 		}
-		return openai.New(key)
+		if modelName == "" {
+			modelName = "gpt-4o"
+		}
+		return openai.New(key, openai.WithModel(modelName)), modelName, providerName
 
 	case "anthropic":
 		key := os.Getenv("ANTHROPIC_API_KEY")
@@ -776,7 +781,10 @@ func mustProvider(ctx context.Context) niro.Provider {
 			fmt.Fprintln(os.Stderr, col(colRed, "error: ANTHROPIC_API_KEY is not set"))
 			os.Exit(1)
 		}
-		return anthropic.New(key)
+		if modelName == "" {
+			modelName = "claude-sonnet-4-5"
+		}
+		return anthropic.New(key, anthropic.WithModel(modelName)), modelName, providerName
 
 	case "gemini":
 		key := os.Getenv("GEMINI_API_KEY")
@@ -784,12 +792,15 @@ func mustProvider(ctx context.Context) niro.Provider {
 			fmt.Fprintln(os.Stderr, col(colRed, "error: GEMINI_API_KEY is not set"))
 			os.Exit(1)
 		}
-		p, err := google.New(key)
+		if modelName == "" {
+			modelName = "gemini-2.0-flash"
+		}
+		p, err := google.New(key, google.WithModel(modelName))
 		if err != nil {
 			fmt.Fprintln(os.Stderr, col(colRed, "google: "+err.Error()))
 			os.Exit(1)
 		}
-		return p
+		return p, modelName, providerName
 
 	case "bedrock":
 		cfg, err := config.LoadDefaultConfig(ctx)
@@ -797,22 +808,20 @@ func mustProvider(ctx context.Context) niro.Provider {
 			fmt.Fprintln(os.Stderr, col(colRed, "aws config: "+err.Error()))
 			os.Exit(1)
 		}
-		model := os.Getenv("MODEL")
-		if model == "" {
-			model = "anthropic.claude-3-5-sonnet-20241022-v2:0"
+		if modelName == "" {
+			modelName = "anthropic.claude-3-5-sonnet-20241022-v2:0"
 		}
-		return bedrock.New(cfg, bedrock.WithModel(model))
+		return bedrock.New(cfg, bedrock.WithModel(modelName)), modelName, providerName
 
 	case "ollama":
 		baseURL := os.Getenv("OLLAMA_BASE_URL")
 		if baseURL == "" {
 			baseURL = "http://localhost:11434/v1"
 		}
-		model := os.Getenv("MODEL")
-		if model == "" {
-			model = "llama3.2"
+		if modelName == "" {
+			modelName = "llama3.2"
 		}
-		return compat.New(baseURL, "", compat.WithModel(model))
+		return compat.New(baseURL, "", compat.WithModel(modelName)), modelName, providerName
 
 	default:
 		fmt.Fprintf(os.Stderr, col(colRed, "unknown PROVIDER=%q — valid: openai|anthropic|gemini|bedrock|ollama\n"),

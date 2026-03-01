@@ -394,7 +394,7 @@ type Hook interface {
 }
 ```
 
-Implement for Langfuse, Datadog, OpenTelemetry, cost tracking, or custom logging. Embed `niro.NoOpHook` to implement only the methods you care about. Compose multiple hooks with `niro.Hooks(h1, h2, h3)`.
+Implement for Langfuse, Datadog, OpenTelemetry, or custom logging. Embed `niro.NoOpHook` to implement only the methods you care about. Compose multiple hooks with `niro.Hooks(h1, h2, h3)`.
 
 Wire it via Runtime:
 
@@ -520,33 +520,22 @@ trace := niro.GetTraceContext(ctx)
 fmt.Printf("Request: %s (user: %s)", trace.RequestID, trace.UserID)
 ```
 
-## Cost Tracking
+## Usage Metrics
 
-Track generation costs in real-time using the global pricing registry:
+Niro emits raw usage values (`InputTokens`, `OutputTokens`, `TotalTokens`, and `Usage.Detail`) for billing and policy engines:
 
 ```go
-// Use default pricing (auto-initialized with 2025 rates)
-cost := niro.CalculateCost("openai", "gpt-4o", usage)
-fmt.Printf("Cost: $%.4f (%d in, %d out)\n", cost.TotalCost, usage.InputTokens, usage.OutputTokens)
-
-// Configure custom pricing
-registry := niro.GetPricingRegistry()
-registry.Set("my-provider", "my-model", &niro.ModelPricing{
-    InputCostPer1M:  0.001,
-    OutputCostPer1M: 0.002,
-})
-
-// Use in hooks for cost accumulation
 hook := &MyHook{
     onEnd: func(ctx context.Context, info niro.GenerateEndInfo) {
-        cost := info.Cost
-        totalCost += cost.TotalCost
-        log.Printf("Generated %d tokens for $%.4f", info.Usage.TotalTokens, cost.TotalCost)
+        usage := info.Usage
+        // send raw usage to your billing/finance service
+        log.Printf("model=%s in=%d out=%d total=%d",
+            info.Model, usage.InputTokens, usage.OutputTokens, usage.TotalTokens)
     },
 }
 ```
 
-Built-in pricing for OpenAI (GPT-4, GPT-3.5), Anthropic (Claude 3.5 Sonnet, Opus), Google Gemini, and AWS Bedrock.
+Price calculation is intentionally out of core runtime scope.
 
 ## Tool Execution
 

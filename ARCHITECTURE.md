@@ -388,7 +388,7 @@ OnGenerateEnd(ctx', info)              [stream exhausted]
 ### Composition
 
 ```go
-combined := niro.Hooks(langfuseHook, datadogHook, costTracker)
+combined := niro.Hooks(langfuseHook, datadogHook, auditHook)
 ```
 
 `Hooks()` returns a `multiHook` that fans out to all hooks. Nil hooks are filtered. If only one non-nil hook remains, it's returned directly (no wrapper overhead).
@@ -591,7 +591,6 @@ github.com/alexedtionweb/niro-stream                          ← root module (z
 ├── errors.go                        Error type, ErrorCode, semantic error checkers, error helpers
 ├── validation.go                    Request.Validate(), Message.Validate(), Tool.Validate(), ToolCall.Validate()
 ├── retry.go                         RetryProvider, BackoffStrategy, smart retry hints
-├── cost.go                          Cost tracking, ModelPricing, PricingRegistry, pricing for known models
 ├── timeout.go                       Timeout enforcement, request tracing, RequestID generation, TraceContext
 ├── input_stream.go                  Native + fallback input streaming adapter
 ├── tools.go                         Tool execution loop, automatic tool calling, ToolExecutor interface
@@ -618,7 +617,6 @@ github.com/alexedtionweb/niro-stream                          ← root module (z
 ├── errors_test.go                   Tests for Error type, checkers, wrapping
 ├── validation_test.go               Tests for Request/Message/Tool validation
 ├── retry_test.go                    Tests for RetryProvider, backoff strategies
-├── cost_test.go                     Tests for cost calculation, PricingRegistry
 ├── tracing_test.go                  Tests for RequestID, TraceContext, TracingProvider
 ├── tools_test.go                    Tests for ToolLoop, Toolset, ToolingProvider
 ├── input_stream_test.go             Tests for input streaming (native + fallback)
@@ -853,15 +851,15 @@ Request.Validate() checks: non-empty messages, valid ResponseFormat, JSON Schema
 
 **Smart retry path**: when a provider exposes retry capability hints, `WrapWithSmartRetry` can skip outer retries if SDK/client retries are already enabled, preventing redundant retry multiplication.
 
-## Cost Tracking (`cost.go`)
+## Usage Metrics (`frame.go`, `stream.go`)
 
-**ModelPricing** + **PricingRegistry** for per-model cost tracking. Default pricing for OpenAI, Anthropic, Google, AWS Bedrock (2025).
+Token/accounting data is emitted as `KindUsage` and accumulated in `stream.Usage()` (`InputTokens`, `OutputTokens`, `TotalTokens`, `Detail`).
 
 ## Timeouts & Tracing (`timeout.go`)
 
 **TimeoutProvider**: Generation timeout enforcement.
 
-**TraceContext**: Request-scoped trace data (RequestID, UserID, SessionID). Used by hooks for logging, cost tracking, distributed tracing.
+**TraceContext**: Request-scoped trace data (RequestID, UserID, SessionID). Used by hooks for logging and distributed tracing.
 
 ## Tool Execution (`tools.go`)
 

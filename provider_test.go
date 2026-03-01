@@ -68,17 +68,3 @@ func TestOptionHelpers(t *testing.T) {
 	assertNotNil(t, topK)
 	assertEqual(t, *topK, 40)
 }
-
-func TestCostAdd(t *testing.T) {
-	t.Parallel()
-
-	c := niro.Cost{InputCost: 1.0, OutputCost: 2.0, TotalCost: 3.0, Currency: "USD"}
-	c.Add(niro.Cost{InputCost: 0.5, OutputCost: 1.0, TotalCost: 1.5})
-	assertEqual(t, c.InputCost, 1.5)
-	assertEqual(t, c.OutputCost, 3.0)
-	assertEqual(t, c.TotalCost, 4.5)
-
-	// nil receiver is safe
-	var nilCost *niro.Cost
-	nilCost.Add(niro.Cost{InputCost: 1.0})
-}

@@ -22,7 +22,7 @@ This document summarizes the capabilities implemented in this codebase. Each ent
 
 - **Timeouts & Tracing**: `timeout.go` enforces generation timeouts and propagates trace context (RequestID, user/session IDs) to hooks for observability.
 
-- **Cost Tracking & Pricing Registry**: `cost.go` contains model pricing and a global pricing registry to compute and record costs per model/request in real-time.
+- **Usage-First Billing Inputs**: Core runtime emits raw usage (`Usage` + `Usage.Detail`) for external billing systems; pricing is handled outside the runtime.
 
 - **Token Budget Controls**: `Options.MaxTokens` sets output token caps per request; providers map this to native SDK limits and normalized usage is returned via `stream.Usage()` / `ResponseMeta.Usage`.
 

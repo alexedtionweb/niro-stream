@@ -133,16 +133,20 @@ func (r *Runtime) wrapStream(ctx context.Context, src *niro.Stream, model string
 			emitter.SetResponse(resp)
 		}
 
+		finalModel := model
 		finishReason := ""
 		responseID := ""
 		if resp != nil {
+			if resp.Model != "" {
+				finalModel = resp.Model
+			}
 			finishReason = resp.FinishReason
 			responseID = resp.ID
-			usage.Add(&resp.Usage)
+			mergeUsage(&usage, &resp.Usage)
 		}
 
 		r.hook.OnGenerateEnd(ctx, hook.GenerateEndInfo{
-			Model:        model,
+			Model:        finalModel,
 			Usage:        usage,
 			FinishReason: finishReason,
 			Duration:     time.Since(start),
@@ -151,4 +155,30 @@ func (r *Runtime) wrapStream(ctx context.Context, src *niro.Stream, model string
 	}()
 
 	return out
+}
+
+func mergeUsage(dst *niro.Usage, fallback *niro.Usage) {
+	if dst == nil || fallback == nil {
+		return
+	}
+	if dst.InputTokens == 0 {
+		dst.InputTokens = fallback.InputTokens
+	}
+	if dst.OutputTokens == 0 {
+		dst.OutputTokens = fallback.OutputTokens
+	}
+	if dst.TotalTokens == 0 {
+		dst.TotalTokens = fallback.TotalTokens
+	}
+	if len(fallback.Detail) == 0 {
+		return
+	}
+	if dst.Detail == nil {
+		dst.Detail = make(map[string]int, len(fallback.Detail))
+	}
+	for key, value := range fallback.Detail {
+		if _, exists := dst.Detail[key]; !exists {
+			dst.Detail[key] = value
+		}
+	}
 }
