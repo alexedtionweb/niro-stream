@@ -13,9 +13,9 @@
 // Usage:
 //
 //	llm := compat.New("https://api.openai.com/v1", os.Getenv("OPENAI_API_KEY"))
-//	stream, err := llm.Generate(ctx, &ryn.Request{
+//	stream, err := llm.Generate(ctx, &niro.Request{
 //	    Model: "gpt-4o",
-//	    Messages: []ryn.Message{ryn.UserText("Hello")},
+//	    Messages: []niro.Message{niro.UserText("Hello")},
 //	})
 package compat
 
@@ -34,7 +34,7 @@ import (
 	"github.com/alexedtionweb/niro-stream/transport"
 )
 
-// Provider implements ryn.Provider using raw HTTP + SSE.
+// Provider implements niro.Provider using raw HTTP + SSE.
 // Compatible with any OpenAI-style chat completions API.
 type Provider struct {
 	baseURL string
@@ -44,7 +44,7 @@ type Provider struct {
 	headers map[string]string
 }
 
-var _ ryn.Provider = (*Provider)(nil)
+var _ niro.Provider = (*Provider)(nil)
 
 // Option configures a Provider.
 type Option func(*Provider)
@@ -69,7 +69,7 @@ func WithHeader(key, value string) Option {
 // baseURL should be the API root (e.g. "https://api.openai.com/v1").
 // apiKey can be empty for unauthenticated endpoints.
 //
-// The default HTTP client uses ryn.DefaultHTTPClient which is optimized
+// The default HTTP client uses niro.DefaultHTTPClient which is optimized
 // for high-concurrency streaming with keep-alive connection pooling.
 // Override with WithClient if you need a custom transport.
 func New(baseURL, apiKey string, opts ...Option) *Provider {
@@ -86,22 +86,22 @@ func New(baseURL, apiKey string, opts ...Option) *Provider {
 	return p
 }
 
-// Generate implements ryn.Provider.
-func (p *Provider) Generate(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+// Generate implements niro.Provider.
+func (p *Provider) Generate(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
 	model := req.Model
 	if model == "" {
 		model = p.model
 	}
 
-	body, err := ryn.JSONMarshal(buildRequest(model, req))
+	body, err := niro.JSONMarshal(buildRequest(model, req))
 	if err != nil {
-		return nil, fmt.Errorf("ryn/compat: marshal: %w", err)
+		return nil, fmt.Errorf("niro/compat: marshal: %w", err)
 	}
 
 	httpReq, err := http.NewRequestWithContext(ctx, "POST",
 		p.baseURL+"/chat/completions", bytes.NewReader(body))
 	if err != nil {
-		return nil, fmt.Errorf("ryn/compat: request: %w", err)
+		return nil, fmt.Errorf("niro/compat: request: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "text/event-stream")
@@ -114,20 +114,20 @@ func (p *Provider) Generate(ctx context.Context, req *ryn.Request) (*ryn.Stream,
 
 	resp, err := p.client.Do(httpReq)
 	if err != nil {
-		return nil, fmt.Errorf("ryn/compat: do: %w", err)
+		return nil, fmt.Errorf("niro/compat: do: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
 		defer resp.Body.Close()
 		b, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("ryn/compat: status %d: %s", resp.StatusCode, b)
+		return nil, fmt.Errorf("niro/compat: status %d: %s", resp.StatusCode, b)
 	}
 
-	stream, emitter := ryn.NewStream(32)
+	stream, emitter := niro.NewStream(32)
 	go consume(ctx, resp.Body, emitter)
 	return stream, nil
 }
 
-func consume(ctx context.Context, body io.ReadCloser, out *ryn.Emitter) {
+func consume(ctx context.Context, body io.ReadCloser, out *niro.Emitter) {
 	defer out.Close()
 	defer body.Close()
 
@@ -140,25 +140,25 @@ func consume(ctx context.Context, body io.ReadCloser, out *ryn.Emitter) {
 			break
 		}
 		if err != nil {
-			out.Error(fmt.Errorf("ryn/compat: sse: %w", err))
+			out.Error(fmt.Errorf("niro/compat: sse: %w", err))
 			return
 		}
 
 		var c chunk
-		if err := ryn.JSONUnmarshal(ev.Data, &c); err != nil {
-			out.Error(fmt.Errorf("ryn/compat: decode: %w", err))
+		if err := niro.JSONUnmarshal(ev.Data, &c); err != nil {
+			out.Error(fmt.Errorf("niro/compat: decode: %w", err))
 			return
 		}
 
 		if len(c.Choices) == 0 {
 			// May contain usage data only
 			if c.Usage != nil {
-				usage := &ryn.Usage{
+				usage := &niro.Usage{
 					InputTokens:  c.Usage.PromptTokens,
 					OutputTokens: c.Usage.CompletionTokens,
 					TotalTokens:  c.Usage.TotalTokens,
 				}
-				_ = out.Emit(ctx, ryn.UsageFrame(usage))
+				_ = out.Emit(ctx, niro.UsageFrame(usage))
 			}
 			continue
 		}
@@ -166,7 +166,7 @@ func consume(ctx context.Context, body io.ReadCloser, out *ryn.Emitter) {
 		choice := c.Choices[0]
 
 		if choice.Delta.Content != "" {
-			if err := out.Emit(ctx, ryn.TextFrame(choice.Delta.Content)); err != nil {
+			if err := out.Emit(ctx, niro.TextFrame(choice.Delta.Content)); err != nil {
 				return
 			}
 		}
@@ -186,7 +186,7 @@ func consume(ctx context.Context, body io.ReadCloser, out *ryn.Emitter) {
 
 		if choice.FinishReason != nil && *choice.FinishReason == "tool_calls" {
 			for i := range tools {
-				frame := ryn.ToolCallFrame(&ryn.ToolCall{
+				frame := niro.ToolCallFrame(&niro.ToolCall{
 					ID:   tools[i].ID,
 					Name: tools[i].Name,
 					Args: json.RawMessage(tools[i].Args.String()),
@@ -200,16 +200,16 @@ func consume(ctx context.Context, body io.ReadCloser, out *ryn.Emitter) {
 
 		// Usage may coexist with choices in the same chunk
 		if c.Usage != nil {
-			usage := &ryn.Usage{
+			usage := &niro.Usage{
 				InputTokens:  c.Usage.PromptTokens,
 				OutputTokens: c.Usage.CompletionTokens,
 				TotalTokens:  c.Usage.TotalTokens,
 			}
-			_ = out.Emit(ctx, ryn.UsageFrame(usage))
+			_ = out.Emit(ctx, niro.UsageFrame(usage))
 		}
 		// Set response meta from final chunk
 		if choice.FinishReason != nil {
-			meta := &ryn.ResponseMeta{
+			meta := &niro.ResponseMeta{
 				ID:           c.ID,
 				Model:        c.Model,
 				FinishReason: *choice.FinishReason,
@@ -221,7 +221,7 @@ func consume(ctx context.Context, body io.ReadCloser, out *ryn.Emitter) {
 
 // --- Request building ---
 
-func buildRequest(model string, req *ryn.Request) chatRequest {
+func buildRequest(model string, req *niro.Request) chatRequest {
 	cr := chatRequest{
 		Model:         model,
 		Stream:        true,
@@ -248,17 +248,17 @@ func buildRequest(model string, req *ryn.Request) chatRequest {
 	return cr
 }
 
-func convertMessage(msg ryn.Message) chatMessage {
+func convertMessage(msg niro.Message) chatMessage {
 	cm := chatMessage{Role: string(msg.Role)}
 
-	if msg.Role == ryn.RoleTool && len(msg.Parts) > 0 && msg.Parts[0].Result != nil {
+	if msg.Role == niro.RoleTool && len(msg.Parts) > 0 && msg.Parts[0].Result != nil {
 		r := msg.Parts[0].Result
 		cm.ToolCallID = r.CallID
 		cm.Content = r.Content
 		return cm
 	}
 
-	if len(msg.Parts) == 1 && msg.Parts[0].Kind == ryn.KindText {
+	if len(msg.Parts) == 1 && msg.Parts[0].Kind == niro.KindText {
 		cm.Content = msg.Parts[0].Text
 		return cm
 	}
@@ -266,9 +266,9 @@ func convertMessage(msg ryn.Message) chatMessage {
 	var parts []chatContent
 	for _, p := range msg.Parts {
 		switch p.Kind {
-		case ryn.KindText:
+		case niro.KindText:
 			parts = append(parts, chatContent{Type: "text", Text: p.Text})
-		case ryn.KindImage:
+		case niro.KindImage:
 			url := p.URL
 			if url == "" && len(p.Data) > 0 {
 				url = "data:" + p.Mime + ";base64," + base64.StdEncoding.EncodeToString(p.Data)
@@ -277,7 +277,7 @@ func convertMessage(msg ryn.Message) chatMessage {
 				Type:     "image_url",
 				ImageURL: &chatImageURL{URL: url},
 			})
-		case ryn.KindAudio:
+		case niro.KindAudio:
 			format := audioFormat(p.Mime)
 			parts = append(parts, chatContent{
 				Type: "input_audio",
@@ -290,9 +290,9 @@ func convertMessage(msg ryn.Message) chatMessage {
 	}
 	cm.Content = parts
 
-	if msg.Role == ryn.RoleAssistant {
+	if msg.Role == niro.RoleAssistant {
 		for _, p := range msg.Parts {
-			if p.Kind == ryn.KindToolCall && p.Tool != nil {
+			if p.Kind == niro.KindToolCall && p.Tool != nil {
 				tc := chatToolCall{ID: p.Tool.ID, Type: "function"}
 				tc.Function.Name = p.Tool.Name
 				tc.Function.Arguments = string(p.Tool.Args)

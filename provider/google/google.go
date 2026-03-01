@@ -53,20 +53,20 @@ import (
 //
 // Per-request (via Request.Extra):
 //
-//	stream, _ := llm.Generate(ctx, &ryn.Request{
+//	stream, _ := llm.Generate(ctx, &niro.Request{
 //	    Messages: msgs,
 //	    Extra: google.RequestHook(func(model string, cfg *genai.GenerateContentConfig) { ... }),
 //	})
 type RequestHook func(model string, cfg *genai.GenerateContentConfig)
 
-// Provider implements ryn.Provider using the Google GenAI SDK.
+// Provider implements niro.Provider using the Google GenAI SDK.
 type Provider struct {
 	client *genai.Client
 	model  string
 	hooks  []RequestHook
 }
 
-var _ ryn.Provider = (*Provider)(nil)
+var _ niro.Provider = (*Provider)(nil)
 
 // Option configures a Provider.
 type Option func(*providerConfig)
@@ -112,8 +112,8 @@ func WithRequestHook(fn RequestHook) Option {
 // automatically by the SDK if the key is not supplied here.
 func New(apiKey string, opts ...Option) (*Provider, error) {
 	if strings.TrimSpace(apiKey) == "" {
-		return nil, ryn.NewError(ryn.ErrCodeAuthenticationFailed,
-			"ryn/google: API key is required").WithProvider("google")
+		return nil, niro.NewError(niro.ErrCodeAuthenticationFailed,
+			"niro/google: API key is required").WithProvider("google")
 	}
 
 	cfg := applyOpts(opts)
@@ -126,8 +126,8 @@ func New(apiKey string, opts ...Option) (*Provider, error) {
 
 	client, err := genai.NewClient(context.Background(), cc)
 	if err != nil {
-		return nil, ryn.WrapError(ryn.ErrCodeProviderError,
-			"ryn/google: create client", err).WithProvider("google")
+		return nil, niro.WrapError(niro.ErrCodeProviderError,
+			"niro/google: create client", err).WithProvider("google")
 	}
 	return &Provider{client: client, model: cfg.model, hooks: cfg.hooks}, nil
 }
@@ -142,12 +142,12 @@ func New(apiKey string, opts ...Option) (*Provider, error) {
 // location:  GCP region, e.g. "us-central1" (or set GOOGLE_CLOUD_LOCATION).
 func NewVertexAI(projectID, location string, opts ...Option) (*Provider, error) {
 	if strings.TrimSpace(projectID) == "" {
-		return nil, ryn.NewError(ryn.ErrCodeInvalidRequest,
-			"ryn/google: Vertex AI project ID is required").WithProvider("google")
+		return nil, niro.NewError(niro.ErrCodeInvalidRequest,
+			"niro/google: Vertex AI project ID is required").WithProvider("google")
 	}
 	if strings.TrimSpace(location) == "" {
-		return nil, ryn.NewError(ryn.ErrCodeInvalidRequest,
-			"ryn/google: Vertex AI location is required").WithProvider("google")
+		return nil, niro.NewError(niro.ErrCodeInvalidRequest,
+			"niro/google: Vertex AI location is required").WithProvider("google")
 	}
 
 	cfg := applyOpts(opts)
@@ -161,8 +161,8 @@ func NewVertexAI(projectID, location string, opts ...Option) (*Provider, error) 
 
 	client, err := genai.NewClient(context.Background(), cc)
 	if err != nil {
-		return nil, ryn.WrapError(ryn.ErrCodeProviderError,
-			"ryn/google: create Vertex AI client", err).WithProvider("google")
+		return nil, niro.WrapError(niro.ErrCodeProviderError,
+			"niro/google: create Vertex AI client", err).WithProvider("google")
 	}
 	return &Provider{client: client, model: cfg.model, hooks: cfg.hooks}, nil
 }
@@ -180,7 +180,7 @@ func NewFromClient(client *genai.Client, model string, hooks ...RequestHook) *Pr
 
 // Client returns the underlying *genai.Client.
 //
-// Use this to access APIs not exposed by the ryn.Provider interface, such as
+// Use this to access APIs not exposed by the niro.Provider interface, such as
 // Gemini Live real-time sessions:
 //
 //	session, err := provider.Client().Live.Connect(ctx, model, config)
@@ -191,8 +191,8 @@ func (p *Provider) Client() *genai.Client { return p.client }
 // The method exists to satisfy common io.Closer patterns.
 func (p *Provider) Close() error { return nil }
 
-// Generate implements ryn.Provider.
-func (p *Provider) Generate(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+// Generate implements niro.Provider.
+func (p *Provider) Generate(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
 	if err := req.Validate(); err != nil {
 		return nil, err
 	}
@@ -213,14 +213,14 @@ func (p *Provider) Generate(ctx context.Context, req *ryn.Request) (*ryn.Stream,
 
 	contents := buildContents(req)
 	if len(contents) == 0 {
-		return nil, ryn.NewError(ryn.ErrCodeInvalidRequest,
-			"ryn/google: request must contain at least one non-system message").
+		return nil, niro.NewError(niro.ErrCodeInvalidRequest,
+			"niro/google: request must contain at least one non-system message").
 			WithProvider("google")
 	}
 
 	seq := p.client.Models.GenerateContentStream(ctx, modelName, contents, config)
 
-	stream, emitter := ryn.NewStream(32)
+	stream, emitter := niro.NewStream(32)
 	go consume(ctx, seq, emitter, modelName)
 	return stream, nil
 }
@@ -232,7 +232,7 @@ func (p *Provider) Generate(ctx context.Context, req *ryn.Request) (*ryn.Stream,
 func consume(
 	ctx context.Context,
 	seq iter.Seq2[*genai.GenerateContentResponse, error],
-	out *ryn.Emitter,
+	out *niro.Emitter,
 	modelName string,
 ) {
 	defer out.Close()
@@ -275,7 +275,7 @@ func consume(
 
 		for _, part := range cand.Content.Parts {
 			if part.Text != "" {
-				if err := out.Emit(ctx, ryn.TextFrame(part.Text)); err != nil {
+				if err := out.Emit(ctx, niro.TextFrame(part.Text)); err != nil {
 					return
 				}
 			} else if part.FunctionCall != nil {
@@ -291,9 +291,9 @@ func consume(
 				}
 				callIndex++
 
-				args, _ := ryn.JSONMarshal(fc.Args)
-				tc := &ryn.ToolCall{ID: id, Name: fc.Name, Args: args}
-				if err := out.Emit(ctx, ryn.ToolCallFrame(tc)); err != nil {
+				args, _ := niro.JSONMarshal(fc.Args)
+				tc := &niro.ToolCall{ID: id, Name: fc.Name, Args: args}
+				if err := out.Emit(ctx, niro.ToolCallFrame(tc)); err != nil {
 					return
 				}
 			}
@@ -307,13 +307,13 @@ func consume(
 		modelVersion = modelName
 	}
 
-	usage := &ryn.Usage{
+	usage := &niro.Usage{
 		InputTokens:  int(totalInput),
 		OutputTokens: int(totalOutput),
 		TotalTokens:  int(totalInput + totalOutput),
 	}
-	_ = out.Emit(ctx, ryn.UsageFrame(usage))
-	out.SetResponse(&ryn.ResponseMeta{
+	_ = out.Emit(ctx, niro.UsageFrame(usage))
+	out.SetResponse(&niro.ResponseMeta{
 		Model:        modelVersion,
 		FinishReason: finishReason,
 		ID:           responseID,
@@ -325,13 +325,13 @@ func consume(
 // Internal: error classification
 // ---------------------------------------------------------------------------
 
-// classifyError maps a raw SDK error to a typed *ryn.Error with the correct
+// classifyError maps a raw SDK error to a typed *niro.Error with the correct
 // error code, retryability flag, and provider tag.
-func classifyError(err error) *ryn.Error {
+func classifyError(err error) *niro.Error {
 	// New SDK returns genai.APIError (value type) for HTTP errors.
 	var apiErr genai.APIError
 	if errors.As(err, &apiErr) {
-		code := ryn.ConvertHTTPStatusToCode(apiErr.Code)
+		code := niro.ConvertHTTPStatusToCode(apiErr.Code)
 		msg := firstLine(apiErr.Message)
 		if msg == "" {
 			msg = apiErr.Status
@@ -341,25 +341,25 @@ func classifyError(err error) *ryn.Error {
 		// Details: []map[string]any rendering, producing unreadable noise.
 		// The compact wrapper keeps Error() clean while still allowing callers
 		// to reach the raw SDK error via errors.As(err, &genai.APIError{}).
-		return ryn.WrapError(code, msg, &compactAPIErr{raw: apiErr}).
+		return niro.WrapError(code, msg, &compactAPIErr{raw: apiErr}).
 			WithProvider("google").
 			WithStatusCode(apiErr.Code)
 	}
 
 	if errors.Is(err, context.DeadlineExceeded) {
-		return ryn.WrapError(ryn.ErrCodeTimeout, "request timed out", err).
+		return niro.WrapError(niro.ErrCodeTimeout, "request timed out", err).
 			WithProvider("google")
 	}
 	if errors.Is(err, context.Canceled) {
-		return ryn.WrapError(ryn.ErrCodeContextCancelled, "context cancelled", err).
+		return niro.WrapError(niro.ErrCodeContextCancelled, "context cancelled", err).
 			WithProvider("google")
 	}
-	return ryn.WrapError(ryn.ErrCodeStreamError, "stream error", err).
+	return niro.WrapError(niro.ErrCodeStreamError, "stream error", err).
 		WithProvider("google")
 }
 
 // compactAPIErr wraps a genai.APIError with a short Error() string so that
-// ryn.Error.Error() doesn't duplicate the verbose message or dump Details.
+// niro.Error.Error() doesn't duplicate the verbose message or dump Details.
 // The raw error is still reachable via errors.As.
 type compactAPIErr struct{ raw genai.APIError }
 
@@ -389,7 +389,7 @@ func firstLine(s string) string {
 	return strings.TrimSpace(s)
 }
 
-// mapFinishReason converts a genai.FinishReason to the ryn canonical string.
+// mapFinishReason converts a genai.FinishReason to the niro canonical string.
 func mapFinishReason(r genai.FinishReason) string {
 	switch r {
 	case genai.FinishReasonStop:
@@ -416,8 +416,8 @@ func mapFinishReason(r genai.FinishReason) string {
 // Internal: request building
 // ---------------------------------------------------------------------------
 
-// buildConfig converts a ryn.Request into a *genai.GenerateContentConfig.
-func buildConfig(req *ryn.Request) *genai.GenerateContentConfig {
+// buildConfig converts a niro.Request into a *genai.GenerateContentConfig.
+func buildConfig(req *niro.Request) *genai.GenerateContentConfig {
 	cfg := &genai.GenerateContentConfig{}
 
 	if req.SystemPrompt != "" {
@@ -454,7 +454,7 @@ func buildConfig(req *ryn.Request) *genai.GenerateContentConfig {
 		cfg.ResponseMIMEType = "application/json"
 		if len(req.ResponseSchema) > 0 {
 			var schema genai.Schema
-			if err := ryn.JSONUnmarshal(req.ResponseSchema, &schema); err == nil {
+			if err := niro.JSONUnmarshal(req.ResponseSchema, &schema); err == nil {
 				cfg.ResponseSchema = &schema
 			}
 		}
@@ -470,7 +470,7 @@ func buildConfig(req *ryn.Request) *genai.GenerateContentConfig {
 			}
 			if len(t.Parameters) > 0 {
 				var schema genai.Schema
-				if err := ryn.JSONUnmarshal(t.Parameters, &schema); err == nil {
+				if err := niro.JSONUnmarshal(t.Parameters, &schema); err == nil {
 					fd.Parameters = &schema
 				}
 			}
@@ -479,13 +479,13 @@ func buildConfig(req *ryn.Request) *genai.GenerateContentConfig {
 		cfg.Tools = []*genai.Tool{{FunctionDeclarations: decls}}
 
 		switch req.ToolChoice {
-		case ryn.ToolChoiceNone:
+		case niro.ToolChoiceNone:
 			cfg.ToolConfig = &genai.ToolConfig{
 				FunctionCallingConfig: &genai.FunctionCallingConfig{
 					Mode: genai.FunctionCallingConfigModeNone,
 				},
 			}
-		case ryn.ToolChoiceRequired:
+		case niro.ToolChoiceRequired:
 			cfg.ToolConfig = &genai.ToolConfig{
 				FunctionCallingConfig: &genai.FunctionCallingConfig{
 					Mode: genai.FunctionCallingConfigModeAny,
@@ -512,10 +512,10 @@ func buildConfig(req *ryn.Request) *genai.GenerateContentConfig {
 // buildContents converts Request.Messages into []*genai.Content for the API.
 // System messages are handled via GenerateContentConfig.SystemInstruction
 // and are excluded from the content array.
-func buildContents(req *ryn.Request) []*genai.Content {
+func buildContents(req *niro.Request) []*genai.Content {
 	var contents []*genai.Content
 	for _, msg := range req.Messages {
-		if msg.Role == ryn.RoleSystem {
+		if msg.Role == niro.RoleSystem {
 			continue
 		}
 		c := convertToContent(msg)
@@ -526,15 +526,15 @@ func buildContents(req *ryn.Request) []*genai.Content {
 	return contents
 }
 
-// convertToContent maps a ryn.Message to a *genai.Content.
+// convertToContent maps a niro.Message to a *genai.Content.
 //
 // Role mapping:
 //   - RoleUser      → "user"
 //   - RoleAssistant → "model"
 //   - RoleTool      → "user"  (FunctionResponse must be in a "user" turn per SDK)
-func convertToContent(msg ryn.Message) *genai.Content {
+func convertToContent(msg niro.Message) *genai.Content {
 	role := "user"
-	if msg.Role == ryn.RoleAssistant {
+	if msg.Role == niro.RoleAssistant {
 		role = "model"
 	}
 	parts := convertParts(msg)
@@ -547,21 +547,21 @@ func convertToContent(msg ryn.Message) *genai.Content {
 // convertParts converts message parts to []*genai.Part.
 // An empty text part is added when the converted list would otherwise be empty
 // to satisfy the SDK requirement of at least one part per Content.
-func convertParts(msg ryn.Message) []*genai.Part {
+func convertParts(msg niro.Message) []*genai.Part {
 	var parts []*genai.Part
 	for _, p := range msg.Parts {
 		switch p.Kind {
-		case ryn.KindText:
+		case niro.KindText:
 			parts = append(parts, &genai.Part{Text: p.Text})
 
-		case ryn.KindImage, ryn.KindAudio, ryn.KindVideo:
+		case niro.KindImage, niro.KindAudio, niro.KindVideo:
 			if len(p.Data) > 0 {
 				parts = append(parts, &genai.Part{
 					InlineData: &genai.Blob{MIMEType: p.Mime, Data: p.Data},
 				})
 			}
 
-		case ryn.KindToolResult:
+		case niro.KindToolResult:
 			if p.Result != nil {
 				// Gemini API convention: use "output" key for results and
 				// "error" key for errors. The model understands both.
@@ -583,10 +583,10 @@ func convertParts(msg ryn.Message) []*genai.Part {
 				})
 			}
 
-		case ryn.KindToolCall:
+		case niro.KindToolCall:
 			if p.Tool != nil {
 				var args map[string]any
-				_ = ryn.JSONUnmarshal(p.Tool.Args, &args)
+				_ = niro.JSONUnmarshal(p.Tool.Args, &args)
 				parts = append(parts, &genai.Part{
 					FunctionCall: &genai.FunctionCall{
 						ID:   p.Tool.ID,

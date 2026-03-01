@@ -54,12 +54,12 @@ func WithGenerationTimeout(ctx context.Context, timeout time.Duration) (context.
 
 // TimeoutProvider wraps a Provider with generation timeout enforcement.
 type TimeoutProvider struct {
-	provider ryn.Provider
+	provider niro.Provider
 	timeout  time.Duration
 }
 
 // NewTimeoutProvider creates a Provider that enforces generation timeouts.
-func NewTimeoutProvider(p ryn.Provider, timeout time.Duration) *TimeoutProvider {
+func NewTimeoutProvider(p niro.Provider, timeout time.Duration) *TimeoutProvider {
 	if timeout <= 0 {
 		timeout = 5 * time.Minute
 	}
@@ -67,7 +67,7 @@ func NewTimeoutProvider(p ryn.Provider, timeout time.Duration) *TimeoutProvider 
 }
 
 // Generate implements Provider with timeout enforcement.
-func (tp *TimeoutProvider) Generate(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+func (tp *TimeoutProvider) Generate(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
 	tctx, cancel := context.WithTimeout(ctx, tp.timeout)
 
 	stream, err := tp.provider.Generate(tctx, req)
@@ -76,7 +76,7 @@ func (tp *TimeoutProvider) Generate(ctx context.Context, req *ryn.Request) (*ryn
 		return nil, err
 	}
 
-	out, emitter := ryn.NewStream(32)
+	out, emitter := niro.NewStream(32)
 	go func() {
 		defer cancel()
 		defer emitter.Close()
@@ -95,7 +95,7 @@ func (tp *TimeoutProvider) Generate(ctx context.Context, req *ryn.Request) (*ryn
 		}
 		usage := stream.Usage()
 		if usage.InputTokens > 0 || usage.OutputTokens > 0 || usage.TotalTokens > 0 {
-			_ = emitter.Emit(tctx, ryn.UsageFrame(&usage))
+			_ = emitter.Emit(tctx, niro.UsageFrame(&usage))
 		}
 	}()
 
@@ -105,8 +105,8 @@ func (tp *TimeoutProvider) Generate(ctx context.Context, req *ryn.Request) (*ryn
 // Composed combines multiple provider wrappers (timeout, tracing, retry).
 // Useful for building a production-ready provider from building blocks.
 // Apply order: retry (outermost) → timeout → tracing → base.
-func Composed(p ryn.Provider, timeout time.Duration, retryConfig *RetryConfig) ryn.Provider {
-	var composed ryn.Provider = p
+func Composed(p niro.Provider, timeout time.Duration, retryConfig *RetryConfig) niro.Provider {
+	var composed niro.Provider = p
 
 	// Innermost: tracing
 	composed = NewTracingProvider(composed)

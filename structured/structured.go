@@ -21,19 +21,19 @@ type StructuredEvent[T any] struct {
 
 // StructuredStream decodes a stream of text frames into typed JSON output.
 type StructuredStream[T any] struct {
-	src        *ryn.Stream
+	src        *niro.Stream
 	buf        []byte
 	partial    T
 	final      T
 	event      StructuredEvent[T]
 	err        error
 	emittedEnd bool
-	resp       *ryn.ResponseMeta
-	usage      ryn.Usage
+	resp       *niro.ResponseMeta
+	usage      niro.Usage
 }
 
 // WithSchema returns a shallow copy of req configured for JSON schema output.
-func WithSchema(req *ryn.Request, schema json.RawMessage) *ryn.Request {
+func WithSchema(req *niro.Request, schema json.RawMessage) *niro.Request {
 	r := *req
 	r.ResponseFormat = "json_schema"
 	r.ResponseSchema = schema
@@ -41,8 +41,8 @@ func WithSchema(req *ryn.Request, schema json.RawMessage) *ryn.Request {
 }
 
 // WithSchemaAny marshals schema using the configured JSON library and applies it.
-func WithSchemaAny(req *ryn.Request, schema any) (*ryn.Request, error) {
-	b, err := ryn.JSONMarshal(schema)
+func WithSchemaAny(req *niro.Request, schema any) (*niro.Request, error) {
+	b, err := niro.JSONMarshal(schema)
 	if err != nil {
 		return nil, err
 	}
@@ -50,24 +50,24 @@ func WithSchemaAny(req *ryn.Request, schema any) (*ryn.Request, error) {
 }
 
 // GenerateStructured runs a request with JSON schema output and returns the final typed result.
-func GenerateStructured[T any](ctx context.Context, p ryn.Provider, req *ryn.Request, schema json.RawMessage) (T, *ryn.ResponseMeta, ryn.Usage, error) {
+func GenerateStructured[T any](ctx context.Context, p niro.Provider, req *niro.Request, schema json.RawMessage) (T, *niro.ResponseMeta, niro.Usage, error) {
 	var zero T
 
 	s, err := p.Generate(ctx, WithSchema(req, schema))
 	if err != nil {
-		return zero, nil, ryn.Usage{}, err
+		return zero, nil, niro.Usage{}, err
 	}
 
 	buf, err := collectTextBytes(ctx, s)
 	if err != nil {
-		return zero, nil, ryn.Usage{}, err
+		return zero, nil, niro.Usage{}, err
 	}
 	if len(buf) == 0 {
-		return zero, s.Response(), s.Usage(), ryn.ErrNoStructuredOutput
+		return zero, s.Response(), s.Usage(), niro.ErrNoStructuredOutput
 	}
 
 	var out T
-	if err := ryn.JSONUnmarshal(buf, &out); err != nil {
+	if err := niro.JSONUnmarshal(buf, &out); err != nil {
 		return zero, s.Response(), s.Usage(), err
 	}
 	return out, s.Response(), s.Usage(), nil
@@ -75,7 +75,7 @@ func GenerateStructured[T any](ctx context.Context, p ryn.Provider, req *ryn.Req
 
 // StreamStructured runs a request with JSON schema output and returns a decoder stream
 // that yields partial and final structured outputs.
-func StreamStructured[T any](ctx context.Context, p ryn.Provider, req *ryn.Request, schema json.RawMessage) (*StructuredStream[T], error) {
+func StreamStructured[T any](ctx context.Context, p niro.Provider, req *niro.Request, schema json.RawMessage) (*StructuredStream[T], error) {
 	s, err := p.Generate(ctx, WithSchema(req, schema))
 	if err != nil {
 		return nil, err
@@ -95,12 +95,12 @@ func (s *StructuredStream[T]) Next(ctx context.Context) bool {
 
 	for s.src.Next(ctx) {
 		f := s.src.Frame()
-		if f.Kind != ryn.KindText || f.Text == "" {
+		if f.Kind != niro.KindText || f.Text == "" {
 			continue
 		}
 		s.buf = append(s.buf, f.Text...)
-		if ryn.JSONValid(s.buf) {
-			if err := ryn.JSONUnmarshal(s.buf, &s.partial); err == nil {
+		if niro.JSONValid(s.buf) {
+			if err := niro.JSONUnmarshal(s.buf, &s.partial); err == nil {
 				s.event = StructuredEvent[T]{Partial: &s.partial}
 				return true
 			}
@@ -117,11 +117,11 @@ func (s *StructuredStream[T]) Next(ctx context.Context) bool {
 	s.resp = s.src.Response()
 	s.usage = s.src.Usage()
 	if len(s.buf) == 0 {
-		s.err = ryn.ErrNoStructuredOutput
+		s.err = niro.ErrNoStructuredOutput
 		s.emittedEnd = true
 		return false
 	}
-	if err := ryn.JSONUnmarshal(s.buf, &s.final); err != nil {
+	if err := niro.JSONUnmarshal(s.buf, &s.final); err != nil {
 		s.err = err
 		s.emittedEnd = true
 		return false
@@ -138,16 +138,16 @@ func (s *StructuredStream[T]) Event() StructuredEvent[T] { return s.event }
 func (s *StructuredStream[T]) Err() error { return s.err }
 
 // Usage returns the accumulated token usage.
-func (s *StructuredStream[T]) Usage() ryn.Usage { return s.usage }
+func (s *StructuredStream[T]) Usage() niro.Usage { return s.usage }
 
 // Response returns provider response metadata.
-func (s *StructuredStream[T]) Response() *ryn.ResponseMeta { return s.resp }
+func (s *StructuredStream[T]) Response() *niro.ResponseMeta { return s.resp }
 
-func collectTextBytes(ctx context.Context, s *ryn.Stream) ([]byte, error) {
+func collectTextBytes(ctx context.Context, s *niro.Stream) ([]byte, error) {
 	buf := make([]byte, 0, 4096)
 	for s.Next(ctx) {
 		f := s.Frame()
-		if f.Kind == ryn.KindText {
+		if f.Kind == niro.KindText {
 			buf = append(buf, f.Text...)
 		}
 	}

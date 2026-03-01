@@ -3,20 +3,20 @@ package bedrock
 // Nova Sonic — Amazon's speech-to-speech foundation model accessed via the
 // Bedrock Runtime bidirectional streaming API (InvokeModelWithBidirectionalStream).
 //
-// Sonic implements ryn.RealtimeProvider. Obtain a session and stream microphone
+// Sonic implements niro.RealtimeProvider. Obtain a session and stream microphone
 // audio in while playing model audio out:
 //
 //	cfg, _ := config.LoadDefaultConfig(ctx)
 //	sonic := bedrock.NewSonic(cfg)
-//	sess, err := sonic.Session(ctx, ryn.RealtimeConfig{
+//	sess, err := sonic.Session(ctx, niro.RealtimeConfig{
 //	    SystemPrompt: "You are a helpful voice assistant.",
 //	    Voice:        "matthew",
 //	    Tools:        myTools,
 //	})
 //	defer sess.Close()
 //
-// Audio in:  16 kHz PCM16 mono (ryn.AudioPCM16k)
-// Audio out: 24 kHz PCM16 mono (ryn.AudioPCM24k)
+// Audio in:  16 kHz PCM16 mono (niro.AudioPCM16k)
+// Audio out: 24 kHz PCM16 mono (niro.AudioPCM24k)
 //
 // Provider limitations (as of Nova Sonic v1):
 //   - Session max duration: 8 minutes.
@@ -104,7 +104,7 @@ func WithSonicVoice(voice string) SonicOption {
 	return func(c *sonicConfig) { c.voice = voice }
 }
 
-// SonicProvider implements ryn.RealtimeProvider backed by Amazon Nova Sonic.
+// SonicProvider implements niro.RealtimeProvider backed by Amazon Nova Sonic.
 type SonicProvider struct {
 	client *bedrockruntime.Client
 	model  string
@@ -140,7 +140,7 @@ func (p *SonicProvider) SonicClient() *bedrockruntime.Client { return p.client }
 //
 // The session immediately sends sessionStart. The first audio chunk
 // (or SignalEOT) sent via [SonicSession.Send] auto-initialises the prompt.
-func (p *SonicProvider) Session(ctx context.Context, cfg ryn.RealtimeConfig) (ryn.RealtimeSession, error) {
+func (p *SonicProvider) Session(ctx context.Context, cfg niro.RealtimeConfig) (niro.RealtimeSession, error) {
 	model := cfg.Model
 	if model == "" {
 		model = p.model
@@ -150,10 +150,10 @@ func (p *SonicProvider) Session(ctx context.Context, cfg ryn.RealtimeConfig) (ry
 		voice = p.voice
 	}
 	if cfg.InputFormat == "" {
-		cfg.InputFormat = ryn.AudioPCM16k
+		cfg.InputFormat = niro.AudioPCM16k
 	}
 	if cfg.OutputFormat == "" {
-		cfg.OutputFormat = ryn.AudioPCM24k
+		cfg.OutputFormat = niro.AudioPCM24k
 	}
 
 	out, err := p.client.InvokeModelWithBidirectionalStream(ctx,
@@ -165,7 +165,7 @@ func (p *SonicProvider) Session(ctx context.Context, cfg ryn.RealtimeConfig) (ry
 		return nil, fmt.Errorf("sonic: open stream: %w", err)
 	}
 
-	recv, recvEmit := ryn.NewStream(64)
+	recv, recvEmit := niro.NewStream(64)
 	sess := &SonicSession{
 		cfg:      cfg,
 		voice:    voice,
@@ -201,13 +201,13 @@ func (p *SonicProvider) Session(ctx context.Context, cfg ryn.RealtimeConfig) (ry
 
 // SonicSession is a live Nova Sonic bidirectional speech session.
 type SonicSession struct {
-	cfg   ryn.RealtimeConfig
+	cfg   niro.RealtimeConfig
 	voice string
 	es    *bedrockruntime.InvokeModelWithBidirectionalStreamEventStream
 
 	// Receive stream (written by recvLoop, read by the caller).
-	recv     *ryn.Stream
-	recvEmit *ryn.Emitter
+	recv     *niro.Stream
+	recvEmit *niro.Emitter
 
 	// mu protects promptID, audioContentID, eotSent, systemSent, pendingTool.
 	mu sync.Mutex
@@ -237,22 +237,22 @@ type sonicPendingTool struct {
 // ── Public API ───────────────────────────────────────────────────────────────
 
 // Send sends a frame to Nova Sonic.
-func (s *SonicSession) Send(ctx context.Context, f ryn.Frame) error {
+func (s *SonicSession) Send(ctx context.Context, f niro.Frame) error {
 	switch f.Kind {
-	case ryn.KindAudio:
+	case niro.KindAudio:
 		return s.sendAudio(ctx, f.Data)
-	case ryn.KindText:
+	case niro.KindText:
 		return s.sendText(ctx, f.Text)
-	case ryn.KindToolResult:
+	case niro.KindToolResult:
 		if f.Result == nil {
 			return errors.New("sonic: Send: nil ToolResult")
 		}
 		return s.sendToolResult(ctx, f.Result)
-	case ryn.KindControl:
+	case niro.KindControl:
 		switch f.Signal {
-		case ryn.SignalEOT:
+		case niro.SignalEOT:
 			return s.sendEOT(ctx)
-		case ryn.SignalAbort:
+		case niro.SignalAbort:
 			return s.sendAbort(ctx)
 		}
 	}
@@ -260,7 +260,7 @@ func (s *SonicSession) Send(ctx context.Context, f ryn.Frame) error {
 }
 
 // Recv returns the model output stream.
-func (s *SonicSession) Recv() *ryn.Stream { return s.recv }
+func (s *SonicSession) Recv() *niro.Stream { return s.recv }
 
 // Close terminates the session, flushing contentEnd → promptEnd → sessionEnd
 // before closing the underlying event stream.
@@ -448,7 +448,7 @@ func (s *SonicSession) sendAbort(ctx context.Context) error {
 
 // sendToolResult sends the result of a tool call back to Nova Sonic.
 // Must be called after receiving a KindToolCall frame from Recv.
-func (s *SonicSession) sendToolResult(ctx context.Context, result *ryn.ToolResult) error {
+func (s *SonicSession) sendToolResult(ctx context.Context, result *niro.ToolResult) error {
 	s.mu.Lock()
 	promptID := s.promptID
 	pending := s.pendingTool
@@ -680,11 +680,11 @@ func (s *SonicSession) recvLoop() {
 					continue
 				}
 				if to.Content == `{ "interrupted" : true }` {
-					_ = s.recvEmit.Emit(context.Background(), ryn.ControlFrame(ryn.SignalFlush))
+					_ = s.recvEmit.Emit(context.Background(), niro.ControlFrame(niro.SignalFlush))
 					continue
 				}
 				if to.Content != "" {
-					_ = s.recvEmit.Emit(context.Background(), ryn.TextFrame(to.Content))
+					_ = s.recvEmit.Emit(context.Background(), niro.TextFrame(to.Content))
 				}
 			}
 
@@ -693,7 +693,7 @@ func (s *SonicSession) recvLoop() {
 				pcm, err := base64.StdEncoding.DecodeString(ev2.AudioOutput.Content)
 				if err == nil && len(pcm) > 0 {
 					_ = s.recvEmit.Emit(context.Background(),
-						ryn.AudioFrame(pcm, ryn.AudioPCM24k))
+						niro.AudioFrame(pcm, niro.AudioPCM24k))
 				}
 			}
 
@@ -712,7 +712,7 @@ func (s *SonicSession) recvLoop() {
 					if !json.Valid(argsJSON) {
 						argsJSON = []byte(`{}`)
 					}
-					call := &ryn.ToolCall{
+					call := &niro.ToolCall{
 						ID:   toolUseBuffer.ToolUseID,
 						Name: toolUseBuffer.ToolName,
 						Args: argsJSON,
@@ -724,14 +724,14 @@ func (s *SonicSession) recvLoop() {
 						argsJSON:  argsJSON,
 					}
 					s.mu.Unlock()
-					_ = s.recvEmit.Emit(context.Background(), ryn.ToolCallFrame(call))
+					_ = s.recvEmit.Emit(context.Background(), niro.ToolCallFrame(call))
 				}
 			}
 
 			// --- completionEnd: model finished this turn ---
 			if ev2.CompletionEnd != nil {
 				// Emit EOT signal and reset prompt state for the next turn.
-				_ = s.recvEmit.Emit(context.Background(), ryn.ControlFrame(ryn.SignalEOT))
+				_ = s.recvEmit.Emit(context.Background(), niro.ControlFrame(niro.SignalEOT))
 				s.mu.Lock()
 				s.promptID = ""
 				s.audioContentID = ""
@@ -741,12 +741,12 @@ func (s *SonicSession) recvLoop() {
 
 			// --- usageEvent ---
 			if ev2.UsageEvent != nil {
-				u := &ryn.Usage{
+				u := &niro.Usage{
 					InputTokens:  ev2.UsageEvent.InputTokens,
 					OutputTokens: ev2.UsageEvent.OutputTokens,
 					TotalTokens:  ev2.UsageEvent.InputTokens + ev2.UsageEvent.OutputTokens,
 				}
-				_ = s.recvEmit.Emit(context.Background(), ryn.UsageFrame(u))
+				_ = s.recvEmit.Emit(context.Background(), niro.UsageFrame(u))
 			}
 		}
 	}
@@ -755,12 +755,12 @@ func (s *SonicSession) recvLoop() {
 // ── Low-level send helpers ────────────────────────────────────────────────────
 
 // sendEvent marshals ev and writes it to the event stream, returning
-// ryn.ErrClosed if the session has already been closed.
+// niro.ErrClosed if the session has already been closed.
 // Used for all normal (non-Close) sends.
 func (s *SonicSession) sendEvent(ev sonicEvent) error {
 	select {
 	case <-s.closed:
-		return ryn.ErrClosed
+		return niro.ErrClosed
 	default:
 	}
 	data, err := json.Marshal(ev)
@@ -793,7 +793,7 @@ func (s *SonicSession) storeErr(err error) {
 
 // ── Tool config builder ───────────────────────────────────────────────────────
 
-func buildSonicToolConfig(tools []ryn.Tool) *sonicToolConfiguration {
+func buildSonicToolConfig(tools []niro.Tool) *sonicToolConfiguration {
 	specs := make([]sonicToolSpec, len(tools))
 	for i, t := range tools {
 		schemaStr := string(t.Parameters)

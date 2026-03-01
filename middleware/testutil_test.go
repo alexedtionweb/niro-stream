@@ -11,10 +11,10 @@ import (
 // retryHintProviderMock is a provider that can declare it handles retries internally.
 type retryHintProviderMock struct {
 	handlesRetries bool
-	fn             func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error)
+	fn             func(ctx context.Context, req *niro.Request) (*niro.Stream, error)
 }
 
-func (m *retryHintProviderMock) Generate(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+func (m *retryHintProviderMock) Generate(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
 	return m.fn(ctx, req)
 }
 

@@ -100,7 +100,7 @@ func main() {
 	printBanner()
 
 	var (
-		history  []ryn.Message
+		history  []niro.Message
 		totalIn  int
 		totalOut int
 	)
@@ -141,12 +141,12 @@ func main() {
 		}
 
 		// ── Build request ─────────────────────────────────────────────────
-		history = append(history, ryn.UserText(input))
+		history = append(history, niro.UserText(input))
 
-		req := ts.Apply(&ryn.Request{
+		req := ts.Apply(&niro.Request{
 			SystemPrompt: systemPrompt,
 			Messages:     history,
-			Options:      ryn.Options{MaxTokens: 1024, Temperature: ryn.Temp(0.7)},
+			Options:      niro.Options{MaxTokens: 1024, Temperature: niro.Temp(0.7)},
 		})
 
 		stream, err := loop.GenerateWithTools(ctx, llm, req)
@@ -168,7 +168,7 @@ func main() {
 		}
 
 		if reply != "" {
-			history = append(history, ryn.AssistantText(reply))
+			history = append(history, niro.AssistantText(reply))
 		}
 
 		u := stream.Usage()
@@ -189,7 +189,7 @@ func main() {
 
 // streamResponse drains the stream, printing text tokens and tool-call
 // notifications inline. Returns the full assistant text for history.
-func streamResponse(ctx context.Context, stream *ryn.Stream) string {
+func streamResponse(ctx context.Context, stream *niro.Stream) string {
 	var (
 		reply       strings.Builder
 		printedAI   bool
@@ -207,13 +207,13 @@ func streamResponse(ctx context.Context, stream *ryn.Stream) string {
 	for stream.Next(ctx) {
 		f := stream.Frame()
 		switch f.Kind {
-		case ryn.KindText:
+		case niro.KindText:
 			ensureAI()
 			fmt.Print(f.Text)
 			reply.WriteString(f.Text)
 			atLineStart = strings.HasSuffix(f.Text, "\n")
 
-		case ryn.KindToolCall:
+		case niro.KindToolCall:
 			if f.Tool == nil {
 				continue
 			}
@@ -278,7 +278,7 @@ func printHelp() {
 	fmt.Println()
 }
 
-func printHistory(history []ryn.Message) {
+func printHistory(history []niro.Message) {
 	if len(history) == 0 {
 		fmt.Println(col(colDim, "(no messages yet)"))
 		return
@@ -286,12 +286,12 @@ func printHistory(history []ryn.Message) {
 	fmt.Println(col(colBold, "── Conversation history ────────────────────"))
 	for i, m := range history {
 		label := col(colGreen, "User ")
-		if m.Role == ryn.RoleAssistant {
+		if m.Role == niro.RoleAssistant {
 			label = col(colCyan, "AI   ")
 		}
 		var sb strings.Builder
 		for _, p := range m.Parts {
-			if p.Kind == ryn.KindText {
+			if p.Kind == niro.KindText {
 				sb.WriteString(p.Text)
 			}
 		}
@@ -429,7 +429,7 @@ func buildToolset() *tools.Toolset {
 			if err != nil {
 				return nil, fmt.Errorf("invalid URL: %w", err)
 			}
-			req.Header.Set("User-Agent", "ryn-chat/1.0 (demo)")
+			req.Header.Set("User-Agent", "niro-chat/1.0 (demo)")
 			req.Header.Set("Accept", "text/html,text/plain,*/*")
 
 			resp, err := http.DefaultClient.Do(req)
@@ -760,7 +760,7 @@ func isAlpha(c byte) bool {
 
 // ── Provider factory ──────────────────────────────────────────────────────────
 
-func mustProvider(ctx context.Context) ryn.Provider {
+func mustProvider(ctx context.Context) niro.Provider {
 	switch strings.ToLower(os.Getenv("PROVIDER")) {
 	case "", "openai":
 		key := os.Getenv("OPENAI_API_KEY")

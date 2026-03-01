@@ -81,7 +81,7 @@ func DefaultRetryConfig() RetryConfig {
 			MaxDelay:     10 * time.Second,
 			Jitter:       true,
 		},
-		ShouldRetry:                ryn.IsRetryable,
+		ShouldRetry:                niro.IsRetryable,
 		OnRetry:                    nil,
 		DisableWhenProviderRetries: true,
 	}
@@ -97,7 +97,7 @@ type RetryHintProvider interface {
 //
 // If cfg.DisableWhenProviderRetries is true and p indicates built-in retries,
 // p is returned unchanged.
-func WrapWithSmartRetry(p ryn.Provider, cfg RetryConfig) ryn.Provider {
+func WrapWithSmartRetry(p niro.Provider, cfg RetryConfig) niro.Provider {
 	if cfg.DisableWhenProviderRetries {
 		if hp, ok := p.(RetryHintProvider); ok && hp.ProviderHandlesRetries() {
 			return p
@@ -108,12 +108,12 @@ func WrapWithSmartRetry(p ryn.Provider, cfg RetryConfig) ryn.Provider {
 
 // RetryProvider wraps a Provider with automatic retry logic.
 type RetryProvider struct {
-	provider ryn.Provider
+	provider niro.Provider
 	config   RetryConfig
 }
 
 // NewRetryProvider creates a Provider that retries on transient failures.
-func NewRetryProvider(p ryn.Provider, config RetryConfig) *RetryProvider {
+func NewRetryProvider(p niro.Provider, config RetryConfig) *RetryProvider {
 	if config.MaxAttempts <= 0 {
 		config.MaxAttempts = 3
 	}
@@ -126,20 +126,20 @@ func NewRetryProvider(p ryn.Provider, config RetryConfig) *RetryProvider {
 		}
 	}
 	if config.ShouldRetry == nil {
-		config.ShouldRetry = ryn.IsRetryable
+		config.ShouldRetry = niro.IsRetryable
 	}
 	return &RetryProvider{provider: p, config: config}
 }
 
 // Generate implements Provider with automatic retries.
-func (rp *RetryProvider) Generate(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+func (rp *RetryProvider) Generate(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
 	var lastErr error
 
 	for attempt := 0; attempt < rp.config.MaxAttempts; attempt++ {
 		// Check context before each attempt
 		select {
 		case <-ctx.Done():
-			return nil, ryn.NewErrorf(ryn.ErrCodeContextCancelled, "context cancelled after %d attempts", attempt)
+			return nil, niro.NewErrorf(niro.ErrCodeContextCancelled, "context cancelled after %d attempts", attempt)
 		default:
 		}
 
@@ -172,7 +172,7 @@ func (rp *RetryProvider) Generate(ctx context.Context, req *ryn.Request) (*ryn.S
 		// noise from routine success paths. LogWarn propagates ctx so
 		// context-aware adapters (e.g. OpenTelemetry) can correlate the record
 		// with the originating request.
-		ryn.LogWarn(ctx, "ryn/retry: retrying",
+		niro.LogWarn(ctx, "niro/retry: retrying",
 			"attempt", attempt+1,
 			"max", rp.config.MaxAttempts,
 			"delay", delay.String(),
@@ -182,11 +182,11 @@ func (rp *RetryProvider) Generate(ctx context.Context, req *ryn.Request) (*ryn.S
 		select {
 		case <-ctx.Done():
 			timer.Stop()
-			return nil, ryn.NewErrorf(ryn.ErrCodeContextCancelled, "context cancelled during retry backoff after %d attempts", attempt+1)
+			return nil, niro.NewErrorf(niro.ErrCodeContextCancelled, "context cancelled during retry backoff after %d attempts", attempt+1)
 		case <-timer.C:
 			// Continue to next attempt
 		}
 	}
 
-	return nil, ryn.NewErrorf(ryn.ErrCodeProviderError, "all %d attempts failed: %v", rp.config.MaxAttempts, lastErr)
+	return nil, niro.NewErrorf(niro.ErrCodeProviderError, "all %d attempts failed: %v", rp.config.MaxAttempts, lastErr)
 }

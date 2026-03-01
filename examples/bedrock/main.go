@@ -70,13 +70,13 @@ func main() {
 	toolCalling(ctx, llm)
 }
 
-func basicChat(ctx context.Context, llm ryn.Provider) {
-	stream, err := llm.Generate(ctx, &ryn.Request{
+func basicChat(ctx context.Context, llm niro.Provider) {
+	stream, err := llm.Generate(ctx, &niro.Request{
 		SystemPrompt: "You are a helpful assistant. Keep answers short.",
-		Messages: []ryn.Message{
-			ryn.UserText("What makes Amazon Bedrock different from calling model APIs directly?"),
+		Messages: []niro.Message{
+			niro.UserText("What makes Amazon Bedrock different from calling model APIs directly?"),
 		},
-		Options: ryn.Options{MaxTokens: 256, Temperature: ryn.Temp(0.5)},
+		Options: niro.Options{MaxTokens: 256, Temperature: niro.Temp(0.5)},
 	})
 	if err != nil {
 		slog.Error("generate failed", "err", err)
@@ -84,7 +84,7 @@ func basicChat(ctx context.Context, llm ryn.Provider) {
 	}
 
 	for stream.Next(ctx) {
-		if f := stream.Frame(); f.Kind == ryn.KindText {
+		if f := stream.Frame(); f.Kind == niro.KindText {
 			fmt.Print(f.Text)
 		}
 	}
@@ -95,9 +95,9 @@ func basicChat(ctx context.Context, llm ryn.Provider) {
 	printUsage(stream)
 }
 
-func multiTurn(ctx context.Context, llm ryn.Provider) {
-	conversation := []ryn.Message{
-		ryn.UserText("I'm learning about cloud architectures. Start by explaining serverless in one sentence."),
+func multiTurn(ctx context.Context, llm niro.Provider) {
+	conversation := []niro.Message{
+		niro.UserText("I'm learning about cloud architectures. Start by explaining serverless in one sentence."),
 	}
 
 	nextQuestions := []string{
@@ -106,10 +106,10 @@ func multiTurn(ctx context.Context, llm ryn.Provider) {
 	}
 
 	for i := 0; i <= len(nextQuestions); i++ {
-		stream, err := llm.Generate(ctx, &ryn.Request{
+		stream, err := llm.Generate(ctx, &niro.Request{
 			SystemPrompt: "You are a cloud architecture expert. Be concise.",
 			Messages:     conversation,
-			Options:      ryn.Options{MaxTokens: 128},
+			Options:      niro.Options{MaxTokens: 128},
 		})
 		if err != nil {
 			slog.Error("turn failed", "turn", i, "err", err)
@@ -118,7 +118,7 @@ func multiTurn(ctx context.Context, llm ryn.Provider) {
 
 		var reply strings.Builder
 		for stream.Next(ctx) {
-			if f := stream.Frame(); f.Kind == ryn.KindText {
+			if f := stream.Frame(); f.Kind == niro.KindText {
 				fmt.Print(f.Text)
 				reply.WriteString(f.Text)
 			}
@@ -129,14 +129,14 @@ func multiTurn(ctx context.Context, llm ryn.Provider) {
 			return
 		}
 
-		conversation = append(conversation, ryn.AssistantText(reply.String()))
+		conversation = append(conversation, niro.AssistantText(reply.String()))
 		if i < len(nextQuestions) {
-			conversation = append(conversation, ryn.UserText(nextQuestions[i]))
+			conversation = append(conversation, niro.UserText(nextQuestions[i]))
 		}
 	}
 }
 
-func toolCalling(ctx context.Context, llm ryn.Provider) {
+func toolCalling(ctx context.Context, llm niro.Provider) {
 	type stockArgs struct {
 		Symbol string `json:"symbol"`
 	}
@@ -165,12 +165,12 @@ func toolCalling(ctx context.Context, llm ryn.Provider) {
 	ts := tools.NewToolset().MustRegister(stockDef)
 
 	loop := tools.NewToolLoop(ts, 5)
-	stream, err := loop.GenerateWithTools(ctx, llm, &ryn.Request{
-		Messages: []ryn.Message{
-			ryn.UserText("What are the current stock prices for AMZN and NVDA?"),
+	stream, err := loop.GenerateWithTools(ctx, llm, &niro.Request{
+		Messages: []niro.Message{
+			niro.UserText("What are the current stock prices for AMZN and NVDA?"),
 		},
 		Tools:   ts.Tools(),
-		Options: ryn.Options{MaxTokens: 256},
+		Options: niro.Options{MaxTokens: 256},
 	})
 	if err != nil {
 		slog.Error("generate failed", "err", err)
@@ -178,7 +178,7 @@ func toolCalling(ctx context.Context, llm ryn.Provider) {
 	}
 
 	for stream.Next(ctx) {
-		if f := stream.Frame(); f.Kind == ryn.KindText {
+		if f := stream.Frame(); f.Kind == niro.KindText {
 			fmt.Print(f.Text)
 		}
 	}
@@ -189,7 +189,7 @@ func toolCalling(ctx context.Context, llm ryn.Provider) {
 	printUsage(stream)
 }
 
-func printUsage(s *ryn.Stream) {
+func printUsage(s *niro.Stream) {
 	u := s.Usage()
 	if u.TotalTokens > 0 {
 		slog.Info("usage", "in", u.InputTokens, "out", u.OutputTokens, "total", u.TotalTokens)

@@ -86,7 +86,7 @@ func main() {
 	// Priority: req.Client > PROVIDER env > default > sole registered provider.
 	router := registry.NewMultiTenantProvider(reg,
 		registry.WithDefaultClient(firstAvailable(reg, "openai", "anthropic", "gemini", "bedrock")),
-		registry.WithClientSelector(func(ctx context.Context, req *ryn.Request) (string, error) {
+		registry.WithClientSelector(func(ctx context.Context, req *niro.Request) (string, error) {
 			// Allow overriding via env var at runtime.
 			if p := os.Getenv("PROVIDER"); p != "" && reg.Has(p) {
 				return p, nil
@@ -99,7 +99,7 @@ func main() {
 	// provider-specific fields without polluting the shared request object.
 	router2 := registry.NewMultiTenantProvider(reg,
 		registry.WithDefaultClient(firstAvailable(reg, "openai", "anthropic", "gemini", "bedrock")),
-		registry.WithClientMutator("anthropic", func(ctx context.Context, req *ryn.Request) error {
+		registry.WithClientMutator("anthropic", func(ctx context.Context, req *niro.Request) error {
 			// Example: always use the extended-thinking model for Anthropic.
 			if req.Model == "" {
 				req.Model = "claude-3-5-sonnet-20241022"
@@ -127,18 +127,18 @@ func main() {
 }
 
 // generate calls router.Generate, streaming output to stdout.
-func generate(ctx context.Context, router ryn.Provider, client, prompt string) error {
-	stream, err := router.Generate(ctx, &ryn.Request{
+func generate(ctx context.Context, router niro.Provider, client, prompt string) error {
+	stream, err := router.Generate(ctx, &niro.Request{
 		Client:   client, // explicit override; empty = use selector / default
-		Messages: []ryn.Message{ryn.UserText(prompt)},
-		Options:  ryn.Options{MaxTokens: 200, Temperature: ryn.Temp(0.5)},
+		Messages: []niro.Message{niro.UserText(prompt)},
+		Options:  niro.Options{MaxTokens: 200, Temperature: niro.Temp(0.5)},
 	})
 	if err != nil {
 		return err
 	}
 
 	for stream.Next(ctx) {
-		if f := stream.Frame(); f.Kind == ryn.KindText {
+		if f := stream.Frame(); f.Kind == niro.KindText {
 			fmt.Print(f.Text)
 		}
 	}

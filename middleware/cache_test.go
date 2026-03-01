@@ -16,27 +16,27 @@ func TestCacheHitMiss(t *testing.T) {
 	ctx := context.Background()
 
 	callCount := 0
-	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+	mock := niro.ProviderFunc(func(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
 		callCount++
-		return ryn.StreamFromSlice([]ryn.Frame{ryn.TextFrame("hello")}), nil
+		return niro.StreamFromSlice([]niro.Frame{niro.TextFrame("hello")}), nil
 	})
 
 	cache := middleware.NewCache(middleware.CacheOptions{MaxEntries: 100, TTL: time.Minute})
 	provider := cache.Wrap(mock)
 
-	req := &ryn.Request{Model: "test", Messages: []ryn.Message{ryn.UserText("hi")}}
+	req := &niro.Request{Model: "test", Messages: []niro.Message{niro.UserText("hi")}}
 
 	// First call: miss
 	s, err := provider.Generate(ctx, req)
 	assertNoError(t, err)
-	text, _ := ryn.CollectText(ctx, s)
+	text, _ := niro.CollectText(ctx, s)
 	assertEqual(t, text, "hello")
 	assertEqual(t, callCount, 1)
 
 	// Second call: hit
 	s2, err := provider.Generate(ctx, req)
 	assertNoError(t, err)
-	text2, _ := ryn.CollectText(ctx, s2)
+	text2, _ := niro.CollectText(ctx, s2)
 	assertEqual(t, text2, "hello")
 	assertEqual(t, callCount, 1) // not called again
 
@@ -50,19 +50,19 @@ func TestCacheDifferentRequests(t *testing.T) {
 	ctx := context.Background()
 
 	callCount := 0
-	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+	mock := niro.ProviderFunc(func(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
 		callCount++
-		return ryn.StreamFromSlice([]ryn.Frame{ryn.TextFrame(req.Messages[0].Parts[0].Text)}), nil
+		return niro.StreamFromSlice([]niro.Frame{niro.TextFrame(req.Messages[0].Parts[0].Text)}), nil
 	})
 
 	cache := middleware.NewCache(middleware.CacheOptions{MaxEntries: 100})
 	provider := cache.Wrap(mock)
 
-	s1, _ := provider.Generate(ctx, &ryn.Request{Messages: []ryn.Message{ryn.UserText("a")}})
-	ryn.CollectText(ctx, s1)
+	s1, _ := provider.Generate(ctx, &niro.Request{Messages: []niro.Message{niro.UserText("a")}})
+	niro.CollectText(ctx, s1)
 
-	s2, _ := provider.Generate(ctx, &ryn.Request{Messages: []ryn.Message{ryn.UserText("b")}})
-	ryn.CollectText(ctx, s2)
+	s2, _ := provider.Generate(ctx, &niro.Request{Messages: []niro.Message{niro.UserText("b")}})
+	niro.CollectText(ctx, s2)
 
 	assertEqual(t, callCount, 2) // different requests, both miss
 }
@@ -72,24 +72,24 @@ func TestCacheTTLExpiry(t *testing.T) {
 	ctx := context.Background()
 
 	callCount := 0
-	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+	mock := niro.ProviderFunc(func(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
 		callCount++
-		return ryn.StreamFromSlice([]ryn.Frame{ryn.TextFrame("ok")}), nil
+		return niro.StreamFromSlice([]niro.Frame{niro.TextFrame("ok")}), nil
 	})
 
 	cache := middleware.NewCache(middleware.CacheOptions{MaxEntries: 100, TTL: 50 * time.Millisecond})
 	provider := cache.Wrap(mock)
 
-	req := &ryn.Request{Messages: []ryn.Message{ryn.UserText("hi")}}
+	req := &niro.Request{Messages: []niro.Message{niro.UserText("hi")}}
 
 	s1, _ := provider.Generate(ctx, req)
-	ryn.CollectText(ctx, s1)
+	niro.CollectText(ctx, s1)
 	assertEqual(t, callCount, 1)
 
 	time.Sleep(100 * time.Millisecond)
 
 	s2, _ := provider.Generate(ctx, req)
-	ryn.CollectText(ctx, s2)
+	niro.CollectText(ctx, s2)
 	assertEqual(t, callCount, 2) // expired, called again
 }
 
@@ -97,8 +97,8 @@ func TestCacheLRUEviction(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 
-	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
-		return ryn.StreamFromSlice([]ryn.Frame{ryn.TextFrame("x")}), nil
+	mock := niro.ProviderFunc(func(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
+		return niro.StreamFromSlice([]niro.Frame{niro.TextFrame("x")}), nil
 	})
 
 	cache := middleware.NewCache(middleware.CacheOptions{MaxEntries: 64, TTL: time.Hour})
@@ -106,11 +106,11 @@ func TestCacheLRUEviction(t *testing.T) {
 
 	// Fill cache beyond capacity
 	for i := 0; i < 200; i++ {
-		s, _ := provider.Generate(ctx, &ryn.Request{
+		s, _ := provider.Generate(ctx, &niro.Request{
 			Model:    fmt.Sprintf("model-%d", i),
-			Messages: []ryn.Message{ryn.UserText("hi")},
+			Messages: []niro.Message{niro.UserText("hi")},
 		})
-		ryn.CollectText(ctx, s)
+		niro.CollectText(ctx, s)
 	}
 
 	assertTrue(t, cache.Len() <= 64)
@@ -120,19 +120,19 @@ func TestCacheClear(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 
-	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
-		return ryn.StreamFromSlice([]ryn.Frame{ryn.TextFrame("x")}), nil
+	mock := niro.ProviderFunc(func(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
+		return niro.StreamFromSlice([]niro.Frame{niro.TextFrame("x")}), nil
 	})
 
 	cache := middleware.NewCache(middleware.CacheOptions{MaxEntries: 100})
 	provider := cache.Wrap(mock)
 
 	for i := 0; i < 10; i++ {
-		s, _ := provider.Generate(ctx, &ryn.Request{
+		s, _ := provider.Generate(ctx, &niro.Request{
 			Model:    fmt.Sprintf("m%d", i),
-			Messages: []ryn.Message{ryn.UserText("x")},
+			Messages: []niro.Message{niro.UserText("x")},
 		})
-		ryn.CollectText(ctx, s)
+		niro.CollectText(ctx, s)
 	}
 
 	assertTrue(t, cache.Len() > 0)
@@ -144,8 +144,8 @@ func TestCacheConcurrent(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 
-	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
-		return ryn.StreamFromSlice([]ryn.Frame{ryn.TextFrame("ok")}), nil
+	mock := niro.ProviderFunc(func(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
+		return niro.StreamFromSlice([]niro.Frame{niro.TextFrame("ok")}), nil
 	})
 
 	cache := middleware.NewCache(middleware.CacheOptions{MaxEntries: 1000})
@@ -157,16 +157,16 @@ func TestCacheConcurrent(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for j := 0; j < 20; j++ {
-				req := &ryn.Request{
+				req := &niro.Request{
 					Model:    fmt.Sprintf("m%d", j%5),
-					Messages: []ryn.Message{ryn.UserText("hi")},
+					Messages: []niro.Message{niro.UserText("hi")},
 				}
 				s, err := provider.Generate(ctx, req)
 				if err != nil {
 					t.Errorf("generate error: %v", err)
 					return
 				}
-				ryn.CollectText(ctx, s)
+				niro.CollectText(ctx, s)
 			}
 		}()
 	}
@@ -177,7 +177,7 @@ func TestCacheProviderError(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 
-	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+	mock := niro.ProviderFunc(func(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
 		return nil, fmt.Errorf("provider down")
 	})
 
@@ -185,7 +185,7 @@ func TestCacheProviderError(t *testing.T) {
 	cache := middleware.NewCache(middleware.CacheOptions{})
 	provider := cache.Wrap(mock)
 
-	_, err := provider.Generate(ctx, &ryn.Request{Messages: []ryn.Message{ryn.UserText("hi")}})
+	_, err := provider.Generate(ctx, &niro.Request{Messages: []niro.Message{niro.UserText("hi")}})
 	assertErrorContains(t, err, "provider down")
 }
 
@@ -193,8 +193,8 @@ func TestCacheStreamError(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 
-	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
-		out, em := ryn.NewStream(4)
+	mock := niro.ProviderFunc(func(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
+		out, em := niro.NewStream(4)
 		go func() {
 			defer em.Close()
 			em.Error(fmt.Errorf("stream error"))
@@ -205,9 +205,9 @@ func TestCacheStreamError(t *testing.T) {
 	cache := middleware.NewCache(middleware.CacheOptions{MaxEntries: 100})
 	provider := cache.Wrap(mock)
 
-	s, err := provider.Generate(ctx, &ryn.Request{Messages: []ryn.Message{ryn.UserText("hi")}})
+	s, err := provider.Generate(ctx, &niro.Request{Messages: []niro.Message{niro.UserText("hi")}})
 	assertNoError(t, err)
-	_, err = ryn.Collect(ctx, s)
+	_, err = niro.Collect(ctx, s)
 	assertErrorContains(t, err, "stream error")
 }
 
@@ -216,27 +216,27 @@ func TestCacheCustomKeyFn(t *testing.T) {
 	ctx := context.Background()
 
 	callCount := 0
-	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+	mock := niro.ProviderFunc(func(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
 		callCount++
-		return ryn.StreamFromSlice([]ryn.Frame{ryn.TextFrame("ok")}), nil
+		return niro.StreamFromSlice([]niro.Frame{niro.TextFrame("ok")}), nil
 	})
 
 	// Fixed key → all requests map to same cache entry.
 	cache := middleware.NewCache(middleware.CacheOptions{
 		MaxEntries: 100,
 		TTL:        time.Minute,
-		KeyFn: func(*ryn.Request) [32]byte {
+		KeyFn: func(*niro.Request) [32]byte {
 			return [32]byte{1, 2, 3}
 		},
 	})
 	provider := cache.Wrap(mock)
 
 	for i := 0; i < 3; i++ {
-		s, _ := provider.Generate(ctx, &ryn.Request{
+		s, _ := provider.Generate(ctx, &niro.Request{
 			Model:    fmt.Sprintf("model-%d", i),
-			Messages: []ryn.Message{ryn.UserText("hi")},
+			Messages: []niro.Message{niro.UserText("hi")},
 		})
-		ryn.CollectText(ctx, s)
+		niro.CollectText(ctx, s)
 	}
 	// All requests resolve to the same key → only the first is a miss.
 	assertEqual(t, callCount, 1)
@@ -255,7 +255,7 @@ func TestCacheMoveToFront(t *testing.T) {
 	cache := middleware.NewCache(middleware.CacheOptions{
 		MaxEntries: 2048, // large enough to avoid eviction
 		TTL:        time.Minute,
-		KeyFn: func(req *ryn.Request) [32]byte {
+		KeyFn: func(req *niro.Request) [32]byte {
 			var k [32]byte
 			k[0] = 0                      // shard 0
 			k[1] = byte(keySeq[keyIdx%5]) // cyclic index
@@ -264,33 +264,33 @@ func TestCacheMoveToFront(t *testing.T) {
 		},
 	})
 
-	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
-		return ryn.StreamFromSlice([]ryn.Frame{ryn.TextFrame(req.Model)}), nil
+	mock := niro.ProviderFunc(func(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
+		return niro.StreamFromSlice([]niro.Frame{niro.TextFrame(req.Model)}), nil
 	})
 	provider := cache.Wrap(mock)
 
-	req := func(model string) *ryn.Request {
-		return &ryn.Request{Model: model, Messages: []ryn.Message{ryn.UserText("hi")}}
+	req := func(model string) *niro.Request {
+		return &niro.Request{Model: model, Messages: []niro.Message{niro.UserText("hi")}}
 	}
 
 	// Populate shard 0 with 3 distinct entries: key1(A), key2(B), key3(C).
 	s, _ := provider.Generate(ctx, req("A"))
-	ryn.CollectText(ctx, s) // key1 → miss → put(A); head=A
+	niro.CollectText(ctx, s) // key1 → miss → put(A); head=A
 
 	s, _ = provider.Generate(ctx, req("B"))
-	ryn.CollectText(ctx, s) // key2 → miss → put(B); head=B, tail=A
+	niro.CollectText(ctx, s) // key2 → miss → put(B); head=B, tail=A
 
 	s, _ = provider.Generate(ctx, req("C"))
-	ryn.CollectText(ctx, s) // key3 → miss → put(C); head=C, B in middle, tail=A
+	niro.CollectText(ctx, s) // key3 → miss → put(C); head=C, B in middle, tail=A
 
 	// Re-access key1 → hit → moveToFront(A) where A is tail (not head).
 	s, _ = provider.Generate(ctx, req("A-again"))
-	text, _ := ryn.CollectText(ctx, s)
+	text, _ := niro.CollectText(ctx, s)
 	assertEqual(t, text, "A") // served from cache
 
 	// Re-access key2 → hit → moveToFront(B) where B may be middle.
 	s, _ = provider.Generate(ctx, req("B-again"))
-	text, _ = ryn.CollectText(ctx, s)
+	text, _ = niro.CollectText(ctx, s)
 	assertEqual(t, text, "B") // served from cache
 
 	hits, _ := cache.Stats()
@@ -301,13 +301,13 @@ func TestCacheHitWithUsage(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 
-	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
-		out, em := ryn.NewStream(8)
+	mock := niro.ProviderFunc(func(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
+		out, em := niro.NewStream(8)
 		go func() {
 			defer em.Close()
-			em.Emit(ctx, ryn.TextFrame("hello"))
-			usage := ryn.Usage{InputTokens: 5, OutputTokens: 3, TotalTokens: 8}
-			em.Emit(ctx, ryn.UsageFrame(&usage))
+			em.Emit(ctx, niro.TextFrame("hello"))
+			usage := niro.Usage{InputTokens: 5, OutputTokens: 3, TotalTokens: 8}
+			em.Emit(ctx, niro.UsageFrame(&usage))
 		}()
 		return out, nil
 	})
@@ -315,17 +315,17 @@ func TestCacheHitWithUsage(t *testing.T) {
 	cache := middleware.NewCache(middleware.CacheOptions{MaxEntries: 100, TTL: time.Minute})
 	provider := cache.Wrap(mock)
 
-	req := &ryn.Request{Model: "m", Messages: []ryn.Message{ryn.UserText("hi")}}
+	req := &niro.Request{Model: "m", Messages: []niro.Message{niro.UserText("hi")}}
 
 	// First call: miss, provider emits text + usage frame.
 	s1, err := provider.Generate(ctx, req)
 	assertNoError(t, err)
-	ryn.Collect(ctx, s1)
+	niro.Collect(ctx, s1)
 
 	// Second call: cache hit — should replay frames and re-emit usage.
 	s2, err := provider.Generate(ctx, req)
 	assertNoError(t, err)
-	text, err := ryn.CollectText(ctx, s2)
+	text, err := niro.CollectText(ctx, s2)
 	assertNoError(t, err)
 	assertEqual(t, text, "hello")
 
@@ -339,13 +339,13 @@ func TestCacheMissForwardsUsage(t *testing.T) {
 	ctx := context.Background()
 
 	// Provider emits a usage frame alongside text.
-	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
-		out, em := ryn.NewStream(8)
+	mock := niro.ProviderFunc(func(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
+		out, em := niro.NewStream(8)
 		go func() {
 			defer em.Close()
-			_ = em.Emit(ctx, ryn.TextFrame("hello"))
-			u := ryn.Usage{InputTokens: 10, OutputTokens: 5, TotalTokens: 15}
-			_ = em.Emit(ctx, ryn.UsageFrame(&u))
+			_ = em.Emit(ctx, niro.TextFrame("hello"))
+			u := niro.Usage{InputTokens: 10, OutputTokens: 5, TotalTokens: 15}
+			_ = em.Emit(ctx, niro.UsageFrame(&u))
 		}()
 		return out, nil
 	})
@@ -353,12 +353,12 @@ func TestCacheMissForwardsUsage(t *testing.T) {
 	cache := middleware.NewCache(middleware.CacheOptions{MaxEntries: 100})
 	provider := cache.Wrap(mock)
 
-	req := &ryn.Request{Model: "m", Messages: []ryn.Message{ryn.UserText("usage-test")}}
+	req := &niro.Request{Model: "m", Messages: []niro.Message{niro.UserText("usage-test")}}
 
 	// Cache miss: usage frame emitted by provider should be forwarded to caller.
 	s, err := provider.Generate(ctx, req)
 	assertNoError(t, err)
-	text, err := ryn.CollectText(ctx, s)
+	text, err := niro.CollectText(ctx, s)
 	assertNoError(t, err)
 	assertEqual(t, text, "hello")
 
@@ -373,10 +373,10 @@ func TestCachePutUpdateExisting(t *testing.T) {
 	ctx := context.Background()
 
 	callCount := 0
-	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+	mock := niro.ProviderFunc(func(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
 		callCount++
 		text := fmt.Sprintf("response-%d", callCount)
-		return ryn.StreamFromSlice([]ryn.Frame{ryn.TextFrame(text)}), nil
+		return niro.StreamFromSlice([]niro.Frame{niro.TextFrame(text)}), nil
 	})
 
 	// Use a custom key function that always returns the same key,
@@ -385,22 +385,22 @@ func TestCachePutUpdateExisting(t *testing.T) {
 	fixedKey[0] = 42
 	cache := middleware.NewCache(middleware.CacheOptions{
 		MaxEntries: 100,
-		KeyFn:      func(*ryn.Request) [32]byte { return fixedKey },
+		KeyFn:      func(*niro.Request) [32]byte { return fixedKey },
 	})
 	provider := cache.Wrap(mock)
 
-	req := &ryn.Request{Model: "m", Messages: []ryn.Message{ryn.UserText("first")}}
+	req := &niro.Request{Model: "m", Messages: []niro.Message{niro.UserText("first")}}
 
 	// First call: miss, stores "response-1".
 	s1, err := provider.Generate(ctx, req)
 	assertNoError(t, err)
-	ryn.CollectText(ctx, s1)
+	niro.CollectText(ctx, s1)
 	assertEqual(t, callCount, 1)
 
 	// Second call with same forced key: hit, returns "response-1".
 	s2, err := provider.Generate(ctx, req)
 	assertNoError(t, err)
-	text2, _ := ryn.CollectText(ctx, s2)
+	text2, _ := niro.CollectText(ctx, s2)
 	assertEqual(t, text2, "response-1")
 	assertEqual(t, callCount, 1) // still only 1 upstream call
 
@@ -408,7 +408,7 @@ func TestCachePutUpdateExisting(t *testing.T) {
 	cache.Clear()
 	s3, err := provider.Generate(ctx, req)
 	assertNoError(t, err)
-	text3, _ := ryn.CollectText(ctx, s3)
+	text3, _ := niro.CollectText(ctx, s3)
 	assertEqual(t, text3, "response-2")
 	assertEqual(t, callCount, 2)
 }
@@ -418,24 +418,24 @@ func TestCacheMissForwardsResponse(t *testing.T) {
 	ctx := context.Background()
 
 	// Provider sets a ResponseMeta on its stream.
-	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
-		out, em := ryn.NewStream(4)
+	mock := niro.ProviderFunc(func(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
+		out, em := niro.NewStream(4)
 		go func() {
 			defer em.Close()
-			_ = em.Emit(ctx, ryn.TextFrame("text"))
-			em.SetResponse(&ryn.ResponseMeta{Model: "model-x", FinishReason: "stop"})
+			_ = em.Emit(ctx, niro.TextFrame("text"))
+			em.SetResponse(&niro.ResponseMeta{Model: "model-x", FinishReason: "stop"})
 		}()
 		return out, nil
 	})
 
 	cache := middleware.NewCache(middleware.CacheOptions{MaxEntries: 100})
 	provider := cache.Wrap(mock)
-	req := &ryn.Request{Model: "model-x", Messages: []ryn.Message{ryn.UserText("x")}}
+	req := &niro.Request{Model: "model-x", Messages: []niro.Message{niro.UserText("x")}}
 
 	// Cache miss — response meta should be forwarded.
 	s, err := provider.Generate(ctx, req)
 	assertNoError(t, err)
-	ryn.CollectText(ctx, s)
+	niro.CollectText(ctx, s)
 	resp := s.Response()
 	assertNotNil(t, resp)
 	assertEqual(t, resp.FinishReason, "stop")
@@ -443,7 +443,7 @@ func TestCacheMissForwardsResponse(t *testing.T) {
 	// Cache hit — response meta should also be forwarded from cache.
 	s2, err := provider.Generate(ctx, req)
 	assertNoError(t, err)
-	ryn.CollectText(ctx, s2)
+	niro.CollectText(ctx, s2)
 	resp2 := s2.Response()
 	assertNotNil(t, resp2)
 	assertEqual(t, resp2.FinishReason, "stop")
@@ -459,7 +459,7 @@ func TestCacheRemoveMiddleEntry(t *testing.T) {
 	keySeq := 0
 	cache := middleware.NewCache(middleware.CacheOptions{
 		MaxEntries: 2048,
-		KeyFn: func(req *ryn.Request) [32]byte {
+		KeyFn: func(req *niro.Request) [32]byte {
 			var k [32]byte
 			k[0] = 0 // always shard 0
 			k[1] = byte(keySeq)
@@ -467,19 +467,19 @@ func TestCacheRemoveMiddleEntry(t *testing.T) {
 			return k
 		},
 	})
-	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
-		return ryn.StreamFromSlice([]ryn.Frame{ryn.TextFrame(req.Model)}), nil
+	mock := niro.ProviderFunc(func(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
+		return niro.StreamFromSlice([]niro.Frame{niro.TextFrame(req.Model)}), nil
 	})
 	wrapped := cache.Wrap(mock)
-	req := func(m string) *ryn.Request {
-		return &ryn.Request{Model: m, Messages: []ryn.Message{ryn.UserText("x")}}
+	req := func(m string) *niro.Request {
+		return &niro.Request{Model: m, Messages: []niro.Message{niro.UserText("x")}}
 	}
 
 	// Insert A (key=0), B (key=1), C (key=2).
 	// After inserts: head=C, middle=B, tail=A.
 	for _, m := range []string{"A", "B", "C"} {
 		s, _ := wrapped.Generate(ctx, req(m))
-		ryn.CollectText(ctx, s)
+		niro.CollectText(ctx, s)
 	}
 	assertEqual(t, cache.Len(), 3)
 
@@ -488,7 +488,7 @@ func TestCacheRemoveMiddleEntry(t *testing.T) {
 	// Reset keySeq so B's key (=1) is generated on the next call.
 	keySeq = 1
 	s, _ := wrapped.Generate(ctx, req("B-again"))
-	text, _ := ryn.CollectText(ctx, s)
+	text, _ := niro.CollectText(ctx, s)
 	assertEqual(t, text, "B") // served from cache
 	hits, _ := cache.Stats()
 	assertTrue(t, hits >= 1)
@@ -501,9 +501,9 @@ func TestCachePutUpdateExistingConcurrent(t *testing.T) {
 	// Use a slow provider so two concurrent misses race to store the same key,
 	// triggering the update-existing branch in put().
 	ready := make(chan struct{})
-	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+	mock := niro.ProviderFunc(func(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
 		<-ready // block until both goroutines start
-		return ryn.StreamFromSlice([]ryn.Frame{ryn.TextFrame("ok")}), nil
+		return niro.StreamFromSlice([]niro.Frame{niro.TextFrame("ok")}), nil
 	})
 
 	var fixedKey [32]byte
@@ -511,10 +511,10 @@ func TestCachePutUpdateExistingConcurrent(t *testing.T) {
 	cache := middleware.NewCache(middleware.CacheOptions{
 		MaxEntries: 100,
 		TTL:        time.Minute, // enable TTL so the update-existing TTL branch is exercised too
-		KeyFn:      func(*ryn.Request) [32]byte { return fixedKey },
+		KeyFn:      func(*niro.Request) [32]byte { return fixedKey },
 	})
 	provider := cache.Wrap(mock)
-	req := &ryn.Request{Model: "m", Messages: []ryn.Message{ryn.UserText("x")}}
+	req := &niro.Request{Model: "m", Messages: []niro.Message{niro.UserText("x")}}
 
 	var wg sync.WaitGroup
 	wg.Add(2)
@@ -522,13 +522,13 @@ func TestCachePutUpdateExistingConcurrent(t *testing.T) {
 		defer wg.Done()
 		s, err := provider.Generate(ctx, req)
 		assertNoError(t, err)
-		ryn.CollectText(ctx, s)
+		niro.CollectText(ctx, s)
 	}()
 	go func() {
 		defer wg.Done()
 		s, err := provider.Generate(ctx, req)
 		assertNoError(t, err)
-		ryn.CollectText(ctx, s)
+		niro.CollectText(ctx, s)
 	}()
 
 	// Release both goroutines simultaneously so they both miss, both put.
@@ -547,22 +547,22 @@ func TestCacheWrapEmitEarlyReturn(t *testing.T) {
 	// error and the goroutine takes the early-return path.
 	// Strategy: produce 64 frames (> buffer 32) so Emit blocks, then let the
 	// caller context expire via a very short deadline.
-	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
-		frames := make([]ryn.Frame, 64)
+	mock := niro.ProviderFunc(func(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
+		frames := make([]niro.Frame, 64)
 		for i := range frames {
-			frames[i] = ryn.TextFrame(fmt.Sprintf("f%d", i))
+			frames[i] = niro.TextFrame(fmt.Sprintf("f%d", i))
 		}
-		return ryn.StreamFromSlice(frames), nil
+		return niro.StreamFromSlice(frames), nil
 	})
 
 	var fixedKey [32]byte
 	fixedKey[0] = 88
 	cache := middleware.NewCache(middleware.CacheOptions{
 		MaxEntries: 100,
-		KeyFn:      func(*ryn.Request) [32]byte { return fixedKey },
+		KeyFn:      func(*niro.Request) [32]byte { return fixedKey },
 	})
 	provider := cache.Wrap(mock)
-	req := &ryn.Request{Model: "m", Messages: []ryn.Message{ryn.UserText("x")}}
+	req := &niro.Request{Model: "m", Messages: []niro.Message{niro.UserText("x")}}
 
 	// Use a very short deadline — fires while the miss goroutine is blocked
 	// on a full output channel, causing em.Emit to return ctx.Err().

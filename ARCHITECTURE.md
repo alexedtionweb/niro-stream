@@ -93,7 +93,7 @@ Emitter ──── chan Frame ────▶ Stream
 ```
 
 ```go
-stream, emitter := ryn.NewStream(bufSize)
+stream, emitter := niro.NewStream(bufSize)
 ```
 
 ### Backpressure
@@ -126,8 +126,8 @@ This means providers can emit usage at any point in the stream (typically at the
 
 ```go
 // Provider side (inside the goroutine):
-emitter.Emit(ctx, ryn.TextFrame("Hello"))
-emitter.Emit(ctx, ryn.UsageFrame(&ryn.Usage{InputTokens: 10, OutputTokens: 1}))
+emitter.Emit(ctx, niro.TextFrame("Hello"))
+emitter.Emit(ctx, niro.UsageFrame(&niro.Usage{InputTokens: 10, OutputTokens: 1}))
 
 // Consumer side — never sees the UsageFrame:
 for stream.Next(ctx) {
@@ -141,7 +141,7 @@ usage := stream.Usage() // {InputTokens: 10, OutputTokens: 1}
 Providers set structured metadata via `Emitter.SetResponse()`:
 
 ```go
-emitter.SetResponse(&ryn.ResponseMeta{
+emitter.SetResponse(&niro.ResponseMeta{
     Model:        "gpt-4o-2024-08-06",
     FinishReason: "stop",
     ID:           "chatcmpl-abc123",
@@ -229,8 +229,8 @@ Clean and deterministic. No zombie goroutines.
 Default buffer: 16. Override with `WithBuffer(n)`:
 
 ```go
-ryn.Pipe(procs...).WithBuffer(64) // larger buffer for throughput
-ryn.Pipe(procs...).WithBuffer(0)  // unbuffered for minimum latency
+niro.Pipe(procs...).WithBuffer(64) // larger buffer for throughput
+niro.Pipe(procs...).WithBuffer(0)  // unbuffered for minimum latency
 ```
 
 ## Provider
@@ -272,13 +272,13 @@ The `Extra` field enables raw SDK parameter access on a per-request basis withou
 // Bedrock: type RequestHook func(input *bedrockruntime.ConverseStreamInput)
 ```
 
-Providers ignore unrecognized `Extra` types. This pattern lets a single `ryn.Request` carry provider-specific tuning without breaking the common interface.
+Providers ignore unrecognized `Extra` types. This pattern lets a single `niro.Request` carry provider-specific tuning without breaking the common interface.
 
 ### Provider Implementations
 
 All SDK providers are **separate Go modules** (`github.com/alexedtionweb/niro-stream/provider/<name>`). They follow the same internal pattern:
 
-1. **Translate** `ryn.Request` → SDK-specific params (messages, tools, options)
+1. **Translate** `niro.Request` → SDK-specific params (messages, tools, options)
 2. **Apply hooks**: provider-level `WithRequestHook` + per-request `Request.Extra`
 3. **Call** the SDK's streaming method
 4. **Spawn** a goroutine that reads from the SDK stream
@@ -379,7 +379,7 @@ OnGenerateEnd(ctx', info)              [stream exhausted]
 ### Composition
 
 ```go
-combined := ryn.Hooks(langfuseHook, datadogHook, costTracker)
+combined := niro.Hooks(langfuseHook, datadogHook, costTracker)
 ```
 
 `Hooks()` returns a `multiHook` that fans out to all hooks. Nil hooks are filtered. If only one non-nil hook remains, it's returned directly (no wrapper overhead).
@@ -387,7 +387,7 @@ combined := ryn.Hooks(langfuseHook, datadogHook, costTracker)
 ### Integration with Runtime
 
 ```go
-rt := ryn.NewRuntime(llm).WithHook(hook)
+rt := niro.NewRuntime(llm).WithHook(hook)
 ```
 
 The Runtime wraps the provider's stream to intercept every frame and fire the hook lifecycle automatically.
@@ -657,7 +657,7 @@ Every SDK provider exposes three extension points:
 
 1. **`Client()`** — returns the underlying SDK client for direct API access
 2. **`WithRequestHook(fn)`** — provider-level option: hook runs on every request
-3. **`Request.Extra`** — per-request hook via `ryn.Request.Extra` field
+3. **`Request.Extra`** — per-request hook via `niro.Request.Extra` field
 
 ```go
 // Provider-level: every request gets logprobs
@@ -666,7 +666,7 @@ llm := openai.New(key, openai.WithRequestHook(func(p *oai.ChatCompletionNewParam
 }))
 
 // Per-request: this one request only
-stream, _ := llm.Generate(ctx, &ryn.Request{
+stream, _ := llm.Generate(ctx, &niro.Request{
     Messages: msgs,
     Extra: openai.RequestHook(func(p *oai.ChatCompletionNewParams) {
         p.TopLogProbs = oai.Int(5)
@@ -765,7 +765,7 @@ Cache wraps any `Provider` transparently via `cache.Wrap(provider)`.
 **Solution**: `Registry` is a `sync.RWMutex`-protected `map[string]Provider`:
 
 ```go
-reg := ryn.NewRegistry()
+reg := niro.NewRegistry()
 reg.Register("openai", openaiProvider)
 reg.Register("cached-openai", cache.Wrap(openaiProvider))
 
@@ -900,6 +900,6 @@ Future: Provider middleware for retries, rate limiting, fallback chains, circuit
 The plugin model makes it easy to add providers without touching the core:
 
 ```go
-// Third-party provider — just implement ryn.Provider
+// Third-party provider — just implement niro.Provider
 // and publish as github.com/alexedtionweb/niro-stream/provider/mistral (or your own module path)
 ```

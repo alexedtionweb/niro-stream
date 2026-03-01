@@ -166,7 +166,7 @@ func (c *TimeoutComponent) Apply(rt *Runtime) error {
 // ── MiddlewareComponent ───────────────────────────────────────────────────────
 
 // MiddlewareComponent is a generic escape hatch: it wraps the runtime provider
-// with any arbitrary function that satisfies func(ryn.Provider) ryn.Provider.
+// with any arbitrary function that satisfies func(niro.Provider) niro.Provider.
 //
 // Use this for one-off decorators — tracing adapters, cost-tracking wrappers,
 // test doubles, etc. — without having to implement the full Component interface.
@@ -174,7 +174,7 @@ func (c *TimeoutComponent) Apply(rt *Runtime) error {
 //	agent.New(p,
 //	    agent.WithComponent(&agent.MiddlewareComponent{
 //	        Name_: "my.tracer",
-//	        Fn:    func(p ryn.Provider) ryn.Provider { return myTracer{p} },
+//	        Fn:    func(p niro.Provider) niro.Provider { return myTracer{p} },
 //	    }),
 //	)
 type MiddlewareComponent struct {
@@ -183,7 +183,7 @@ type MiddlewareComponent struct {
 	Name_ string
 
 	// Fn wraps the current provider and returns a new one.
-	Fn func(ryn.Provider) ryn.Provider
+	Fn func(niro.Provider) niro.Provider
 }
 
 func (c *MiddlewareComponent) Name() string {

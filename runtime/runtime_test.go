@@ -17,23 +17,23 @@ func TestRuntimeBasic(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 
-	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
-		s, e := ryn.NewStream(4)
+	mock := niro.ProviderFunc(func(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
+		s, e := niro.NewStream(4)
 		go func() {
 			defer e.Close()
-			e.Emit(ctx, ryn.TextFrame("hello"))
-			e.SetResponse(&ryn.ResponseMeta{Model: "test", FinishReason: "stop"})
+			e.Emit(ctx, niro.TextFrame("hello"))
+			e.SetResponse(&niro.ResponseMeta{Model: "test", FinishReason: "stop"})
 		}()
 		return s, nil
 	})
 
 	rt := runtime.New(mock)
-	stream, err := rt.Generate(ctx, &ryn.Request{
-		Messages: []ryn.Message{ryn.UserText("hi")},
+	stream, err := rt.Generate(ctx, &niro.Request{
+		Messages: []niro.Message{niro.UserText("hi")},
 	})
 	assertNoError(t, err)
 
-	text, err := ryn.CollectText(ctx, stream)
+	text, err := niro.CollectText(ctx, stream)
 	assertNoError(t, err)
 	assertEqual(t, text, "hello")
 }
@@ -42,23 +42,23 @@ func TestRuntimeWithPipeline(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 
-	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
-		s, e := ryn.NewStream(4)
+	mock := niro.ProviderFunc(func(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
+		s, e := niro.NewStream(4)
 		go func() {
 			defer e.Close()
-			e.Emit(ctx, ryn.TextFrame("H"))
-			e.Emit(ctx, ryn.TextFrame("i"))
+			e.Emit(ctx, niro.TextFrame("H"))
+			e.Emit(ctx, niro.TextFrame("i"))
 		}()
 		return s, nil
 	})
 
 	rt := runtime.New(mock).WithPipeline(pipe.New(pipe.Accumulate()))
-	stream, err := rt.Generate(ctx, &ryn.Request{
-		Messages: []ryn.Message{ryn.UserText("test")},
+	stream, err := rt.Generate(ctx, &niro.Request{
+		Messages: []niro.Message{niro.UserText("test")},
 	})
 	assertNoError(t, err)
 
-	text, err := ryn.CollectText(ctx, stream)
+	text, err := niro.CollectText(ctx, stream)
 	assertNoError(t, err)
 	assertEqual(t, text, "Hi")
 }
@@ -83,31 +83,31 @@ func TestRuntimeWithHook(t *testing.T) {
 			endCalled.Store(true)
 			assertEqual(t, info.Model, "test-model")
 		},
-		onFrame: func(ctx context.Context, f ryn.Frame, elapsed time.Duration) error {
+		onFrame: func(ctx context.Context, f niro.Frame, elapsed time.Duration) error {
 			frameCnt.Add(1)
 			return nil
 		},
 	}
 
-	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
-		s, e := ryn.NewStream(4)
+	mock := niro.ProviderFunc(func(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
+		s, e := niro.NewStream(4)
 		go func() {
 			defer e.Close()
-			e.Emit(ctx, ryn.TextFrame("a"))
-			e.Emit(ctx, ryn.TextFrame("b"))
-			e.SetResponse(&ryn.ResponseMeta{Model: "test-model"})
+			e.Emit(ctx, niro.TextFrame("a"))
+			e.Emit(ctx, niro.TextFrame("b"))
+			e.SetResponse(&niro.ResponseMeta{Model: "test-model"})
 		}()
 		return s, nil
 	})
 
 	rt := runtime.New(mock).WithHook(h)
-	stream, err := rt.Generate(ctx, &ryn.Request{
+	stream, err := rt.Generate(ctx, &niro.Request{
 		Model:    "test-model",
-		Messages: []ryn.Message{ryn.UserText("hi")},
+		Messages: []niro.Message{niro.UserText("hi")},
 	})
 	assertNoError(t, err)
 
-	text, err := ryn.CollectText(ctx, stream)
+	text, err := niro.CollectText(ctx, stream)
 	assertNoError(t, err)
 	assertEqual(t, text, "ab")
 
@@ -123,13 +123,13 @@ func TestRuntimeProviderError(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 
-	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+	mock := niro.ProviderFunc(func(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
 		return nil, fmt.Errorf("provider unavailable")
 	})
 
 	rt := runtime.New(mock)
-	_, err := rt.Generate(ctx, &ryn.Request{
-		Messages: []ryn.Message{ryn.UserText("hi")},
+	_, err := rt.Generate(ctx, &niro.Request{
+		Messages: []niro.Message{niro.UserText("hi")},
 	})
 	assertTrue(t, err != nil)
 }
@@ -158,13 +158,13 @@ func TestRuntimeProviderErrorWithHook(t *testing.T) {
 		},
 	}
 
-	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+	mock := niro.ProviderFunc(func(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
 		return nil, fmt.Errorf("provider unavailable")
 	})
 
 	rt := runtime.New(mock).WithHook(fullH)
-	_, err := rt.Generate(ctx, &ryn.Request{
-		Messages: []ryn.Message{ryn.UserText("hi")},
+	_, err := rt.Generate(ctx, &niro.Request{
+		Messages: []niro.Message{niro.UserText("hi")},
 	})
 	assertTrue(t, err != nil)
 	assertTrue(t, errorCalled)
@@ -183,20 +183,20 @@ func TestRuntimeStreamErrorWithHook(t *testing.T) {
 		},
 	}
 
-	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
-		s, e := ryn.NewStream(4)
+	mock := niro.ProviderFunc(func(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
+		s, e := niro.NewStream(4)
 		go func() {
 			defer e.Close()
-			_ = e.Emit(ctx, ryn.TextFrame("partial"))
+			_ = e.Emit(ctx, niro.TextFrame("partial"))
 			e.Error(fmt.Errorf("stream error"))
 		}()
 		return s, nil
 	})
 
 	rt := runtime.New(mock).WithHook(fullH)
-	stream, err := rt.Generate(ctx, &ryn.Request{
+	stream, err := rt.Generate(ctx, &niro.Request{
 		Model:    "test",
-		Messages: []ryn.Message{ryn.UserText("hi")},
+		Messages: []niro.Message{niro.UserText("hi")},
 	})
 	assertNoError(t, err)
 
@@ -213,23 +213,23 @@ func TestRuntimeHookOnFrameError(t *testing.T) {
 	ctx := context.Background()
 
 	fullH := &fullTestHook{
-		onFrame: func(ctx context.Context, f ryn.Frame, elapsed time.Duration) error {
+		onFrame: func(ctx context.Context, f niro.Frame, elapsed time.Duration) error {
 			return fmt.Errorf("frame rejected")
 		},
 	}
 
-	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
-		s, e := ryn.NewStream(4)
+	mock := niro.ProviderFunc(func(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
+		s, e := niro.NewStream(4)
 		go func() {
 			defer e.Close()
-			_ = e.Emit(ctx, ryn.TextFrame("hello"))
+			_ = e.Emit(ctx, niro.TextFrame("hello"))
 		}()
 		return s, nil
 	})
 
 	rt := runtime.New(mock).WithHook(fullH)
-	stream, err := rt.Generate(ctx, &ryn.Request{
-		Messages: []ryn.Message{ryn.UserText("hi")},
+	stream, err := rt.Generate(ctx, &niro.Request{
+		Messages: []niro.Message{niro.UserText("hi")},
 	})
 	assertNoError(t, err)
 
@@ -250,14 +250,14 @@ func TestRuntimeWithModel(t *testing.T) {
 		},
 	}
 
-	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
-		return ryn.StreamFromSlice(nil), nil
+	mock := niro.ProviderFunc(func(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
+		return niro.StreamFromSlice(nil), nil
 	})
 
 	rt := runtime.New(mock).WithHook(h)
-	stream, err := rt.Generate(ctx, &ryn.Request{
+	stream, err := rt.Generate(ctx, &niro.Request{
 		Model:    "gpt-4",
-		Messages: []ryn.Message{ryn.UserText("hi")},
+		Messages: []niro.Message{niro.UserText("hi")},
 	})
 	assertNoError(t, err)
 	for stream.Next(ctx) {
@@ -278,13 +278,13 @@ func TestRuntimeDefaultModel(t *testing.T) {
 		},
 	}
 
-	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
-		return ryn.StreamFromSlice(nil), nil
+	mock := niro.ProviderFunc(func(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
+		return niro.StreamFromSlice(nil), nil
 	})
 
 	rt := runtime.New(mock).WithHook(h)
-	_, _ = rt.Generate(ctx, &ryn.Request{
-		Messages: []ryn.Message{ryn.UserText("hi")},
+	_, _ = rt.Generate(ctx, &niro.Request{
+		Messages: []niro.Message{niro.UserText("hi")},
 	})
 	assertEqual(t, capturedModel, "(default)")
 }

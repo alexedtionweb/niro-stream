@@ -55,11 +55,11 @@ func main() {
     ctx := context.Background()
     llm := openai.New(os.Getenv("OPENAI_API_KEY"))
 
-    stream, err := llm.Generate(ctx, &ryn.Request{
+    stream, err := llm.Generate(ctx, &niro.Request{
         Model:        "gpt-4o",
         SystemPrompt: "You are a helpful assistant. Be concise.",
-        Messages:     []ryn.Message{ryn.UserText("Explain Go channels in 3 sentences.")},
-        Options:      ryn.Options{MaxTokens: 256, Temperature: ryn.Temp(0.7)},
+        Messages:     []niro.Message{niro.UserText("Explain Go channels in 3 sentences.")},
+        Options:      niro.Options{MaxTokens: 256, Temperature: niro.Temp(0.7)},
     })
     if err != nil {
         fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -83,13 +83,13 @@ Tokens arrive as they're generated. Usage is tracked silently. No buffering. No 
 
 Niro uses a **plugin model**: the core (`github.com/alexedtionweb/niro-stream`) has **zero external dependencies**. Each SDK-backed provider lives in its own Go module — you only `go get` what you use. No SDK you don't need ever enters your build graph.
 
-| Provider          | Module                           | Install                                 | SDK                                                                           |
-| ----------------- | -------------------------------- | --------------------------------------- | ----------------------------------------------------------------------------- |
+| Provider          | Module                                                    | Install                                                          | SDK                                                                           |
+| ----------------- | --------------------------------------------------------- | ---------------------------------------------------------------- | ----------------------------------------------------------------------------- |
 | OpenAI            | `github.com/alexedtionweb/niro-stream/provider/openai`    | `go get github.com/alexedtionweb/niro-stream/provider/openai`    | [openai/openai-go](https://github.com/openai/openai-go)                       |
 | Anthropic         | `github.com/alexedtionweb/niro-stream/provider/anthropic` | `go get github.com/alexedtionweb/niro-stream/provider/anthropic` | [anthropics/anthropic-sdk-go](https://github.com/anthropics/anthropic-sdk-go) |
 | Google Gemini     | `github.com/alexedtionweb/niro-stream/provider/google`    | `go get github.com/alexedtionweb/niro-stream/provider/google`    | [google/generative-ai-go](https://github.com/google/generative-ai-go)         |
 | AWS Bedrock       | `github.com/alexedtionweb/niro-stream/provider/bedrock`   | `go get github.com/alexedtionweb/niro-stream/provider/bedrock`   | [aws-sdk-go-v2](https://github.com/aws/aws-sdk-go-v2)                         |
-| OpenAI-compatible | `github.com/alexedtionweb/niro-stream/provider/compat`    | included in core (zero deps)            | stdlib HTTP + SSE                                                             |
+| OpenAI-compatible | `github.com/alexedtionweb/niro-stream/provider/compat`    | included in core (zero deps)                                     | stdlib HTTP + SSE                                                             |
 | Agent plugin      | `github.com/alexedtionweb/niro-stream/plugin/agent`       | `go get github.com/alexedtionweb/niro-stream/plugin/agent`       | optional component-based agent runtime                                        |
 
 ```go
@@ -110,16 +110,16 @@ llm := bedrock.New(cfg) // from aws-sdk-go-v2 config
 llm := compat.New("http://localhost:11434/v1", "")
 ```
 
-All providers implement the same `ryn.Provider` interface. Swap providers by changing one line.
+All providers implement the same `niro.Provider` interface. Swap providers by changing one line.
 
 ### Custom Providers
 
 ```go
-mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
-    s, e := ryn.NewStream(0)
+mock := niro.ProviderFunc(func(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
+    s, e := niro.NewStream(0)
     go func() {
         defer e.Close()
-        e.Emit(ctx, ryn.TextFrame("hello from mock"))
+        e.Emit(ctx, niro.TextFrame("hello from mock"))
     }()
     return s, nil
 })
@@ -145,7 +145,7 @@ llm := openai.New(apiKey, openai.WithRequestHook(func(p *oai.ChatCompletionNewPa
 }))
 
 // Per-request hook (via Request.Extra)
-stream, err := llm.Generate(ctx, &ryn.Request{
+stream, err := llm.Generate(ctx, &niro.Request{
     Messages: msgs,
     Extra: openai.RequestHook(func(p *oai.ChatCompletionNewParams) {
         p.LogProbs = oai.Bool(true)
@@ -168,11 +168,11 @@ For auth/custom transport customization per SDK:
 The universal unit of data. A `Frame` is a tagged union — a single struct with a `Kind` discriminator. Zero allocations on the text hot path.
 
 ```go
-ryn.TextFrame("Hello")                                           // text token
-ryn.AudioFrame(pcmChunk, "audio/pcm")                           // audio
-ryn.ImageFrame(pngBytes, "image/png")                            // image
-ryn.ToolCallFrame(&ryn.ToolCall{ID: "1", Name: "fn", Args: j})  // tool call
-ryn.UsageFrame(&ryn.Usage{InputTokens: 10, OutputTokens: 50})   // usage report
+niro.TextFrame("Hello")                                           // text token
+niro.AudioFrame(pcmChunk, "audio/pcm")                           // audio
+niro.ImageFrame(pngBytes, "image/png")                            // image
+niro.ToolCallFrame(&niro.ToolCall{ID: "1", Name: "fn", Args: j})  // tool call
+niro.UsageFrame(&niro.Usage{InputTokens: 10, OutputTokens: 50})   // usage report
 ```
 
 ### Stream & Emitter
@@ -180,12 +180,12 @@ ryn.UsageFrame(&ryn.Usage{InputTokens: 10, OutputTokens: 50})   // usage report
 A `Stream` is a backpressure-aware, cancellable sequence of Frames. An `Emitter` is the write side.
 
 ```go
-stream, emitter := ryn.NewStream(16) // buffered channel
+stream, emitter := niro.NewStream(16) // buffered channel
 
 go func() {
     defer emitter.Close()
-    emitter.Emit(ctx, ryn.TextFrame("hello"))
-    emitter.Emit(ctx, ryn.TextFrame(" world"))
+    emitter.Emit(ctx, niro.TextFrame("hello"))
+    emitter.Emit(ctx, niro.TextFrame(" world"))
 }()
 
 for stream.Next(ctx) {
@@ -202,13 +202,13 @@ for stream.Next(ctx) {
 Transform streams with composable stages:
 
 ```go
-pipeline := ryn.Pipe(
-    ryn.TextOnly(),
-    ryn.Map(func(f ryn.Frame) ryn.Frame {
+pipeline := niro.Pipe(
+    niro.TextOnly(),
+    niro.Map(func(f niro.Frame) niro.Frame {
         f.Text = strings.ToUpper(f.Text)
         return f
     }),
-    ryn.Tap(func(f ryn.Frame) { log.Printf("token: %q", f.Text) }),
+    niro.Tap(func(f niro.Frame) { log.Printf("token: %q", f.Text) }),
 ).WithBuffer(32)
 
 out := pipeline.Run(ctx, inputStream)
@@ -227,12 +227,12 @@ The core differentiator: concurrent LLM workflow primitives.
 Run N generations concurrently, merge all frames into one stream:
 
 ```go
-stream := ryn.Fan(ctx,
-    func(ctx context.Context) (*ryn.Stream, error) {
-        return llm.Generate(ctx, &ryn.Request{Messages: []ryn.Message{ryn.UserText("What is Go?")}})
+stream := niro.Fan(ctx,
+    func(ctx context.Context) (*niro.Stream, error) {
+        return llm.Generate(ctx, &niro.Request{Messages: []niro.Message{niro.UserText("What is Go?")}})
     },
-    func(ctx context.Context) (*ryn.Stream, error) {
-        return llm.Generate(ctx, &ryn.Request{Messages: []ryn.Message{ryn.UserText("What is Rust?")}})
+    func(ctx context.Context) (*niro.Stream, error) {
+        return llm.Generate(ctx, &niro.Request{Messages: []niro.Message{niro.UserText("What is Rust?")}})
     },
 )
 ```
@@ -244,11 +244,11 @@ Use cases: parallel tool calls, multi-model ensembles, scatter-gather.
 Send the same request to multiple providers; take the fastest response:
 
 ```go
-text, usage, err := ryn.Race(ctx,
-    func(ctx context.Context) (*ryn.Stream, error) {
+text, usage, err := niro.Race(ctx,
+    func(ctx context.Context) (*niro.Stream, error) {
         return openaiLLM.Generate(ctx, req)
     },
-    func(ctx context.Context) (*ryn.Stream, error) {
+    func(ctx context.Context) (*niro.Stream, error) {
         return anthropicLLM.Generate(ctx, req)
     },
 )
@@ -261,12 +261,12 @@ Losers are canceled immediately. Use for latency hedging and speculative executi
 Each step receives the text output of the previous:
 
 ```go
-stream, err := ryn.Sequence(ctx,
-    func(ctx context.Context, _ string) (*ryn.Stream, error) {
-        return llm.Generate(ctx, &ryn.Request{Messages: []ryn.Message{ryn.UserText("Write a haiku about Go")}})
+stream, err := niro.Sequence(ctx,
+    func(ctx context.Context, _ string) (*niro.Stream, error) {
+        return llm.Generate(ctx, &niro.Request{Messages: []niro.Message{niro.UserText("Write a haiku about Go")}})
     },
-    func(ctx context.Context, haiku string) (*ryn.Stream, error) {
-        return llm.Generate(ctx, &ryn.Request{Messages: []ryn.Message{ryn.UserText("Critique this: " + haiku)}})
+    func(ctx context.Context, haiku string) (*niro.Stream, error) {
+        return llm.Generate(ctx, &niro.Request{Messages: []niro.Message{niro.UserText("Critique this: " + haiku)}})
     },
 )
 ```
@@ -278,9 +278,9 @@ Build multi-step refinement pipelines with zero boilerplate.
 Tool calls are first-class streaming citizens:
 
 ```go
-stream, _ := llm.Generate(ctx, &ryn.Request{
+stream, _ := llm.Generate(ctx, &niro.Request{
     Messages: messages,
-    Tools: []ryn.Tool{{
+    Tools: []niro.Tool{{
         Name:        "get_weather",
         Description: "Get current weather",
         Parameters:  json.RawMessage(`{"type":"object","properties":{"city":{"type":"string"}}}`),
@@ -290,11 +290,11 @@ stream, _ := llm.Generate(ctx, &ryn.Request{
 for stream.Next(ctx) {
     f := stream.Frame()
     switch f.Kind {
-    case ryn.KindText:
+    case niro.KindText:
         fmt.Print(f.Text)
-    case ryn.KindToolCall:
+    case niro.KindToolCall:
         result := executeTool(f.Tool)
-        messages = append(messages, ryn.ToolMessage(f.Tool.ID, result))
+        messages = append(messages, niro.ToolMessage(f.Tool.ID, result))
     }
 }
 ```
@@ -315,16 +315,16 @@ type Weather struct {
 
 schema := json.RawMessage(`{"type":"object","properties":{"city":{"type":"string"},"temp_f":{"type":"integer"}},"required":["city","temp_f"]}`)
 
-result, resp, usage, err := ryn.GenerateStructured[Weather](ctx, llm, &ryn.Request{
-    Messages: []ryn.Message{ryn.UserText("Weather in NYC?")},
+result, resp, usage, err := niro.GenerateStructured[Weather](ctx, llm, &niro.Request{
+    Messages: []niro.Message{niro.UserText("Weather in NYC?")},
 }, schema)
 ```
 
 ### Streaming partial + final output
 
 ```go
-ss, err := ryn.StreamStructured[Weather](ctx, llm, &ryn.Request{
-    Messages: []ryn.Message{ryn.UserText("Weather in NYC?")},
+ss, err := niro.StreamStructured[Weather](ctx, llm, &niro.Request{
+    Messages: []niro.Message{niro.UserText("Weather in NYC?")},
 }, schema)
 if err != nil { /* handle */ }
 
@@ -357,12 +357,12 @@ type Hook interface {
 }
 ```
 
-Implement for Langfuse, Datadog, OpenTelemetry, cost tracking, or custom logging. Embed `ryn.NoOpHook` to implement only the methods you care about. Compose multiple hooks with `ryn.Hooks(h1, h2, h3)`.
+Implement for Langfuse, Datadog, OpenTelemetry, cost tracking, or custom logging. Embed `niro.NoOpHook` to implement only the methods you care about. Compose multiple hooks with `niro.Hooks(h1, h2, h3)`.
 
 Wire it via Runtime:
 
 ```go
-rt := ryn.NewRuntime(llm).
+rt := niro.NewRuntime(llm).
     WithHook(myHook).
     WithPipeline(myPipeline)
 
@@ -378,12 +378,12 @@ Niro provides semantic error types and request validation for robust error handl
 Validate requests before invoking a provider:
 
 ```go
-req := &ryn.Request{
+req := &niro.Request{
     Model: "gpt-4o",
-    Messages: []ryn.Message{ryn.UserText("hello")},
+    Messages: []niro.Message{niro.UserText("hello")},
     ResponseFormat: "json_schema",
     ResponseSchema: schema,
-    Options: ryn.Options{Temperature: ryn.Temp(0.7)},
+    Options: niro.Options{Temperature: niro.Temp(0.7)},
 }
 
 if err := req.Validate(); err != nil {
@@ -399,21 +399,21 @@ Errors are typed for proper handling:
 
 ```go
 // Check error category
-if ryn.IsRetryable(err) {
+if niro.IsRetryable(err) {
     // Safe to retry
 }
-if ryn.IsRateLimited(err) {
+if niro.IsRateLimited(err) {
     // Rate limit — use backoff
 }
-if ryn.IsAuthError(err) {
+if niro.IsAuthError(err) {
     // Invalid credentials — don't retry
 }
-if ryn.IsTimeout(err) {
+if niro.IsTimeout(err) {
     // Timeout — may retry with longer deadline
 }
 
 // Error chaining
-err := ryn.WrapError(ryn.ErrCodeProviderError, "OpenAI failed", underlying)
+err := niro.WrapError(niro.ErrCodeProviderError, "OpenAI failed", underlying)
 err.WithProvider("openai").WithRequestID("req_123")
 ```
 
@@ -424,21 +424,21 @@ Error codes: InvalidRequest (400), AuthenticationFailed (401), ModelNotFound (40
 Automatic retry with exponential backoff for transient failures:
 
 ```go
-config := ryn.RetryConfig{
+config := niro.RetryConfig{
     MaxAttempts: 5,
-    Backoff: ryn.ExponentialBackoff{
+    Backoff: niro.ExponentialBackoff{
         InitialDelay: 100 * time.Millisecond,
         Multiplier:   2.0,
         MaxDelay:     10 * time.Second,
         Jitter:       true, // avoid thundering herd
     },
-    ShouldRetry: ryn.IsRetryable, // only retry transient errors
+    ShouldRetry: niro.IsRetryable, // only retry transient errors
     OnRetry: func(attempt int, err error) {
         log.Printf("Retry %d: %v", attempt, err)
     },
 }
 
-provider := ryn.NewRetryProvider(llm, config)
+provider := niro.NewRetryProvider(llm, config)
 stream, err := provider.Generate(ctx, req)
 ```
 
@@ -451,8 +451,8 @@ Works with context cancellation and respects deadlines. Only retries errors mark
 Enforce generation timeouts:
 
 ```go
-provider := ryn.NewTimeoutProvider(llm, 5*time.Minute)
-ctx, cancel := ryn.WithGenerationTimeout(context.Background(), 5*time.Minute)
+provider := niro.NewTimeoutProvider(llm, 5*time.Minute)
+ctx, cancel := niro.WithGenerationTimeout(context.Background(), 5*time.Minute)
 defer cancel()
 
 stream, err := provider.Generate(ctx, req)
@@ -464,22 +464,22 @@ Automatic request ID generation and propagation:
 
 ```go
 // Generate unique request ID
-requestID := ryn.GenerateRequestID() // "req_<random>"
+requestID := niro.GenerateRequestID() // "req_<random>"
 
 // Inject trace context
-trace := ryn.TraceContext{
+trace := niro.TraceContext{
     RequestID: requestID,
     UserID:    "user123",
     SessionID: "session456",
 }
-ctx = ryn.WithTraceContext(ctx, trace)
+ctx = niro.WithTraceContext(ctx, trace)
 
 // Use TracingProvider to auto-inject trace context
-provider := ryn.NewTracingProvider(llm)
+provider := niro.NewTracingProvider(llm)
 stream, err := provider.Generate(ctx, req)
 
 // Retrieve in hooks for logging
-trace := ryn.GetTraceContext(ctx)
+trace := niro.GetTraceContext(ctx)
 fmt.Printf("Request: %s (user: %s)", trace.RequestID, trace.UserID)
 ```
 
@@ -489,19 +489,19 @@ Track generation costs in real-time using the global pricing registry:
 
 ```go
 // Use default pricing (auto-initialized with 2025 rates)
-cost := ryn.CalculateCost("openai", "gpt-4o", usage)
+cost := niro.CalculateCost("openai", "gpt-4o", usage)
 fmt.Printf("Cost: $%.4f (%d in, %d out)\n", cost.TotalCost, usage.InputTokens, usage.OutputTokens)
 
 // Configure custom pricing
-registry := ryn.GetPricingRegistry()
-registry.Set("my-provider", "my-model", &ryn.ModelPricing{
+registry := niro.GetPricingRegistry()
+registry.Set("my-provider", "my-model", &niro.ModelPricing{
     InputCostPer1M:  0.001,
     OutputCostPer1M: 0.002,
 })
 
 // Use in hooks for cost accumulation
 hook := &MyHook{
-    onEnd: func(ctx context.Context, info ryn.GenerateEndInfo) {
+    onEnd: func(ctx context.Context, info niro.GenerateEndInfo) {
         cost := info.Cost
         totalCost += cost.TotalCost
         log.Printf("Generated %d tokens for $%.4f", info.Usage.TotalTokens, cost.TotalCost)
@@ -516,7 +516,7 @@ Built-in pricing for OpenAI (GPT-4, GPT-3.5), Anthropic (Claude 3.5 Sonnet, Opus
 Automatic tool calling with loop management:
 
 ```go
-executor := ryn.ToolExecutorFunc(func(ctx context.Context, name string, args json.RawMessage) (string, error) {
+executor := niro.ToolExecutorFunc(func(ctx context.Context, name string, args json.RawMessage) (string, error) {
     switch name {
     case "weather":
         return getWeather(args)
@@ -527,17 +527,17 @@ executor := ryn.ToolExecutorFunc(func(ctx context.Context, name string, args jso
     }
 })
 
-loop := ryn.NewToolLoop(executor, 5) // max 5 rounds
-stream, err := loop.GenerateWithTools(ctx, llm, &ryn.Request{
-    Messages: []ryn.Message{ryn.UserText("What's the weather and 2+2?")},
-    Tools:    []ryn.Tool{ /* ... */ },
+loop := niro.NewToolLoop(executor, 5) // max 5 rounds
+stream, err := loop.GenerateWithTools(ctx, llm, &niro.Request{
+    Messages: []niro.Message{niro.UserText("What's the weather and 2+2?")},
+    Tools:    []niro.Tool{ /* ... */ },
 })
 ```
 
 Or use a wrapping provider:
 
 ```go
-provider := ryn.NewStreamWithToolHandling(llm, executor, 5)
+provider := niro.NewStreamWithToolHandling(llm, executor, 5)
 stream, err := provider.Generate(ctx, req)
 // Tool calls handled automatically
 ```
@@ -552,9 +552,9 @@ type sumArgs struct {
     B int `json:"b"`
 }
 
-toolset := ryn.NewToolset()
+toolset := niro.NewToolset()
 
-sumTool, err := ryn.NewToolDefinitionAny(
+sumTool, err := niro.NewToolDefinitionAny(
     "sum",
     "Add two integers",
     map[string]any{
@@ -567,7 +567,7 @@ sumTool, err := ryn.NewToolDefinitionAny(
     },
     func(ctx context.Context, raw json.RawMessage) (any, error) {
         var in sumArgs
-        if err := ryn.JSONUnmarshal(raw, &in); err != nil {
+        if err := niro.JSONUnmarshal(raw, &in); err != nil {
             return nil, err
         }
         return map[string]int{"sum": in.A + in.B}, nil
@@ -577,14 +577,14 @@ if err != nil { /* handle */ }
 
 toolset.MustRegister(sumTool)
 
-provider := ryn.NewToolingProvider(
+provider := niro.NewToolingProvider(
     llm,
     toolset,
-    ryn.DefaultToolStreamOptions(),
+    niro.DefaultToolStreamOptions(),
 )
 
-stream, err := provider.Generate(ctx, &ryn.Request{
-    Messages: []ryn.Message{ryn.UserText("What is 20+22?")},
+stream, err := provider.Generate(ctx, &niro.Request{
+    Messages: []niro.Message{niro.UserText("What is 20+22?")},
 })
 ```
 
@@ -600,10 +600,10 @@ What this adds automatically:
 Combine multiple wrappers for a production-ready provider:
 
 ```go
-provider := ryn.ComposedProvider(
+provider := niro.ComposedProvider(
     baseProvider,
     5 * time.Minute,                          // timeout
-    &ryn.DefaultRetryConfig(),                // retry
+    &niro.DefaultRetryConfig(),                // retry
 )
 // Adds tracing, timeout, and retry all at once
 ```
@@ -613,10 +613,10 @@ provider := ryn.ComposedProvider(
 Messages carry mixed content — text, images, audio, URLs:
 
 ```go
-msg := ryn.Multi(ryn.RoleUser,
-    ryn.TextPart("What's in this image?"),
-    ryn.ImagePart(pngBytes, "image/png"),
-    ryn.ImageURLPart("https://example.com/photo.jpg", "image/jpeg"),
+msg := niro.Multi(niro.RoleUser,
+    niro.TextPart("What's in this image?"),
+    niro.ImagePart(pngBytes, "image/png"),
+    niro.ImageURLPart("https://example.com/photo.jpg", "image/jpeg"),
 )
 ```
 
@@ -646,10 +646,10 @@ Niro ships with production-grade infrastructure for high-concurrency deployments
 `BytePool` eliminates per-frame `[]byte` allocations for audio, image, and video data using size-class `sync.Pool` buckets (4KB, 64KB, 1MB).
 
 ```go
-pool := ryn.DefaultBytePool // process-wide pool
+pool := niro.DefaultBytePool // process-wide pool
 
 // Provider emits pooled frames:
-frame := ryn.AudioFramePooled(pool, pcmChunk, "audio/pcm")
+frame := niro.AudioFramePooled(pool, pcmChunk, "audio/pcm")
 
 // Consumer returns buffer when done:
 pool.Put(frame.Data)
@@ -663,10 +663,10 @@ Benchmark: **~60ns** per Get/Put cycle, **1 alloc** (pointer indirection). Scale
 
 ```go
 // Use the process-wide default (recommended):
-client := ryn.DefaultHTTPClient
+client := niro.DefaultHTTPClient
 
 // Or create with custom options:
-client := ryn.HTTPClient(&ryn.TransportOptions{
+client := niro.HTTPClient(&niro.TransportOptions{
     MaxIdleConnsPerHost: 50,
     IdleConnTimeout:     5 * time.Minute,
 })
@@ -682,7 +682,7 @@ Defaults: GOMAXPROCS×64 idle connections, GOMAXPROCS×16 per host, 120s idle ti
 Thread-safe, sharded (64 shards) LRU cache with TTL for caching identical LLM requests.
 
 ```go
-cache := ryn.NewCache(ryn.CacheOptions{
+cache := niro.NewCache(niro.CacheOptions{
     MaxEntries: 10_000,
     TTL:        5 * time.Minute,
 })
@@ -699,7 +699,7 @@ Benchmark: **~1.6μs** per cache hit. Lock-free reads via atomic counters. `cach
 `Registry` manages named providers for runtime lookup, multi-provider deployments, and A/B routing.
 
 ```go
-reg := ryn.NewRegistry()
+reg := niro.NewRegistry()
 reg.Register("openai", openaiProvider)
 reg.Register("anthropic", anthropicProvider)
 reg.Register("fast", cache.Wrap(openaiProvider))
@@ -718,35 +718,35 @@ Benchmark: **0 allocs, ~34ns** per lookup. RWMutex-protected, safe for concurren
 Use `MultiTenantProvider` to select provider/client at request time.
 
 ```go
-reg := ryn.NewRegistry()
+reg := niro.NewRegistry()
 reg.Register("tenant-a-openai", openaiA)
 reg.Register("tenant-b-openai", openaiB)
 reg.Register("tenant-c-bedrock", bedrockC)
 
-router := ryn.NewMultiTenantProvider(
+router := niro.NewMultiTenantProvider(
     reg,
-    ryn.WithDefaultClient("tenant-a-openai"),
+    niro.WithDefaultClient("tenant-a-openai"),
 )
 
 // Per-request selection
-stream, err := router.Generate(ctx, &ryn.Request{
+stream, err := router.Generate(ctx, &niro.Request{
     Client:   "tenant-c-bedrock",
-    Messages: []ryn.Message{ryn.UserText("hello")},
+    Messages: []niro.Message{niro.UserText("hello")},
 })
 ```
 
 You can also set the client in context:
 
 ```go
-ctx = ryn.WithClient(ctx, "tenant-b-openai")
-stream, err := router.Generate(ctx, &ryn.Request{Messages: msgs})
+ctx = niro.WithClient(ctx, "tenant-b-openai")
+stream, err := router.Generate(ctx, &niro.Request{Messages: msgs})
 ```
 
 Per-client customization is supported via mutators:
 
 ```go
-router := ryn.NewMultiTenantProvider(reg,
-    ryn.WithClientMutator("tenant-c-bedrock", func(ctx context.Context, req *ryn.Request) error {
+router := niro.NewMultiTenantProvider(reg,
+    niro.WithClientMutator("tenant-c-bedrock", func(ctx context.Context, req *niro.Request) error {
         req.Extra = bedrock.Extras{
             InferenceProfile: "arn:aws:bedrock:us-west-2:123456789012:inference-profile/my-profile",
         }
@@ -765,8 +765,8 @@ llm := bedrock.New(cfg,
 )
 
 // Override per request:
-stream, err := llm.Generate(ctx, &ryn.Request{
-    Messages: []ryn.Message{ryn.UserText("status summary")},
+stream, err := llm.Generate(ctx, &niro.Request{
+    Messages: []niro.Message{niro.UserText("status summary")},
     Extra: bedrock.Extras{
         InferenceProfile: "arn:aws:bedrock:us-west-2:123456789012:inference-profile/team-blue",
         Hook: func(in *bedrockruntime.ConverseStreamInput) {
@@ -806,11 +806,11 @@ fmt.Println(out.Text)
 `sync.Pool`-backed pools for hot-path objects:
 
 ```go
-u := ryn.GetUsage()         // 0 allocs, ~21ns
-defer ryn.PutUsage(u)
+u := niro.GetUsage()         // 0 allocs, ~21ns
+defer niro.PutUsage(u)
 
-m := ryn.GetResponseMeta()  // 0 allocs, ~27ns
-defer ryn.PutResponseMeta(m)
+m := niro.GetResponseMeta()  // 0 allocs, ~27ns
+defer niro.PutResponseMeta(m)
 ```
 
 ### JSON Backend (Configurable)
@@ -824,14 +824,14 @@ Niro allows swapping the JSON implementation globally (same compatible set as Fi
 - github.com/json-iterator/go
 
 ```go
-ryn.SetJSON(&ryn.JSONLibrary{
+niro.SetJSON(&niro.JSONLibrary{
     Marshal:   json.Marshal,
     Unmarshal: json.Unmarshal,
     Valid:     json.Valid,
-    NewEncoder: func(w io.Writer) ryn.JSONEncoder {
+    NewEncoder: func(w io.Writer) niro.JSONEncoder {
         return json.NewEncoder(w)
     },
-    NewDecoder: func(r io.Reader) ryn.JSONDecoder {
+    NewDecoder: func(r io.Reader) niro.JSONDecoder {
         return json.NewDecoder(r)
     },
 })

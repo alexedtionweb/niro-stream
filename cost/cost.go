@@ -19,11 +19,11 @@ type ModelPricing struct {
 }
 
 // CalculateCost computes the cost for a given usage.
-func (mp *ModelPricing) CalculateCost(usage ryn.Usage) ryn.Cost {
+func (mp *ModelPricing) CalculateCost(usage niro.Usage) niro.Cost {
 	if mp == nil {
-		return ryn.Cost{}
+		return niro.Cost{}
 	}
-	return ryn.Cost{
+	return niro.Cost{
 		InputCost:  float64(usage.InputTokens) * mp.InputCostPer1M / 1_000_000,
 		OutputCost: float64(usage.OutputTokens) * mp.OutputCostPer1M / 1_000_000,
 		TotalCost:  (float64(usage.InputTokens)*mp.InputCostPer1M + float64(usage.OutputTokens)*mp.OutputCostPer1M) / 1_000_000,
@@ -87,10 +87,10 @@ func (pr *PricingRegistry) Get(provider, model string) *ModelPricing {
 }
 
 // CalculateCost computes cost for a generation.
-func (pr *PricingRegistry) CalculateCost(provider, model string, usage ryn.Usage) ryn.Cost {
+func (pr *PricingRegistry) CalculateCost(provider, model string, usage niro.Usage) niro.Cost {
 	pricing := pr.Get(provider, model)
 	if pricing == nil {
-		return ryn.Cost{} // No pricing info
+		return niro.Cost{} // No pricing info
 	}
 	return pricing.CalculateCost(usage)
 }
@@ -169,6 +169,6 @@ func GetPricingRegistry() *PricingRegistry {
 }
 
 // CalculateCost computes cost using the global registry.
-func CalculateCost(provider, model string, usage ryn.Usage) ryn.Cost {
+func CalculateCost(provider, model string, usage niro.Usage) niro.Cost {
 	return defaultPricingRegistry.CalculateCost(provider, model, usage)
 }

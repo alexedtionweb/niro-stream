@@ -13,8 +13,8 @@ import (
 // Memory stores conversation state by session ID.
 // Implementations can be in-memory, DB-backed, Redis, MCP-backed, etc.
 type Memory interface {
-	Load(ctx context.Context, sessionID string) ([]ryn.Message, error)
-	Save(ctx context.Context, sessionID string, history []ryn.Message) error
+	Load(ctx context.Context, sessionID string) ([]niro.Message, error)
+	Save(ctx context.Context, sessionID string, history []niro.Message) error
 }
 
 // MCPMemory is an optional extension for memory providers backed by MCP.
@@ -52,7 +52,7 @@ func WithSystemPrompt(prompt string) Option {
 // WithOptions sets default generation parameters (temperature, max tokens, etc.)
 // applied to every turn. Per-request overrides are not yet exposed — use
 // RunRequest for full control.
-func WithOptions(opts ryn.Options) Option {
+func WithOptions(opts niro.Options) Option {
 	return func(rt *Runtime) { rt.defaultOptions = opts }
 }
 
@@ -66,7 +66,7 @@ func WithOptions(opts ryn.Options) Option {
 //
 // Components applied via WithComponent are then layered on top of all
 // WithMiddleware wrappers.
-func WithMiddleware(fn func(ryn.Provider) ryn.Provider) Option {
+func WithMiddleware(fn func(niro.Provider) niro.Provider) Option {
 	return func(rt *Runtime) {
 		if fn != nil {
 			rt.provider = fn(rt.provider)
@@ -102,15 +102,15 @@ func WithComponent(c Component) Option {
 	}
 }
 
-// Runtime is an optional agent layer built on top of ryn core primitives.
+// Runtime is an optional agent layer built on top of niro core primitives.
 //
 // Core remains agent-agnostic; this module composes provider + memory + peers
 // and plugin components to execute conversational turns.
 type Runtime struct {
-	provider       ryn.Provider
+	provider       niro.Provider
 	model          string
 	systemPrompt   string
-	defaultOptions ryn.Options
+	defaultOptions niro.Options
 	memory         Memory
 	peers          map[string]Peer
 	components     []Component
@@ -120,12 +120,12 @@ type Runtime struct {
 // TurnResult contains response text and metadata.
 type TurnResult struct {
 	Text     string
-	Usage    ryn.Usage
-	Response *ryn.ResponseMeta
+	Usage    niro.Usage
+	Response *niro.ResponseMeta
 }
 
 // New creates an agent runtime plugin.
-func New(provider ryn.Provider, opts ...Option) (*Runtime, error) {
+func New(provider niro.Provider, opts ...Option) (*Runtime, error) {
 	if provider == nil {
 		return nil, fmt.Errorf("agent: provider is nil")
 	}
@@ -168,7 +168,7 @@ func (rt *Runtime) Close() error {
 
 // Provider returns the current (possibly middleware-wrapped) provider.
 // Useful for extensions and tests that need to inspect the provider chain.
-func (rt *Runtime) Provider() ryn.Provider {
+func (rt *Runtime) Provider() niro.Provider {
 	if rt == nil {
 		return nil
 	}
@@ -185,8 +185,8 @@ func (rt *Runtime) SystemPrompt() string {
 
 // loadMessages returns the full message slice for a turn: history + the new
 // user message. It is the single place that touches session memory on load.
-func (rt *Runtime) loadMessages(ctx context.Context, sessionID, input string) ([]ryn.Message, error) {
-	messages := make([]ryn.Message, 0, 8)
+func (rt *Runtime) loadMessages(ctx context.Context, sessionID, input string) ([]niro.Message, error) {
+	messages := make([]niro.Message, 0, 8)
 	if rt.memory != nil && sessionID != "" {
 		history, err := rt.memory.Load(ctx, sessionID)
 		if err != nil {
@@ -194,7 +194,7 @@ func (rt *Runtime) loadMessages(ctx context.Context, sessionID, input string) ([
 		}
 		messages = append(messages, history...)
 	}
-	messages = append(messages, ryn.UserText(input))
+	messages = append(messages, niro.UserText(input))
 	return messages, nil
 }
 
@@ -210,7 +210,7 @@ func (rt *Runtime) Run(ctx context.Context, sessionID string, input string) (Tur
 		return TurnResult{}, err
 	}
 
-	req := &ryn.Request{
+	req := &niro.Request{
 		Model:        rt.model,
 		SystemPrompt: rt.systemPrompt,
 		Messages:     messages,
@@ -221,7 +221,7 @@ func (rt *Runtime) Run(ctx context.Context, sessionID string, input string) (Tur
 	if err != nil {
 		return TurnResult{}, err
 	}
-	text, err := ryn.CollectText(ctx, stream)
+	text, err := niro.CollectText(ctx, stream)
 	if err != nil {
 		return TurnResult{}, err
 	}
@@ -233,7 +233,7 @@ func (rt *Runtime) Run(ctx context.Context, sessionID string, input string) (Tur
 	}
 
 	if rt.memory != nil && sessionID != "" {
-		nextHistory := append(messages, ryn.AssistantText(text))
+		nextHistory := append(messages, niro.AssistantText(text))
 		if err := rt.memory.Save(ctx, sessionID, nextHistory); err != nil {
 			return TurnResult{}, err
 		}
@@ -256,7 +256,7 @@ func (rt *Runtime) Run(ctx context.Context, sessionID string, input string) (Tur
 //	for stream.Next(ctx) {
 //		fmt.Fprint(w, stream.Frame().Text)
 //	}
-func (rt *Runtime) RunStream(ctx context.Context, sessionID string, input string) (*ryn.Stream, error) {
+func (rt *Runtime) RunStream(ctx context.Context, sessionID string, input string) (*niro.Stream, error) {
 	if rt == nil || rt.provider == nil {
 		return nil, fmt.Errorf("agent: runtime/provider is nil")
 	}
@@ -266,7 +266,7 @@ func (rt *Runtime) RunStream(ctx context.Context, sessionID string, input string
 		return nil, err
 	}
 
-	req := &ryn.Request{
+	req := &niro.Request{
 		Model:        rt.model,
 		SystemPrompt: rt.systemPrompt,
 		Messages:     messages,
@@ -278,13 +278,13 @@ func (rt *Runtime) RunStream(ctx context.Context, sessionID string, input string
 		return nil, err
 	}
 
-	out, emitter := ryn.NewStream(32)
+	out, emitter := niro.NewStream(32)
 	go func() {
 		defer emitter.Close()
 		var buf strings.Builder
 		for src.Next(ctx) {
 			f := src.Frame()
-			if f.Kind == ryn.KindText {
+			if f.Kind == niro.KindText {
 				buf.WriteString(f.Text)
 			}
 			if err := emitter.Emit(ctx, f); err != nil {
@@ -305,11 +305,11 @@ func (rt *Runtime) RunStream(ctx context.Context, sessionID string, input string
 		// re-emitted explicitly — same pattern as tools.ToolLoop.run().
 		if u := src.Usage(); u.InputTokens > 0 || u.OutputTokens > 0 || u.TotalTokens > 0 {
 			uCopy := u
-			_ = emitter.Emit(ctx, ryn.UsageFrame(&uCopy))
+			_ = emitter.Emit(ctx, niro.UsageFrame(&uCopy))
 		}
 		// Save memory only after the full response has been delivered.
 		if rt.memory != nil && sessionID != "" {
-			nextHistory := append(messages, ryn.AssistantText(buf.String()))
+			nextHistory := append(messages, niro.AssistantText(buf.String()))
 			// Ignore save errors — the stream has already been delivered.
 			_ = rt.memory.Save(ctx, sessionID, nextHistory)
 		}
@@ -332,29 +332,29 @@ func (rt *Runtime) CallPeer(ctx context.Context, peerName string, sessionID stri
 // InMemoryMemory is a simple in-process memory plugin.
 type InMemoryMemory struct {
 	mu       sync.RWMutex
-	sessions map[string][]ryn.Message
+	sessions map[string][]niro.Message
 }
 
 // NewInMemoryMemory creates a memory store for local/dev usage.
 func NewInMemoryMemory() *InMemoryMemory {
-	return &InMemoryMemory{sessions: make(map[string][]ryn.Message)}
+	return &InMemoryMemory{sessions: make(map[string][]niro.Message)}
 }
 
-func (m *InMemoryMemory) Load(ctx context.Context, sessionID string) ([]ryn.Message, error) {
+func (m *InMemoryMemory) Load(ctx context.Context, sessionID string) ([]niro.Message, error) {
 	_ = ctx
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	h := m.sessions[sessionID]
-	out := make([]ryn.Message, len(h))
+	out := make([]niro.Message, len(h))
 	copy(out, h)
 	return out, nil
 }
 
-func (m *InMemoryMemory) Save(ctx context.Context, sessionID string, history []ryn.Message) error {
+func (m *InMemoryMemory) Save(ctx context.Context, sessionID string, history []niro.Message) error {
 	_ = ctx
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	out := make([]ryn.Message, len(history))
+	out := make([]niro.Message, len(history))
 	copy(out, history)
 	m.sessions[sessionID] = out
 	return nil

@@ -1,4 +1,4 @@
-package ryn
+package niro
 
 import (
 	stdjson "encoding/json"

@@ -46,7 +46,7 @@ func (p *Pipeline) WithBuffer(size int) *Pipeline {
 // when the context is canceled or any processor returns an error.
 //
 // The returned Stream is safe to iterate immediately.
-func (p *Pipeline) Run(ctx context.Context, in *ryn.Stream) *ryn.Stream {
+func (p *Pipeline) Run(ctx context.Context, in *niro.Stream) *niro.Stream {
 	if len(p.procs) == 0 {
 		return in
 	}
@@ -54,10 +54,10 @@ func (p *Pipeline) Run(ctx context.Context, in *ryn.Stream) *ryn.Stream {
 	ctx, cancel := context.WithCancel(ctx)
 
 	// Create inter-stage streams
-	streams := make([]*ryn.Stream, len(p.procs))
-	emitters := make([]*ryn.Emitter, len(p.procs))
+	streams := make([]*niro.Stream, len(p.procs))
+	emitters := make([]*niro.Emitter, len(p.procs))
 	for i := range p.procs {
-		streams[i], emitters[i] = ryn.NewStream(p.buf)
+		streams[i], emitters[i] = niro.NewStream(p.buf)
 	}
 
 	var wg sync.WaitGroup

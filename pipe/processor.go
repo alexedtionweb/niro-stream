@@ -17,13 +17,13 @@ import (
 //   - Errors returned from Process are propagated to the output stream.
 //   - Process runs in its own goroutine when used in a Pipeline.
 type Processor interface {
-	Process(ctx context.Context, in *ryn.Stream, out *ryn.Emitter) error
+	Process(ctx context.Context, in *niro.Stream, out *niro.Emitter) error
 }
 
 // ProcessorFunc adapts a plain function to the Processor interface.
-type ProcessorFunc func(ctx context.Context, in *ryn.Stream, out *ryn.Emitter) error
+type ProcessorFunc func(ctx context.Context, in *niro.Stream, out *niro.Emitter) error
 
-func (f ProcessorFunc) Process(ctx context.Context, in *ryn.Stream, out *ryn.Emitter) error {
+func (f ProcessorFunc) Process(ctx context.Context, in *niro.Stream, out *niro.Emitter) error {
 	return f(ctx, in, out)
 }
 
@@ -31,14 +31,14 @@ func (f ProcessorFunc) Process(ctx context.Context, in *ryn.Stream, out *ryn.Emi
 
 // PassThrough creates a Processor that forwards all frames unchanged.
 func PassThrough() Processor {
-	return ProcessorFunc(func(ctx context.Context, in *ryn.Stream, out *ryn.Emitter) error {
-		return ryn.Forward(ctx, in, out)
+	return ProcessorFunc(func(ctx context.Context, in *niro.Stream, out *niro.Emitter) error {
+		return niro.Forward(ctx, in, out)
 	})
 }
 
 // Filter creates a Processor that only forwards frames matching the predicate.
-func Filter(fn func(ryn.Frame) bool) Processor {
-	return ProcessorFunc(func(ctx context.Context, in *ryn.Stream, out *ryn.Emitter) error {
+func Filter(fn func(niro.Frame) bool) Processor {
+	return ProcessorFunc(func(ctx context.Context, in *niro.Stream, out *niro.Emitter) error {
 		for in.Next(ctx) {
 			f := in.Frame()
 			if fn(f) {
@@ -52,8 +52,8 @@ func Filter(fn func(ryn.Frame) bool) Processor {
 }
 
 // Map creates a Processor that transforms each frame through fn.
-func Map(fn func(ryn.Frame) ryn.Frame) Processor {
-	return ProcessorFunc(func(ctx context.Context, in *ryn.Stream, out *ryn.Emitter) error {
+func Map(fn func(niro.Frame) niro.Frame) Processor {
+	return ProcessorFunc(func(ctx context.Context, in *niro.Stream, out *niro.Emitter) error {
 		for in.Next(ctx) {
 			if err := out.Emit(ctx, fn(in.Frame())); err != nil {
 				return err
@@ -65,8 +65,8 @@ func Map(fn func(ryn.Frame) ryn.Frame) Processor {
 
 // Tap creates a Processor that calls fn for each frame as a side effect
 // without modifying the stream. Useful for logging, metrics, or debugging.
-func Tap(fn func(ryn.Frame)) Processor {
-	return ProcessorFunc(func(ctx context.Context, in *ryn.Stream, out *ryn.Emitter) error {
+func Tap(fn func(niro.Frame)) Processor {
+	return ProcessorFunc(func(ctx context.Context, in *niro.Stream, out *niro.Emitter) error {
 		for in.Next(ctx) {
 			f := in.Frame()
 			fn(f)
@@ -80,18 +80,18 @@ func Tap(fn func(ryn.Frame)) Processor {
 
 // TextOnly creates a Processor that only forwards KindText frames.
 func TextOnly() Processor {
-	return Filter(func(f ryn.Frame) bool { return f.Kind == ryn.KindText })
+	return Filter(func(f niro.Frame) bool { return f.Kind == niro.KindText })
 }
 
 // Accumulate creates a Processor that collects all text into a single
 // frame emitted at the end of the stream. Useful for converting a
 // token stream into a complete response.
 func Accumulate() Processor {
-	return ProcessorFunc(func(ctx context.Context, in *ryn.Stream, out *ryn.Emitter) error {
+	return ProcessorFunc(func(ctx context.Context, in *niro.Stream, out *niro.Emitter) error {
 		var buf []byte
 		for in.Next(ctx) {
 			f := in.Frame()
-			if f.Kind == ryn.KindText {
+			if f.Kind == niro.KindText {
 				buf = append(buf, f.Text...)
 			} else {
 				// Non-text frames pass through immediately
@@ -104,7 +104,7 @@ func Accumulate() Processor {
 			return err
 		}
 		if len(buf) > 0 {
-			return out.Emit(ctx, ryn.TextFrame(string(buf)))
+			return out.Emit(ctx, niro.TextFrame(string(buf)))
 		}
 		return nil
 	})

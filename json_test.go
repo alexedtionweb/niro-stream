@@ -1,4 +1,4 @@
-package ryn_test
+package niro_test
 
 import (
 	"bytes"
@@ -14,7 +14,7 @@ func TestSetJSON(t *testing.T) {
 	// Not parallel: mutates global JSON backend.
 
 	called := atomic.Int32{}
-	custom := &ryn.JSONLibrary{
+	custom := &niro.JSONLibrary{
 		Marshal: func(v any) ([]byte, error) {
 			called.Add(1)
 			return []byte(`{"a":1}`), nil
@@ -29,18 +29,18 @@ func TestSetJSON(t *testing.T) {
 		},
 	}
 
-	ryn.SetJSON(custom)
-	t.Cleanup(func() { ryn.SetJSON(nil) })
+	niro.SetJSON(custom)
+	t.Cleanup(func() { niro.SetJSON(nil) })
 
 	var out struct {
 		A int `json:"a"`
 	}
 
-	b, err := ryn.JSONMarshal(out)
+	b, err := niro.JSONMarshal(out)
 	assertNoError(t, err)
 	assertTrue(t, len(b) > 0)
-	assertNoError(t, ryn.JSONUnmarshal(b, &out))
-	assertTrue(t, ryn.JSONValid(b))
+	assertNoError(t, niro.JSONUnmarshal(b, &out))
+	assertTrue(t, niro.JSONValid(b))
 	assertTrue(t, called.Load() >= 3)
 }
 
@@ -49,7 +49,7 @@ func TestJSONNewEncoderDecoder(t *testing.T) {
 
 	// Encoder
 	var buf bytes.Buffer
-	enc := ryn.JSONNewEncoder(&buf)
+	enc := niro.JSONNewEncoder(&buf)
 	assertNotNil(t, enc)
 	type testData struct{ X int }
 	err := enc.Encode(testData{X: 42})
@@ -57,7 +57,7 @@ func TestJSONNewEncoderDecoder(t *testing.T) {
 	assertTrue(t, strings.Contains(buf.String(), "42"))
 
 	// Decoder
-	dec := ryn.JSONNewDecoder(strings.NewReader(`{"X":99}`))
+	dec := niro.JSONNewDecoder(strings.NewReader(`{"X":99}`))
 	assertNotNil(t, dec)
 	var out testData
 	err = dec.Decode(&out)
@@ -71,7 +71,7 @@ func TestJSONMarshalIndent(t *testing.T) {
 	type data struct {
 		Name string `json:"name"`
 	}
-	b, err := ryn.JSONMarshalIndent(data{Name: "test"}, "", "  ")
+	b, err := niro.JSONMarshalIndent(data{Name: "test"}, "", "  ")
 	assertNoError(t, err)
 	assertTrue(t, strings.Contains(string(b), "\n"))
 	assertTrue(t, strings.Contains(string(b), `"name"`))
@@ -81,22 +81,22 @@ func TestJSONLibraryDefaultFallback(t *testing.T) {
 	t.Parallel()
 
 	// Test that JSON() returns a valid library
-	lib := ryn.JSON()
+	lib := niro.JSON()
 	assertNotNil(t, lib)
 	assertNotNil(t, lib.Marshal)
 	assertNotNil(t, lib.Unmarshal)
 
 	b, err := lib.Marshal(map[string]int{"x": 1})
 	assertNoError(t, err)
-	assertTrue(t, ryn.JSONValid(b))
+	assertTrue(t, niro.JSONValid(b))
 }
 
 func TestSetJSONNilResetsToDefault(t *testing.T) {
 	// Not parallel: mutates global JSON backend.
-	ryn.SetJSON(nil) // reset
-	t.Cleanup(func() { ryn.SetJSON(nil) })
+	niro.SetJSON(nil) // reset
+	t.Cleanup(func() { niro.SetJSON(nil) })
 
-	b, err := ryn.JSONMarshal(map[string]string{"k": "v"})
+	b, err := niro.JSONMarshal(map[string]string{"k": "v"})
 	assertNoError(t, err)
-	assertTrue(t, ryn.JSONValid(b))
+	assertTrue(t, niro.JSONValid(b))
 }

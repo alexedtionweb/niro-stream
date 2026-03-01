@@ -43,16 +43,16 @@ func TestTracingProvider(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 
-	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+	mock := niro.ProviderFunc(func(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
 		trace := middleware.GetTraceContext(ctx)
 		assertTrue(t, trace.RequestID != "")
-		return ryn.StreamFromSlice([]ryn.Frame{ryn.TextFrame("ok")}), nil
+		return niro.StreamFromSlice([]niro.Frame{niro.TextFrame("ok")}), nil
 	})
 
 	provider := middleware.NewTracingProvider(mock)
-	stream, err := provider.Generate(ctx, &ryn.Request{Messages: []ryn.Message{ryn.UserText("test")}})
+	stream, err := provider.Generate(ctx, &niro.Request{Messages: []niro.Message{niro.UserText("test")}})
 	assertNoError(t, err)
-	text, _ := ryn.CollectText(ctx, stream)
+	text, _ := niro.CollectText(ctx, stream)
 	assertEqual(t, text, "ok")
 }
 
@@ -89,16 +89,16 @@ func TestTracingProviderPreservesExistingTrace(t *testing.T) {
 	})
 
 	var receivedID middleware.RequestID
-	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+	mock := niro.ProviderFunc(func(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
 		trace := middleware.GetTraceContext(ctx)
 		receivedID = trace.RequestID
-		return ryn.StreamFromSlice([]ryn.Frame{ryn.TextFrame("ok")}), nil
+		return niro.StreamFromSlice([]niro.Frame{niro.TextFrame("ok")}), nil
 	})
 
 	provider := middleware.NewTracingProvider(mock)
-	stream, err := provider.Generate(ctx, &ryn.Request{Messages: []ryn.Message{ryn.UserText("test")}})
+	stream, err := provider.Generate(ctx, &niro.Request{Messages: []niro.Message{niro.UserText("test")}})
 	assertNoError(t, err)
-	ryn.CollectText(ctx, stream)
+	niro.CollectText(ctx, stream)
 
 	// Existing trace should be preserved.
 	assertEqual(t, receivedID, existingID)
@@ -110,7 +110,7 @@ func TestTracingProviderInjectsTraceIntoCtx(t *testing.T) {
 
 	// Verify the trace context is stored in the ctx passed to the downstream
 	// provider, so derived child contexts inherit the same RequestID.
-	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+	mock := niro.ProviderFunc(func(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
 		// GetTraceContext on the received ctx should return the stored trace.
 		t1 := middleware.GetTraceContext(ctx)
 		// Create a derived context (simulating downstream middleware).
@@ -121,13 +121,13 @@ func TestTracingProviderInjectsTraceIntoCtx(t *testing.T) {
 			t.Errorf("trace not stored in ctx: parent=%v child=%v", t1.RequestID, t2.RequestID)
 		}
 		assertTrue(t, t1.RequestID != "")
-		return ryn.StreamFromSlice([]ryn.Frame{ryn.TextFrame("ok")}), nil
+		return niro.StreamFromSlice([]niro.Frame{niro.TextFrame("ok")}), nil
 	})
 
 	provider := middleware.NewTracingProvider(mock)
-	stream, err := provider.Generate(ctx, &ryn.Request{Messages: []ryn.Message{ryn.UserText("test")}})
+	stream, err := provider.Generate(ctx, &niro.Request{Messages: []niro.Message{niro.UserText("test")}})
 	assertNoError(t, err)
-	text, _ := ryn.CollectText(ctx, stream)
+	text, _ := niro.CollectText(ctx, stream)
 	assertEqual(t, text, "ok")
 }
 
@@ -141,17 +141,17 @@ func TestTracingProviderUserIDPreserved(t *testing.T) {
 	})
 
 	var gotUID, gotSID string
-	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+	mock := niro.ProviderFunc(func(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
 		trace := middleware.GetTraceContext(ctx)
 		gotUID = trace.UserID
 		gotSID = trace.SessionID
-		return ryn.StreamFromSlice([]ryn.Frame{ryn.TextFrame("ok")}), nil
+		return niro.StreamFromSlice([]niro.Frame{niro.TextFrame("ok")}), nil
 	})
 
 	provider := middleware.NewTracingProvider(mock)
-	stream, err := provider.Generate(ctx, &ryn.Request{Messages: []ryn.Message{ryn.UserText("x")}})
+	stream, err := provider.Generate(ctx, &niro.Request{Messages: []niro.Message{niro.UserText("x")}})
 	assertNoError(t, err)
-	ryn.CollectText(ctx, stream)
+	niro.CollectText(ctx, stream)
 	assertNoError(t, err)
 
 	assertEqual(t, gotUID, "user-42")
@@ -172,10 +172,10 @@ func TestTracingProviderNilProvider(t *testing.T) {
 				panicked = true
 			}
 		}()
-		tp := middleware.NewTracingProvider(ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+		tp := middleware.NewTracingProvider(niro.ProviderFunc(func(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
 			return nil, fmt.Errorf("downstream error")
 		}))
-		_, err := tp.Generate(ctx, &ryn.Request{Messages: []ryn.Message{ryn.UserText("x")}})
+		_, err := tp.Generate(ctx, &niro.Request{Messages: []niro.Message{niro.UserText("x")}})
 		assertTrue(t, err != nil)
 	}()
 	assertTrue(t, !panicked)

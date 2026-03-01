@@ -1,4 +1,4 @@
-package ryn
+package niro
 
 import (
 	"context"
@@ -27,11 +27,11 @@ type Provider interface {
 // ProviderFunc adapts a plain function to the Provider interface.
 // Useful for ad-hoc providers, testing, and bring-your-own-model.
 //
-//	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
-//	    s, e := ryn.NewStream(0)
+//	mock := niro.ProviderFunc(func(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
+//	    s, e := niro.NewStream(0)
 //	    go func() {
 //	        defer e.Close()
-//	        e.Emit(ctx, ryn.TextFrame("hello from mock"))
+//	        e.Emit(ctx, niro.TextFrame("hello from mock"))
 //	    }()
 //	    return s, nil
 //	})
@@ -93,7 +93,7 @@ type Request struct {
 	// unrecognized types. Use for per-request SDK customization not
 	// covered by the common Options.
 	//
-	//   stream, err := llm.Generate(ctx, &ryn.Request{
+	//   stream, err := llm.Generate(ctx, &niro.Request{
 	//       Messages: msgs,
 	//       Extra: openai.RequestHook(func(p *oai.ChatCompletionNewParams) {
 	//           p.LogProbs = oai.Bool(true)

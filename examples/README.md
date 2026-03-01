@@ -1,6 +1,6 @@
-# ryn examples
+# niro examples
 
-Runnable examples for [ryn](https://pkg.go.dev/github.com/alexedtionweb/niro-stream) — a provider-agnostic Go library for streaming LLM generation.
+Runnable examples for [niro](https://pkg.go.dev/github.com/alexedtionweb/niro-stream) — a provider-agnostic Go library for streaming LLM generation.
 
 Every example selects a provider at runtime via environment variables, so you
 can swap backends without editing code.
@@ -125,17 +125,17 @@ reg.Register("bedrock",   bedrock.New(awsCfg))
 
 router := registry.NewMultiTenantProvider(reg,
     registry.WithDefaultClient("openai"),
-    registry.WithClientSelector(func(ctx context.Context, req *ryn.Request) (string, error) {
+    registry.WithClientSelector(func(ctx context.Context, req *niro.Request) (string, error) {
         return os.Getenv("PROVIDER"), nil   // env var overrides
     }),
-    registry.WithClientMutator("anthropic", func(ctx context.Context, req *ryn.Request) error {
+    registry.WithClientMutator("anthropic", func(ctx context.Context, req *niro.Request) error {
         req.Model = "claude-3-5-sonnet-20241022"   // per-provider defaults
         return nil
     }),
 )
 
 // req.Client overrides the selector for a specific call
-stream, err := router.Generate(ctx, &ryn.Request{Client: "gemini", ...})
+stream, err := router.Generate(ctx, &niro.Request{Client: "gemini", ...})
 ```
 
 ---

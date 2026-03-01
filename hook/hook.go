@@ -35,13 +35,13 @@ type Hook interface {
 	// metrics for real-time and telephony applications.
 	// This is the per-token hook — keep it extremely fast.
 	// A nil return is fine; return a non-nil error to abort the stream.
-	OnFrame(ctx context.Context, f ryn.Frame, elapsed time.Duration) error
+	OnFrame(ctx context.Context, f niro.Frame, elapsed time.Duration) error
 
 	// OnToolCall is called when a tool call is about to be executed.
-	OnToolCall(ctx context.Context, call ryn.ToolCall)
+	OnToolCall(ctx context.Context, call niro.ToolCall)
 
 	// OnToolResult is called when a tool call completes.
-	OnToolResult(ctx context.Context, result ryn.ToolResult, elapsed time.Duration)
+	OnToolResult(ctx context.Context, result niro.ToolResult, elapsed time.Duration)
 
 	// OnError is called when an error occurs at any stage.
 	OnError(ctx context.Context, err error)
@@ -63,8 +63,8 @@ type GenerateEndInfo struct {
 	Provider     string        // Provider name
 	Model        string        // Model actually used
 	RequestID    string        // Unique request ID for tracing
-	Usage        ryn.Usage     // Token usage
-	Cost         ryn.Cost      // Cost information (tokens × model pricing)
+	Usage        niro.Usage    // Token usage
+	Cost         niro.Cost     // Cost information (tokens × model pricing)
 	FinishReason string        // Why generation stopped
 	Duration     time.Duration // Wall-clock duration
 	ResponseID   string        // Provider-assigned response ID
@@ -111,7 +111,7 @@ func (m *multiHook) OnGenerateEnd(ctx context.Context, info GenerateEndInfo) {
 	}
 }
 
-func (m *multiHook) OnFrame(ctx context.Context, f ryn.Frame, elapsed time.Duration) error {
+func (m *multiHook) OnFrame(ctx context.Context, f niro.Frame, elapsed time.Duration) error {
 	var firstErr error
 	for _, h := range m.hooks {
 		if err := h.OnFrame(ctx, f, elapsed); err != nil && firstErr == nil {
@@ -121,13 +121,13 @@ func (m *multiHook) OnFrame(ctx context.Context, f ryn.Frame, elapsed time.Durat
 	return firstErr
 }
 
-func (m *multiHook) OnToolCall(ctx context.Context, call ryn.ToolCall) {
+func (m *multiHook) OnToolCall(ctx context.Context, call niro.ToolCall) {
 	for _, h := range m.hooks {
 		h.OnToolCall(ctx, call)
 	}
 }
 
-func (m *multiHook) OnToolResult(ctx context.Context, result ryn.ToolResult, elapsed time.Duration) {
+func (m *multiHook) OnToolResult(ctx context.Context, result niro.ToolResult, elapsed time.Duration) {
 	for _, h := range m.hooks {
 		h.OnToolResult(ctx, result, elapsed)
 	}
@@ -153,11 +153,11 @@ type NoOpHook struct{}
 func (NoOpHook) OnGenerateStart(ctx context.Context, _ GenerateStartInfo) context.Context {
 	return ctx
 }
-func (NoOpHook) OnGenerateEnd(context.Context, GenerateEndInfo)              {}
-func (NoOpHook) OnFrame(context.Context, ryn.Frame, time.Duration) error     { return nil }
-func (NoOpHook) OnToolCall(context.Context, ryn.ToolCall)                    {}
-func (NoOpHook) OnToolResult(context.Context, ryn.ToolResult, time.Duration) {}
-func (NoOpHook) OnError(context.Context, error)                              {}
+func (NoOpHook) OnGenerateEnd(context.Context, GenerateEndInfo)               {}
+func (NoOpHook) OnFrame(context.Context, niro.Frame, time.Duration) error     { return nil }
+func (NoOpHook) OnToolCall(context.Context, niro.ToolCall)                    {}
+func (NoOpHook) OnToolResult(context.Context, niro.ToolResult, time.Duration) {}
+func (NoOpHook) OnError(context.Context, error)                               {}
 
 // Verify NoOpHook implements Hook.
 var _ Hook = NoOpHook{}

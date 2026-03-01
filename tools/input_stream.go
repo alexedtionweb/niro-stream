@@ -12,33 +12,33 @@ import (
 // Providers that support realtime/duplex APIs may implement this directly.
 // Core helpers will automatically prefer this path when available.
 type InputStreamingProvider interface {
-	GenerateInputStream(ctx context.Context, req *ryn.Request, input *ryn.Stream) (*ryn.Stream, error)
+	GenerateInputStream(ctx context.Context, req *niro.Request, input *niro.Stream) (*niro.Stream, error)
 }
 
 // InputStreamOptions controls behavior when falling back to non-native providers.
 type InputStreamOptions struct {
 	// Role used when converting streamed input to a single message.
-	// Defaults to ryn.RoleUser.
-	Role ryn.Role
+	// Defaults to niro.RoleUser.
+	Role niro.Role
 }
 
 // DefaultInputStreamOptions returns safe defaults.
 func DefaultInputStreamOptions() InputStreamOptions {
-	return InputStreamOptions{Role: ryn.RoleUser}
+	return InputStreamOptions{Role: niro.RoleUser}
 }
 
 // GenerateInputStream calls provider-native input streaming when supported.
 // Otherwise it degrades gracefully by collecting text frames from input and
 // sending them as one message in a standard Generate request.
-func GenerateInputStream(ctx context.Context, p ryn.Provider, req *ryn.Request, input *ryn.Stream, opts InputStreamOptions) (*ryn.Stream, error) {
+func GenerateInputStream(ctx context.Context, p niro.Provider, req *niro.Request, input *niro.Stream, opts InputStreamOptions) (*niro.Stream, error) {
 	if p == nil {
-		return nil, ryn.NewError(ryn.ErrCodeInvalidRequest, "provider is nil")
+		return nil, niro.NewError(niro.ErrCodeInvalidRequest, "provider is nil")
 	}
 	if req == nil {
-		return nil, ryn.NewError(ryn.ErrCodeInvalidRequest, "request is nil")
+		return nil, niro.NewError(niro.ErrCodeInvalidRequest, "request is nil")
 	}
 	if input == nil {
-		return nil, ryn.NewError(ryn.ErrCodeInvalidRequest, "input stream is nil")
+		return nil, niro.NewError(niro.ErrCodeInvalidRequest, "input stream is nil")
 	}
 
 	if sp, ok := p.(InputStreamingProvider); ok {
@@ -47,14 +47,14 @@ func GenerateInputStream(ctx context.Context, p ryn.Provider, req *ryn.Request, 
 
 	role := opts.Role
 	if role == "" {
-		role = ryn.RoleUser
+		role = niro.RoleUser
 	}
-	text, err := ryn.CollectText(ctx, input)
+	text, err := niro.CollectText(ctx, input)
 	if err != nil {
 		return nil, err
 	}
 
 	next := *req
-	next.Messages = append(append([]ryn.Message(nil), req.Messages...), ryn.Multi(role, ryn.TextPart(text)))
+	next.Messages = append(append([]niro.Message(nil), req.Messages...), niro.Multi(role, niro.TextPart(text)))
 	return p.Generate(ctx, &next)
 }

@@ -1,4 +1,4 @@
-package ryn_test
+package niro_test
 
 import (
 	"bytes"
@@ -17,7 +17,7 @@ import (
 // These tests verify the slog.Handler implementation kept for slog users.
 
 func TestDiscardHandlerEnabled(t *testing.T) {
-	h := ryn.DiscardHandler{}
+	h := niro.DiscardHandler{}
 	ctx := context.Background()
 	for _, lvl := range []slog.Level{slog.LevelDebug, slog.LevelInfo, slog.LevelWarn, slog.LevelError} {
 		if h.Enabled(ctx, lvl) {
@@ -27,7 +27,7 @@ func TestDiscardHandlerEnabled(t *testing.T) {
 }
 
 func TestDiscardHandlerHandle(t *testing.T) {
-	h := ryn.DiscardHandler{}
+	h := niro.DiscardHandler{}
 	rec := slog.NewRecord(time.Now(), slog.LevelInfo, "msg", 0)
 	if err := h.Handle(context.Background(), rec); err != nil {
 		t.Fatalf("Handle returned error: %v", err)
@@ -35,7 +35,7 @@ func TestDiscardHandlerHandle(t *testing.T) {
 }
 
 func TestDiscardHandlerWithAttrs(t *testing.T) {
-	h := ryn.DiscardHandler{}
+	h := niro.DiscardHandler{}
 	got := h.WithAttrs([]slog.Attr{slog.String("k", "v")})
 	if got != h {
 		t.Error("WithAttrs should return the same DiscardHandler")
@@ -43,7 +43,7 @@ func TestDiscardHandlerWithAttrs(t *testing.T) {
 }
 
 func TestDiscardHandlerWithGroup(t *testing.T) {
-	h := ryn.DiscardHandler{}
+	h := niro.DiscardHandler{}
 	got := h.WithGroup("grp")
 	if got != h {
 		t.Error("WithGroup should return the same DiscardHandler")
@@ -53,12 +53,12 @@ func TestDiscardHandlerWithGroup(t *testing.T) {
 // ── Discard() ────────────────────────────────────────────────────────────────
 
 func TestDiscardNeverEnabled(t *testing.T) {
-	d := ryn.Discard()
+	d := niro.Discard()
 	if d == nil {
 		t.Fatal("Discard() must not be nil")
 	}
 	ctx := context.Background()
-	for _, level := range []ryn.Level{ryn.LevelDebug, ryn.LevelInfo, ryn.LevelWarn, ryn.LevelError} {
+	for _, level := range []niro.Level{niro.LevelDebug, niro.LevelInfo, niro.LevelWarn, niro.LevelError} {
 		if d.Enabled(ctx, level) {
 			t.Errorf("Discard.Enabled(%v) = true; want false", level)
 		}
@@ -68,11 +68,11 @@ func TestDiscardNeverEnabled(t *testing.T) {
 func TestDiscardLogNoPanic(t *testing.T) {
 	// Log must not panic even when called directly (e.g. by a custom caller
 	// that skips the Enabled check).
-	ryn.Discard().Log(context.Background(), ryn.LevelError, "msg", "k", "v")
+	niro.Discard().Log(context.Background(), niro.LevelError, "msg", "k", "v")
 }
 
 func TestDiscardSingleton(t *testing.T) {
-	if ryn.Discard() != ryn.Discard() {
+	if niro.Discard() != niro.Discard() {
 		t.Error("Discard() must return the same singleton on every call")
 	}
 }
@@ -82,13 +82,13 @@ func TestDiscardSingleton(t *testing.T) {
 func TestNewSlogAdapterEnabled(t *testing.T) {
 	var buf bytes.Buffer
 	sl := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	l := ryn.NewSlogAdapter(sl)
+	l := niro.NewSlogAdapter(sl)
 
 	ctx := context.Background()
-	if !l.Enabled(ctx, ryn.LevelDebug) {
+	if !l.Enabled(ctx, niro.LevelDebug) {
 		t.Error("adapter should be enabled at Debug when handler is at Debug")
 	}
-	if !l.Enabled(ctx, ryn.LevelError) {
+	if !l.Enabled(ctx, niro.LevelError) {
 		t.Error("adapter should be enabled at Error")
 	}
 }
@@ -96,9 +96,9 @@ func TestNewSlogAdapterEnabled(t *testing.T) {
 func TestNewSlogAdapterEmits(t *testing.T) {
 	var buf bytes.Buffer
 	sl := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	l := ryn.NewSlogAdapter(sl)
+	l := niro.NewSlogAdapter(sl)
 
-	l.Log(context.Background(), ryn.LevelWarn, "hello-adapter", "k", "v")
+	l.Log(context.Background(), niro.LevelWarn, "hello-adapter", "k", "v")
 	got := buf.String()
 	if !strings.Contains(got, "hello-adapter") {
 		t.Errorf("expected 'hello-adapter' in output, got: %s", got)
@@ -109,7 +109,7 @@ func TestNewSlogAdapterEmits(t *testing.T) {
 }
 
 func TestNewSlogAdapterNilReturnsDiscard(t *testing.T) {
-	if ryn.NewSlogAdapter(nil) != ryn.Discard() {
+	if niro.NewSlogAdapter(nil) != niro.Discard() {
 		t.Error("NewSlogAdapter(nil) must return Discard()")
 	}
 }
@@ -117,60 +117,60 @@ func TestNewSlogAdapterNilReturnsDiscard(t *testing.T) {
 // ── GetLogger / SetLogger / ResetLogger ──────────────────────────────────────
 
 func TestSetLoggerReplaces(t *testing.T) {
-	orig := ryn.GetLogger()
-	t.Cleanup(func() { ryn.SetLogger(orig) })
+	orig := niro.GetLogger()
+	t.Cleanup(func() { niro.SetLogger(orig) })
 
-	custom := ryn.Discard()
-	ryn.SetLogger(custom)
-	if ryn.GetLogger() != custom {
+	custom := niro.Discard()
+	niro.SetLogger(custom)
+	if niro.GetLogger() != custom {
 		t.Error("GetLogger() did not return the logger installed by SetLogger")
 	}
 }
 
 func TestSetLoggerNilInstallsDiscard(t *testing.T) {
-	orig := ryn.GetLogger()
-	t.Cleanup(func() { ryn.SetLogger(orig) })
+	orig := niro.GetLogger()
+	t.Cleanup(func() { niro.SetLogger(orig) })
 
-	ryn.SetLogger(nil)
-	l := ryn.GetLogger()
+	niro.SetLogger(nil)
+	l := niro.GetLogger()
 	if l == nil {
 		t.Fatal("GetLogger() must never return nil")
 	}
-	if l.Enabled(context.Background(), ryn.LevelError) {
+	if l.Enabled(context.Background(), niro.LevelError) {
 		t.Error("SetLogger(nil) must install a discard logger (Enabled must be false)")
 	}
 }
 
 func TestSetLoggerConcurrent(t *testing.T) {
-	orig := ryn.GetLogger()
-	t.Cleanup(func() { ryn.SetLogger(orig) })
+	orig := niro.GetLogger()
+	t.Cleanup(func() { niro.SetLogger(orig) })
 
-	l1 := ryn.NewSlogAdapter(slog.New(ryn.DiscardHandler{}))
-	l2 := ryn.Discard()
+	l1 := niro.NewSlogAdapter(slog.New(niro.DiscardHandler{}))
+	l2 := niro.Discard()
 
 	var wg sync.WaitGroup
 	for range 64 {
 		wg.Add(2)
-		go func() { defer wg.Done(); ryn.SetLogger(l1) }()
-		go func() { defer wg.Done(); _ = ryn.GetLogger() }()
+		go func() { defer wg.Done(); niro.SetLogger(l1) }()
+		go func() { defer wg.Done(); _ = niro.GetLogger() }()
 	}
 	wg.Wait()
 
-	ryn.SetLogger(l2)
-	if ryn.GetLogger() != l2 {
+	niro.SetLogger(l2)
+	if niro.GetLogger() != l2 {
 		t.Error("GetLogger() should return l2 after the final SetLogger call")
 	}
 }
 
 func TestGetLoggerDelegatesLiveToSlogDefault(t *testing.T) {
-	ryn.ResetLogger()
-	t.Cleanup(ryn.ResetLogger)
+	niro.ResetLogger()
+	t.Cleanup(niro.ResetLogger)
 
 	// After ResetLogger, GetLogger must behave identically to slog.Default()
 	// at call time — not a snapshot captured at init.
 	ctx := context.Background()
-	for _, level := range []ryn.Level{ryn.LevelDebug, ryn.LevelInfo, ryn.LevelWarn, ryn.LevelError} {
-		got := ryn.GetLogger().Enabled(ctx, level)
+	for _, level := range []niro.Level{niro.LevelDebug, niro.LevelInfo, niro.LevelWarn, niro.LevelError} {
+		got := niro.GetLogger().Enabled(ctx, level)
 		want := slog.Default().Enabled(ctx, slog.Level(level))
 		if got != want {
 			t.Errorf("level %v: GetLogger().Enabled=%v, slog.Default().Enabled=%v",
@@ -180,18 +180,18 @@ func TestGetLoggerDelegatesLiveToSlogDefault(t *testing.T) {
 }
 
 func TestResetLogger(t *testing.T) {
-	orig := ryn.GetLogger()
-	t.Cleanup(func() { ryn.SetLogger(orig) })
+	orig := niro.GetLogger()
+	t.Cleanup(func() { niro.SetLogger(orig) })
 
 	// Install discard (definitely non-default behaviour).
-	ryn.SetLogger(ryn.Discard())
+	niro.SetLogger(niro.Discard())
 
 	// Reset must restore live slog.Default delegation.
-	ryn.ResetLogger()
+	niro.ResetLogger()
 
 	ctx := context.Background()
-	for _, level := range []ryn.Level{ryn.LevelDebug, ryn.LevelInfo, ryn.LevelWarn, ryn.LevelError} {
-		got := ryn.GetLogger().Enabled(ctx, level)
+	for _, level := range []niro.Level{niro.LevelDebug, niro.LevelInfo, niro.LevelWarn, niro.LevelError} {
+		got := niro.GetLogger().Enabled(ctx, level)
 		want := slog.Default().Enabled(ctx, slog.Level(level))
 		if got != want {
 			t.Errorf("after ResetLogger, level %v: Enabled=%v, want %v",
@@ -205,18 +205,18 @@ func TestResetLogger(t *testing.T) {
 func testLogger(t *testing.T) (*bytes.Buffer, func()) {
 	t.Helper()
 	var buf bytes.Buffer
-	l := ryn.NewSlogAdapter(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{
+	l := niro.NewSlogAdapter(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{
 		Level: slog.LevelDebug,
 	})))
-	ryn.SetLogger(l)
-	return &buf, func() { ryn.ResetLogger() }
+	niro.SetLogger(l)
+	return &buf, func() { niro.ResetLogger() }
 }
 
 func TestLogWarnEmits(t *testing.T) {
 	buf, cleanup := testLogger(t)
 	defer cleanup()
 
-	ryn.LogWarn(context.Background(), "retry-event", "attempt", 2, "delay", "200ms")
+	niro.LogWarn(context.Background(), "retry-event", "attempt", 2, "delay", "200ms")
 	got := buf.String()
 	if !strings.Contains(got, "retry-event") {
 		t.Errorf("expected 'retry-event' in output, got: %s", got)
@@ -229,13 +229,13 @@ func TestLogWarnEmits(t *testing.T) {
 func TestLogDebugDisabledIsNoop(t *testing.T) {
 	// Install a logger that only passes Warn+ so Debug is disabled.
 	var buf bytes.Buffer
-	l := ryn.NewSlogAdapter(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{
+	l := niro.NewSlogAdapter(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{
 		Level: slog.LevelWarn,
 	})))
-	ryn.SetLogger(l)
-	defer ryn.ResetLogger()
+	niro.SetLogger(l)
+	defer niro.ResetLogger()
 
-	ryn.LogDebug(context.Background(), "should-not-appear", "k", "v")
+	niro.LogDebug(context.Background(), "should-not-appear", "k", "v")
 	if buf.Len() != 0 {
 		t.Errorf("disabled LogDebug must produce no output, got: %s", buf.String())
 	}
@@ -245,7 +245,7 @@ func TestLogErrorEmits(t *testing.T) {
 	buf, cleanup := testLogger(t)
 	defer cleanup()
 
-	ryn.LogError(context.Background(), "auth-failure", "provider", "openai")
+	niro.LogError(context.Background(), "auth-failure", "provider", "openai")
 	got := buf.String()
 	if !strings.Contains(got, "auth-failure") {
 		t.Errorf("expected 'auth-failure' in output, got: %s", got)
@@ -286,7 +286,7 @@ func TestDefaultScrubber(t *testing.T) {
 		{"retryable", false},
 	}
 	for _, c := range cases {
-		got := ryn.DefaultScrubber(c.key, "sensitive-value")
+		got := niro.DefaultScrubber(c.key, "sensitive-value")
 		redacted := got == "[REDACTED]"
 		if redacted != c.wantRedact {
 			t.Errorf("DefaultScrubber(%q): redacted=%v, want %v", c.key, redacted, c.wantRedact)
@@ -298,10 +298,10 @@ func TestSetScrubberMasksSensitiveFields(t *testing.T) {
 	buf, cleanup := testLogger(t)
 	defer cleanup()
 
-	ryn.SetScrubber(ryn.DefaultScrubber)
-	defer ryn.SetScrubber(nil)
+	niro.SetScrubber(niro.DefaultScrubber)
+	defer niro.SetScrubber(nil)
 
-	ryn.LogWarn(context.Background(), "auth-audit",
+	niro.LogWarn(context.Background(), "auth-audit",
 		"api_key", "sk-should-be-redacted",
 		"attempt", 1,
 	)
@@ -320,14 +320,14 @@ func TestSetScrubberMasksSensitiveFields(t *testing.T) {
 }
 
 func TestSetScrubberNilRemoves(t *testing.T) {
-	ryn.SetScrubber(ryn.DefaultScrubber)
-	ryn.SetScrubber(nil) // must not panic
+	niro.SetScrubber(niro.DefaultScrubber)
+	niro.SetScrubber(nil) // must not panic
 
 	buf, cleanup := testLogger(t)
 	defer cleanup()
 
 	// Without a scrubber the raw value passes through.
-	ryn.LogWarn(context.Background(), "no-scrub", "api_key", "visible-value")
+	niro.LogWarn(context.Background(), "no-scrub", "api_key", "visible-value")
 	if !strings.Contains(buf.String(), "visible-value") {
 		t.Error("with no scrubber, raw value should appear in output")
 	}
@@ -336,16 +336,16 @@ func TestSetScrubberNilRemoves(t *testing.T) {
 func TestScrubberOnlyRunsWhenEnabled(t *testing.T) {
 	// Scrubber must not be called when the level is disabled.
 	called := false
-	ryn.SetScrubber(func(key string, val any) any {
+	niro.SetScrubber(func(key string, val any) any {
 		called = true
 		return val
 	})
-	defer ryn.SetScrubber(nil)
+	defer niro.SetScrubber(nil)
 
-	ryn.SetLogger(ryn.Discard()) // Discard disables all levels
-	defer ryn.ResetLogger()
+	niro.SetLogger(niro.Discard()) // Discard disables all levels
+	defer niro.ResetLogger()
 
-	ryn.LogWarn(context.Background(), "msg", "k", "v")
+	niro.LogWarn(context.Background(), "msg", "k", "v")
 	if called {
 		t.Error("Scrubber must not be invoked when the logger is disabled")
 	}
@@ -354,12 +354,12 @@ func TestScrubberOnlyRunsWhenEnabled(t *testing.T) {
 // ── Error.LogValue ────────────────────────────────────────────────────────────
 
 func TestErrorLogValueNilNoPanic(t *testing.T) {
-	var e *ryn.Error
+	var e *niro.Error
 	_ = e.LogValue() // must not panic
 }
 
 func TestErrorLogValueMinimal(t *testing.T) {
-	e := &ryn.Error{Code: ryn.ErrCodeInternalError, Message: "oops"}
+	e := &niro.Error{Code: niro.ErrCodeInternalError, Message: "oops"}
 	v := e.LogValue()
 
 	if v.Kind() != slog.KindGroup {
@@ -367,7 +367,7 @@ func TestErrorLogValueMinimal(t *testing.T) {
 	}
 	attrs := attrMap(v.Group())
 
-	mustInt(t, attrs, "code", int(ryn.ErrCodeInternalError))
+	mustInt(t, attrs, "code", int(niro.ErrCodeInternalError))
 	mustStr(t, attrs, "message", "oops")
 
 	// Optional fields must be absent for a minimal error.
@@ -380,8 +380,8 @@ func TestErrorLogValueMinimal(t *testing.T) {
 
 func TestErrorLogValueFull(t *testing.T) {
 	cause := errors.New("upstream timeout")
-	e := &ryn.Error{
-		Code:       ryn.ErrCodeRateLimited,
+	e := &niro.Error{
+		Code:       niro.ErrCodeRateLimited,
 		Message:    "rate limited",
 		Provider:   "openai",
 		StatusCode: 429,
@@ -396,7 +396,7 @@ func TestErrorLogValueFull(t *testing.T) {
 	}
 	attrs := attrMap(v.Group())
 
-	mustInt(t, attrs, "code", int(ryn.ErrCodeRateLimited))
+	mustInt(t, attrs, "code", int(niro.ErrCodeRateLimited))
 	mustStr(t, attrs, "message", "rate limited")
 	mustStr(t, attrs, "provider", "openai")
 	mustInt(t, attrs, "http_status", 429)
@@ -406,7 +406,7 @@ func TestErrorLogValueFull(t *testing.T) {
 }
 
 func TestErrorLogValueRetryableOmittedWhenFalse(t *testing.T) {
-	e := &ryn.Error{Code: ryn.ErrCodeInvalidRequest, Message: "bad", Retryable: false}
+	e := &niro.Error{Code: niro.ErrCodeInvalidRequest, Message: "bad", Retryable: false}
 	attrs := attrMap(e.LogValue().Group())
 	if _, ok := attrs["retryable"]; ok {
 		t.Error("retryable attr should be omitted when false")

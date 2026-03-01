@@ -1,4 +1,4 @@
-// Package elevenlabs implements [ryn.TTSProvider] and [ryn.STTProvider]
+// Package elevenlabs implements [niro.TTSProvider] and [niro.STTProvider]
 // backed by the ElevenLabs HTTP and WebSocket APIs.
 //
 // The provider uses a shared high-performance [transport.Default] HTTP
@@ -8,7 +8,7 @@
 // # TTS (text-to-speech)
 //
 //	tts := elevenlabs.New(os.Getenv("ELEVENLABS_API_KEY"))
-//	stream, err := tts.Synthesize(ctx, &ryn.TTSRequest{
+//	stream, err := tts.Synthesize(ctx, &niro.TTSRequest{
 //	    Text:  "Hello world",
 //	    Voice: "Rachel",
 //	})
@@ -19,9 +19,9 @@
 // # STT — batch (speech-to-text via HTTP)
 //
 //	stt := elevenlabs.New(os.Getenv("ELEVENLABS_API_KEY"))
-//	stream, err := stt.Transcribe(ctx, &ryn.STTRequest{
+//	stream, err := stt.Transcribe(ctx, &niro.STTRequest{
 //	    Audio:       wavBytes,
-//	    InputFormat: ryn.AudioWAV,
+//	    InputFormat: niro.AudioWAV,
 //	    Language:    "en",
 //	})
 //	for stream.Next(ctx) {
@@ -31,9 +31,9 @@
 // # STT — streaming (speech-to-text via WebSocket)
 //
 //	stt := elevenlabs.New(os.Getenv("ELEVENLABS_API_KEY"))
-//	stream, err := stt.Transcribe(ctx, &ryn.STTRequest{
-//	    AudioStream:    micStream,          // *ryn.Stream of KindAudio frames
-//	    InputFormat:    ryn.AudioPCM16k,
+//	stream, err := stt.Transcribe(ctx, &niro.STTRequest{
+//	    AudioStream:    micStream,          // *niro.Stream of KindAudio frames
+//	    InputFormat:    niro.AudioPCM16k,
 //	    InterimResults: true,
 //	})
 //	for stream.Next(ctx) {
@@ -128,7 +128,7 @@ type RequestHook func(r *http.Request)
 
 // ── Provider ────────────────────────────────────────────────────────────────
 
-// Provider implements [ryn.TTSProvider] and [ryn.STTProvider]
+// Provider implements [niro.TTSProvider] and [niro.STTProvider]
 // using the ElevenLabs HTTP and WebSocket APIs.
 type Provider struct {
 	apiKey   string
@@ -147,8 +147,8 @@ type Provider struct {
 
 // compile-time interface checks
 var (
-	_ ryn.TTSProvider = (*Provider)(nil)
-	_ ryn.STTProvider = (*Provider)(nil)
+	_ niro.TTSProvider = (*Provider)(nil)
+	_ niro.STTProvider = (*Provider)(nil)
 )
 
 // Option configures a [Provider].
@@ -239,20 +239,20 @@ func New(apiKey string, opts ...Option) *Provider {
 
 // ── TTS ─────────────────────────────────────────────────────────────────────
 
-// Synthesize implements [ryn.TTSProvider].
+// Synthesize implements [niro.TTSProvider].
 //
-// The returned Stream emits [ryn.KindAudio] frames with pooled byte
+// The returned Stream emits [niro.KindAudio] frames with pooled byte
 // buffers read directly from the HTTP response body. Callers that need
 // to hold onto frame data beyond the stream iteration must copy it.
 //
 // Context cancellation aborts the HTTP request immediately.
-func (p *Provider) Synthesize(ctx context.Context, req *ryn.TTSRequest) (*ryn.Stream, error) {
+func (p *Provider) Synthesize(ctx context.Context, req *niro.TTSRequest) (*niro.Stream, error) {
 	if req == nil {
-		return nil, fmt.Errorf("ryn/elevenlabs: nil request")
+		return nil, fmt.Errorf("niro/elevenlabs: nil request")
 	}
 	text := strings.TrimSpace(req.Text)
 	if text == "" {
-		return nil, fmt.Errorf("ryn/elevenlabs: empty text")
+		return nil, fmt.Errorf("niro/elevenlabs: empty text")
 	}
 
 	voice := req.Voice
@@ -282,17 +282,17 @@ func (p *Provider) Synthesize(ctx context.Context, req *ryn.TTSRequest) (*ryn.St
 		u += "?output_format=" + url.QueryEscape(outFmt)
 	}
 
-	// Marshal JSON body using a pooled struct and ryn's pluggable JSON backend.
+	// Marshal JSON body using a pooled struct and niro's pluggable JSON backend.
 	tb := acquireTTSBody(text, model, lang, speed)
-	raw, err := ryn.JSONMarshal(tb)
+	raw, err := niro.JSONMarshal(tb)
 	releaseTTSBody(tb)
 	if err != nil {
-		return nil, fmt.Errorf("ryn/elevenlabs: marshal: %w", err)
+		return nil, fmt.Errorf("niro/elevenlabs: marshal: %w", err)
 	}
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, u, bytes.NewReader(raw))
 	if err != nil {
-		return nil, fmt.Errorf("ryn/elevenlabs: %w", err)
+		return nil, fmt.Errorf("niro/elevenlabs: %w", err)
 	}
 	httpReq.Header.Set("xi-api-key", p.apiKey)
 	httpReq.Header.Set("Content-Type", "application/json")
@@ -308,14 +308,14 @@ func (p *Provider) Synthesize(ctx context.Context, req *ryn.TTSRequest) (*ryn.St
 
 	resp, err := p.client.Do(httpReq)
 	if err != nil {
-		return nil, fmt.Errorf("ryn/elevenlabs: %w", err)
+		return nil, fmt.Errorf("niro/elevenlabs: %w", err)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, readAPIError(resp)
 	}
 
 	mime := mimeFromFormat(outFmt)
-	stream, emitter := ryn.NewStream(16)
+	stream, emitter := niro.NewStream(16)
 	go p.consumeTTS(ctx, resp.Body, emitter, mime)
 	return stream, nil
 }
@@ -323,7 +323,7 @@ func (p *Provider) Synthesize(ctx context.Context, req *ryn.TTSRequest) (*ryn.St
 // consumeTTS reads audio chunks from the HTTP body and emits them as
 // KindAudio frames using pooled buffers. Zero intermediate copies —
 // we read directly into a pool buffer and emit it.
-func (p *Provider) consumeTTS(ctx context.Context, body io.ReadCloser, out *ryn.Emitter, mime string) {
+func (p *Provider) consumeTTS(ctx context.Context, body io.ReadCloser, out *niro.Emitter, mime string) {
 	defer out.Close()
 	defer body.Close()
 
@@ -331,7 +331,7 @@ func (p *Provider) consumeTTS(ctx context.Context, body io.ReadCloser, out *ryn.
 		buf := p.bp.Get(readBufSize)
 		n, err := body.Read(buf)
 		if n > 0 {
-			f := ryn.Frame{Kind: ryn.KindAudio, Data: buf[:n], Mime: mime}
+			f := niro.Frame{Kind: niro.KindAudio, Data: buf[:n], Mime: mime}
 			if emitErr := out.Emit(ctx, f); emitErr != nil {
 				p.bp.Put(buf)
 				return
@@ -341,7 +341,7 @@ func (p *Provider) consumeTTS(ctx context.Context, body io.ReadCloser, out *ryn.
 		}
 		if err != nil {
 			if err != io.EOF {
-				out.Error(fmt.Errorf("ryn/elevenlabs: read: %w", err))
+				out.Error(fmt.Errorf("niro/elevenlabs: read: %w", err))
 			}
 			return
 		}
@@ -350,21 +350,21 @@ func (p *Provider) consumeTTS(ctx context.Context, body io.ReadCloser, out *ryn.
 
 // ── STT ─────────────────────────────────────────────────────────────────────
 
-// Transcribe implements [ryn.STTProvider].
+// Transcribe implements [niro.STTProvider].
 //
 // Routing:
 //   - If req.AudioStream is set → streaming STT via WebSocket
 //     (wss://api.elevenlabs.io/v1/speech-to-text/realtime).
-//     The returned Stream emits [ryn.KindText] frames as partial
+//     The returned Stream emits [niro.KindText] frames as partial
 //     and final transcripts arrive over the connection.
 //   - Otherwise → batch STT via HTTP POST /v1/speech-to-text.
-//     The returned Stream emits a single [ryn.KindText] frame.
+//     The returned Stream emits a single [niro.KindText] frame.
 //
 // InterimResults controls whether partial transcripts are emitted
 // (WebSocket mode only; ignored for batch).
-func (p *Provider) Transcribe(ctx context.Context, req *ryn.STTRequest) (*ryn.Stream, error) {
+func (p *Provider) Transcribe(ctx context.Context, req *niro.STTRequest) (*niro.Stream, error) {
 	if req == nil {
-		return nil, fmt.Errorf("ryn/elevenlabs: nil request")
+		return nil, fmt.Errorf("niro/elevenlabs: nil request")
 	}
 	if req.AudioStream != nil {
 		return p.transcribeStream(ctx, req)
@@ -374,10 +374,10 @@ func (p *Provider) Transcribe(ctx context.Context, req *ryn.STTRequest) (*ryn.St
 
 // ── STT: batch (HTTP) ───────────────────────────────────────────────────────
 
-func (p *Provider) transcribeBatch(ctx context.Context, req *ryn.STTRequest) (*ryn.Stream, error) {
+func (p *Provider) transcribeBatch(ctx context.Context, req *niro.STTRequest) (*niro.Stream, error) {
 	audio := req.Audio
 	if len(audio) == 0 {
-		return nil, fmt.Errorf("ryn/elevenlabs: empty audio")
+		return nil, fmt.Errorf("niro/elevenlabs: empty audio")
 	}
 
 	model := req.Model
@@ -402,7 +402,7 @@ func (p *Provider) transcribeBatch(ctx context.Context, req *ryn.STTRequest) (*r
 	ext := extFromMIME(req.InputFormat)
 	part, err := w.CreateFormFile("file", "audio"+ext)
 	if err != nil {
-		return nil, fmt.Errorf("ryn/elevenlabs: %w", err)
+		return nil, fmt.Errorf("niro/elevenlabs: %w", err)
 	}
 	_, _ = part.Write(audio)
 	_ = w.Close()
@@ -410,7 +410,7 @@ func (p *Provider) transcribeBatch(ctx context.Context, req *ryn.STTRequest) (*r
 	u := p.baseURL + "/speech-to-text"
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, u, &body)
 	if err != nil {
-		return nil, fmt.Errorf("ryn/elevenlabs: %w", err)
+		return nil, fmt.Errorf("niro/elevenlabs: %w", err)
 	}
 	httpReq.Header.Set("xi-api-key", p.apiKey)
 	httpReq.Header.Set("Content-Type", w.FormDataContentType())
@@ -425,7 +425,7 @@ func (p *Provider) transcribeBatch(ctx context.Context, req *ryn.STTRequest) (*r
 
 	resp, err := p.client.Do(httpReq)
 	if err != nil {
-		return nil, fmt.Errorf("ryn/elevenlabs: %w", err)
+		return nil, fmt.Errorf("niro/elevenlabs: %w", err)
 	}
 	defer resp.Body.Close()
 
@@ -434,20 +434,20 @@ func (p *Provider) transcribeBatch(ctx context.Context, req *ryn.STTRequest) (*r
 	}
 
 	var result sttResponse
-	if err := ryn.JSONNewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("ryn/elevenlabs: decode: %w", err)
+	if err := niro.JSONNewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("niro/elevenlabs: decode: %w", err)
 	}
 
 	text := strings.TrimSpace(result.Text)
 	if text == "" {
-		return ryn.StreamFromSlice(nil), nil
+		return niro.StreamFromSlice(nil), nil
 	}
-	return ryn.StreamFromSlice([]ryn.Frame{ryn.TextFrame(text)}), nil
+	return niro.StreamFromSlice([]niro.Frame{niro.TextFrame(text)}), nil
 }
 
 // ── STT: streaming (WebSocket) ──────────────────────────────────────────────
 
-func (p *Provider) transcribeStream(ctx context.Context, req *ryn.STTRequest) (*ryn.Stream, error) {
+func (p *Provider) transcribeStream(ctx context.Context, req *niro.STTRequest) (*niro.Stream, error) {
 	model := req.Model
 	if model == "" {
 		model = p.sttModel
@@ -459,7 +459,7 @@ func (p *Provider) transcribeStream(ctx context.Context, req *ryn.STTRequest) (*
 
 	u, err := url.Parse(p.wsURL)
 	if err != nil {
-		return nil, fmt.Errorf("ryn/elevenlabs: bad ws url: %w", err)
+		return nil, fmt.Errorf("niro/elevenlabs: bad ws url: %w", err)
 	}
 	q := u.Query()
 	q.Set("model_id", model)
@@ -479,10 +479,10 @@ func (p *Provider) transcribeStream(ctx context.Context, req *ryn.STTRequest) (*
 	}
 	conn, _, err := dialer.DialContext(ctx, u.String(), header)
 	if err != nil {
-		return nil, fmt.Errorf("ryn/elevenlabs: ws dial: %w", err)
+		return nil, fmt.Errorf("niro/elevenlabs: ws dial: %w", err)
 	}
 
-	stream, emitter := ryn.NewStream(32)
+	stream, emitter := niro.NewStream(32)
 	wsCtx, wsCancel := context.WithCancel(ctx)
 
 	// Read loop — receives transcript messages from ElevenLabs.
@@ -495,7 +495,7 @@ func (p *Provider) transcribeStream(ctx context.Context, req *ryn.STTRequest) (*
 }
 
 // sttReadLoop reads JSON messages from the WebSocket and emits KindText frames.
-func (p *Provider) sttReadLoop(ctx context.Context, conn *websocket.Conn, out *ryn.Emitter, interim bool) {
+func (p *Provider) sttReadLoop(ctx context.Context, conn *websocket.Conn, out *niro.Emitter, interim bool) {
 	defer out.Close()
 	defer conn.Close()
 
@@ -512,13 +512,13 @@ func (p *Provider) sttReadLoop(ctx context.Context, conn *websocket.Conn, out *r
 				websocket.CloseNormalClosure,
 				websocket.CloseGoingAway,
 			) {
-				out.Error(fmt.Errorf("ryn/elevenlabs: ws read: %w", err))
+				out.Error(fmt.Errorf("niro/elevenlabs: ws read: %w", err))
 			}
 			return
 		}
 
 		var msg sttWSResponse
-		if err := ryn.JSONUnmarshal(payload, &msg); err != nil {
+		if err := niro.JSONUnmarshal(payload, &msg); err != nil {
 			continue
 		}
 
@@ -533,7 +533,7 @@ func (p *Provider) sttReadLoop(ctx context.Context, conn *websocket.Conn, out *r
 			continue
 		}
 
-		if emitErr := out.Emit(ctx, ryn.TextFrame(text)); emitErr != nil {
+		if emitErr := out.Emit(ctx, niro.TextFrame(text)); emitErr != nil {
 			return
 		}
 	}
@@ -545,7 +545,7 @@ func (p *Provider) sttReadLoop(ctx context.Context, conn *websocket.Conn, out *r
 // The audio is base64-encoded into a pre-allocated buffer. The JSON
 // envelope is assembled directly (base64 output is always JSON-safe)
 // to avoid a json.Marshal round-trip per audio frame.
-func (p *Provider) sttWriteLoop(ctx context.Context, cancel context.CancelFunc, conn *websocket.Conn, src *ryn.Stream, out *ryn.Emitter) {
+func (p *Provider) sttWriteLoop(ctx context.Context, cancel context.CancelFunc, conn *websocket.Conn, src *niro.Stream, out *niro.Emitter) {
 	defer cancel()
 
 	// Pre-allocate base64 buffer. Typical 20ms @ 16kHz PCM frame: 640 bytes → ~856 base64.
@@ -553,7 +553,7 @@ func (p *Provider) sttWriteLoop(ctx context.Context, cancel context.CancelFunc, 
 
 	for src.Next(ctx) {
 		f := src.Frame()
-		if f.Kind != ryn.KindAudio || len(f.Data) == 0 {
+		if f.Kind != niro.KindAudio || len(f.Data) == 0 {
 			continue
 		}
 
@@ -571,14 +571,14 @@ func (p *Provider) sttWriteLoop(ctx context.Context, cancel context.CancelFunc, 
 
 		if err := conn.WriteMessage(websocket.TextMessage, msg); err != nil {
 			if ctx.Err() == nil {
-				out.Error(fmt.Errorf("ryn/elevenlabs: ws write: %w", err))
+				out.Error(fmt.Errorf("niro/elevenlabs: ws write: %w", err))
 			}
 			return
 		}
 	}
 
 	if err := src.Err(); err != nil {
-		out.Error(fmt.Errorf("ryn/elevenlabs: audio stream: %w", err))
+		out.Error(fmt.Errorf("niro/elevenlabs: audio stream: %w", err))
 		return
 	}
 
@@ -605,7 +605,7 @@ func readAPIError(resp *http.Response) error {
 	defer resp.Body.Close()
 	b := make([]byte, 4096)
 	n, _ := io.ReadFull(resp.Body, b)
-	return fmt.Errorf("ryn/elevenlabs: status %d: %s", resp.StatusCode, bytes.TrimSpace(b[:n]))
+	return fmt.Errorf("niro/elevenlabs: status %d: %s", resp.StatusCode, bytes.TrimSpace(b[:n]))
 }
 
 // mimeFromFormat converts an ElevenLabs output_format parameter to a MIME type.
@@ -613,36 +613,36 @@ func mimeFromFormat(f string) string {
 	v := strings.ToLower(f)
 	switch {
 	case strings.HasPrefix(v, "ogg") || strings.Contains(v, "opus"):
-		return ryn.AudioOGGOpus
+		return niro.AudioOGGOpus
 	case strings.HasPrefix(v, "mp3") || strings.Contains(v, "mpeg"):
-		return ryn.AudioMP3
+		return niro.AudioMP3
 	case strings.HasPrefix(v, "pcm"):
-		return ryn.AudioPCM24k
+		return niro.AudioPCM24k
 	case strings.HasPrefix(v, "ulaw"):
 		return "audio/basic"
 	default:
-		return ryn.AudioOGGOpus
+		return niro.AudioOGGOpus
 	}
 }
 
 // outputFormatFromMIME converts a MIME type to an ElevenLabs output_format param.
 func outputFormatFromMIME(mime string) string {
 	switch mime {
-	case ryn.AudioOGGOpus:
+	case niro.AudioOGGOpus:
 		return "ogg_opus"
-	case ryn.AudioMP3:
+	case niro.AudioMP3:
 		return "mp3_44100_128"
-	case ryn.AudioAAC:
+	case niro.AudioAAC:
 		return "aac_44100"
-	case ryn.AudioPCM16k:
+	case niro.AudioPCM16k:
 		return "pcm_16000"
-	case ryn.AudioPCM24k:
+	case niro.AudioPCM24k:
 		return "pcm_24000"
-	case ryn.AudioPCM44k:
+	case niro.AudioPCM44k:
 		return "pcm_44100"
-	case ryn.AudioFLAC:
+	case niro.AudioFLAC:
 		return "flac"
-	case ryn.AudioWAV:
+	case niro.AudioWAV:
 		return "wav"
 	case "":
 		return ""

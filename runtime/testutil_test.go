@@ -13,7 +13,7 @@ type testHook struct {
 	hook.NoOpHook
 	onStart func(context.Context, hook.GenerateStartInfo) context.Context
 	onEnd   func(context.Context, hook.GenerateEndInfo)
-	onFrame func(context.Context, ryn.Frame, time.Duration) error
+	onFrame func(context.Context, niro.Frame, time.Duration) error
 }
 
 func (h *testHook) OnGenerateStart(ctx context.Context, info hook.GenerateStartInfo) context.Context {
@@ -29,7 +29,7 @@ func (h *testHook) OnGenerateEnd(ctx context.Context, info hook.GenerateEndInfo)
 	}
 }
 
-func (h *testHook) OnFrame(ctx context.Context, f ryn.Frame, elapsed time.Duration) error {
+func (h *testHook) OnFrame(ctx context.Context, f niro.Frame, elapsed time.Duration) error {
 	if h.onFrame != nil {
 		return h.onFrame(ctx, f, elapsed)
 	}
@@ -40,7 +40,7 @@ type fullTestHook struct {
 	hook.NoOpHook
 	onStart func(context.Context, hook.GenerateStartInfo) context.Context
 	onEnd   func(context.Context, hook.GenerateEndInfo)
-	onFrame func(context.Context, ryn.Frame, time.Duration) error
+	onFrame func(context.Context, niro.Frame, time.Duration) error
 	onError func(context.Context, error)
 }
 
@@ -57,7 +57,7 @@ func (h *fullTestHook) OnGenerateEnd(ctx context.Context, info hook.GenerateEndI
 	}
 }
 
-func (h *fullTestHook) OnFrame(ctx context.Context, f ryn.Frame, elapsed time.Duration) error {
+func (h *fullTestHook) OnFrame(ctx context.Context, f niro.Frame, elapsed time.Duration) error {
 	if h.onFrame != nil {
 		return h.onFrame(ctx, f, elapsed)
 	}

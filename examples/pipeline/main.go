@@ -54,7 +54,7 @@ func main() {
 	// Stage 3: collapse the stream into a single aggregated frame.
 	pipeline := pipe.New(
 		pipe.TextOnly(),
-		pipe.Map(func(f ryn.Frame) ryn.Frame {
+		pipe.Map(func(f niro.Frame) niro.Frame {
 			f.Text = strings.ToUpper(f.Text)
 			return f
 		}),
@@ -68,10 +68,10 @@ func main() {
 		WithPipeline(pipeline).
 		WithHook(h)
 
-	stream, err := rt.Generate(ctx, &ryn.Request{
+	stream, err := rt.Generate(ctx, &niro.Request{
 		SystemPrompt: "You are a helpful assistant.",
-		Messages:     []ryn.Message{ryn.UserText("List three benefits of Go in one sentence each.")},
-		Options:      ryn.Options{MaxTokens: 128},
+		Messages:     []niro.Message{niro.UserText("List three benefits of Go in one sentence each.")},
+		Options:      niro.Options{MaxTokens: 128},
 	})
 	if err != nil {
 		slog.Error("generate failed", "err", err)
@@ -114,7 +114,7 @@ func (h *logHook) OnError(ctx context.Context, err error) {
 }
 
 // mustProvider returns a Provider for the selected PROVIDER.
-func mustProvider(ctx context.Context) ryn.Provider {
+func mustProvider(ctx context.Context) niro.Provider {
 	switch strings.ToLower(os.Getenv("PROVIDER")) {
 	case "", "openai":
 		return openai.New(os.Getenv("OPENAI_API_KEY"))

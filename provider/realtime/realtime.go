@@ -8,11 +8,11 @@
 // Usage:
 //
 //	p := realtime.New(os.Getenv("OPENAI_API_KEY"))
-//	sess, err := p.Session(ctx, ryn.RealtimeConfig{
+//	sess, err := p.Session(ctx, niro.RealtimeConfig{
 //	    Model:        "gpt-4o-realtime-preview",
 //	    SystemPrompt: "You are a helpful voice assistant.",
 //	    Voice:        "alloy",
-//	    VAD: &ryn.VADConfig{
+//	    VAD: &niro.VADConfig{
 //	        Threshold:         0.5,
 //	        PrefixPaddingMs:   300,
 //	        SilenceDurationMs: 200,
@@ -20,7 +20,7 @@
 //	})
 //	defer sess.Close()
 //
-// Audio in/out: 24 kHz PCM16 mono (ryn.AudioPCM24k).
+// Audio in/out: 24 kHz PCM16 mono (niro.AudioPCM24k).
 //
 // Provider limitations (as of 2025-02):
 //   - No per-chunk transcription; transcript arrives after the full turn.
@@ -87,7 +87,7 @@ func WithVoice(voice string) Option {
 	return func(c *providerConfig) { c.voice = voice }
 }
 
-// Provider implements ryn.RealtimeProvider for the OpenAI Realtime API.
+// Provider implements niro.RealtimeProvider for the OpenAI Realtime API.
 type Provider struct {
 	apiKey     string
 	endpoint   string
@@ -120,7 +120,7 @@ func New(apiKey string, opts ...Option) *Provider {
 // The method blocks until the WebSocket handshake completes and the server
 // sends session.created. The caller owns the returned session and must call
 // Close when done.
-func (p *Provider) Session(ctx context.Context, cfg ryn.RealtimeConfig) (ryn.RealtimeSession, error) {
+func (p *Provider) Session(ctx context.Context, cfg niro.RealtimeConfig) (niro.RealtimeSession, error) {
 	model := cfg.Model
 	if model == "" {
 		model = p.model
@@ -130,10 +130,10 @@ func (p *Provider) Session(ctx context.Context, cfg ryn.RealtimeConfig) (ryn.Rea
 		voice = p.voice
 	}
 	if cfg.InputFormat == "" {
-		cfg.InputFormat = ryn.AudioPCM24k
+		cfg.InputFormat = niro.AudioPCM24k
 	}
 	if cfg.OutputFormat == "" {
-		cfg.OutputFormat = ryn.AudioPCM24k
+		cfg.OutputFormat = niro.AudioPCM24k
 	}
 
 	url := p.endpoint + "?model=" + model
@@ -151,7 +151,7 @@ func (p *Provider) Session(ctx context.Context, cfg ryn.RealtimeConfig) (ryn.Rea
 		return nil, fmt.Errorf("realtime: dial %s: %w", url, err)
 	}
 
-	recv, recvEmit := ryn.NewStream(64)
+	recv, recvEmit := niro.NewStream(64)
 	sess := &Session{
 		cfg:           cfg,
 		voice:         voice,
@@ -189,12 +189,12 @@ func (p *Provider) Session(ctx context.Context, cfg ryn.RealtimeConfig) (ryn.Rea
 
 // Session is a live OpenAI Realtime speech session.
 type Session struct {
-	cfg   ryn.RealtimeConfig
+	cfg   niro.RealtimeConfig
 	voice string
 	conn  *websocket.Conn
 
-	recv     *ryn.Stream
-	recvEmit *ryn.Emitter
+	recv     *niro.Stream
+	recvEmit *niro.Emitter
 
 	// sendCh serialises WebSocket writes — gorilla/websocket forbids concurrent writes.
 	sendCh        chan []byte
@@ -218,22 +218,22 @@ type funcCallAccum struct {
 // ── Public API ───────────────────────────────────────────────────────────────
 
 // Send sends a frame to the model.
-func (s *Session) Send(ctx context.Context, f ryn.Frame) error {
+func (s *Session) Send(ctx context.Context, f niro.Frame) error {
 	switch f.Kind {
-	case ryn.KindAudio:
+	case niro.KindAudio:
 		return s.sendAudio(f.Data)
-	case ryn.KindText:
+	case niro.KindText:
 		return s.sendTextMessage(f.Text)
-	case ryn.KindToolResult:
+	case niro.KindToolResult:
 		if f.Result == nil {
 			return errors.New("realtime: Send: nil ToolResult")
 		}
 		return s.sendToolResult(f.Result)
-	case ryn.KindControl:
+	case niro.KindControl:
 		switch f.Signal {
-		case ryn.SignalEOT:
+		case niro.SignalEOT:
 			return s.sendEOT()
-		case ryn.SignalAbort:
+		case niro.SignalAbort:
 			return s.sendAbort()
 		}
 	}
@@ -241,7 +241,7 @@ func (s *Session) Send(ctx context.Context, f ryn.Frame) error {
 }
 
 // Recv returns the read-only model output stream.
-func (s *Session) Recv() *ryn.Stream { return s.recv }
+func (s *Session) Recv() *niro.Stream { return s.recv }
 
 // Close terminates the session gracefully.
 //
@@ -301,7 +301,7 @@ func (s *Session) sendAudio(data []byte) error {
 	rtAudioPool.Put(bp)
 	select {
 	case <-s.closed:
-		return ryn.ErrClosed
+		return niro.ErrClosed
 	case s.sendCh <- payload:
 		return nil
 	}
@@ -334,7 +334,7 @@ func (s *Session) sendAbort() error {
 }
 
 // sendToolResult delivers a function call result and requests the next response.
-func (s *Session) sendToolResult(result *ryn.ToolResult) error {
+func (s *Session) sendToolResult(result *niro.ToolResult) error {
 	content := result.Content
 	if result.IsError {
 		content = `{"error":"` + jsonEscape(result.Content) + `"}`
@@ -360,7 +360,7 @@ func (s *Session) enqueue(ev rtClientEvent) error {
 	}
 	select {
 	case <-s.closed:
-		return ryn.ErrClosed
+		return niro.ErrClosed
 	case s.sendCh <- data:
 		return nil
 	}
@@ -400,7 +400,7 @@ func (s *Session) waitSessionCreated(ctx context.Context) error {
 	}
 }
 
-func (s *Session) configure(cfg ryn.RealtimeConfig, voice string) error {
+func (s *Session) configure(cfg niro.RealtimeConfig, voice string) error {
 	upd := rtSessionUpdate{
 		Instructions: cfg.SystemPrompt,
 		Voice:        voice,
@@ -513,17 +513,17 @@ func (s *Session) handleServerEvent(ev rtServerEvent) {
 		if err != nil || len(pcm) == 0 {
 			return
 		}
-		_ = s.recvEmit.Emit(ctx, ryn.AudioFrame(pcm, ryn.AudioPCM24k))
+		_ = s.recvEmit.Emit(ctx, niro.AudioFrame(pcm, niro.AudioPCM24k))
 
 	// ── Text / transcript output ───────────────────────────────────────────
 	case "response.output_audio_transcript.delta":
 		if ev.Delta != "" {
-			_ = s.recvEmit.Emit(ctx, ryn.TextFrame(ev.Delta))
+			_ = s.recvEmit.Emit(ctx, niro.TextFrame(ev.Delta))
 		}
 
 	case "response.output_text.delta":
 		if ev.Delta != "" {
-			_ = s.recvEmit.Emit(ctx, ryn.TextFrame(ev.Delta))
+			_ = s.recvEmit.Emit(ctx, niro.TextFrame(ev.Delta))
 		}
 
 	// ── Function / tool calls ─────────────────────────────────────────────
@@ -563,7 +563,7 @@ func (s *Session) handleServerEvent(ev rtServerEvent) {
 		if name == "" && acc != nil {
 			name = acc.name
 		}
-		_ = s.recvEmit.Emit(ctx, ryn.ToolCallFrame(&ryn.ToolCall{
+		_ = s.recvEmit.Emit(ctx, niro.ToolCallFrame(&niro.ToolCall{
 			ID:   ev.CallID,
 			Name: name,
 			Args: argsJSON,
@@ -572,13 +572,13 @@ func (s *Session) handleServerEvent(ev rtServerEvent) {
 	// ── Barge-in / VAD ────────────────────────────────────────────────────
 	case "input_audio_buffer.speech_started":
 		// User started speaking while model is generating — signal barge-in.
-		_ = s.recvEmit.Emit(ctx, ryn.ControlFrame(ryn.SignalFlush))
+		_ = s.recvEmit.Emit(ctx, niro.ControlFrame(niro.SignalFlush))
 
 	// ── Turn end ──────────────────────────────────────────────────────────
 	case "response.done":
 		// Emit usage if present.
 		if ev.Response != nil && ev.Response.Usage != nil {
-			u := &ryn.Usage{
+			u := &niro.Usage{
 				InputTokens:  ev.Response.Usage.InputTokens,
 				OutputTokens: ev.Response.Usage.OutputTokens,
 				TotalTokens:  ev.Response.Usage.TotalTokens,
@@ -595,9 +595,9 @@ func (s *Session) handleServerEvent(ev rtServerEvent) {
 				u.Detail["output_audio_tokens"] = od.AudioTokens
 				u.Detail["output_text_tokens"] = od.TextTokens
 			}
-			_ = s.recvEmit.Emit(ctx, ryn.UsageFrame(u))
+			_ = s.recvEmit.Emit(ctx, niro.UsageFrame(u))
 		}
-		_ = s.recvEmit.Emit(ctx, ryn.ControlFrame(ryn.SignalEOT))
+		_ = s.recvEmit.Emit(ctx, niro.ControlFrame(niro.SignalEOT))
 
 	// ── Errors ────────────────────────────────────────────────────────────
 	case "error":

@@ -1,4 +1,4 @@
-package ryn_test
+package niro_test
 
 import (
 	"errors"
@@ -12,9 +12,9 @@ import (
 func TestErrorCreation(t *testing.T) {
 	t.Parallel()
 
-	err := ryn.NewError(ryn.ErrCodeInvalidRequest, "test error")
+	err := niro.NewError(niro.ErrCodeInvalidRequest, "test error")
 	assertNotNil(t, err)
-	assertEqual(t, err.Code, ryn.ErrCodeInvalidRequest)
+	assertEqual(t, err.Code, niro.ErrCodeInvalidRequest)
 	assertEqual(t, err.Message, "test error")
 	assertTrue(t, err.Error() != "")
 }
@@ -23,7 +23,7 @@ func TestErrorWrapping(t *testing.T) {
 	t.Parallel()
 
 	inner := fmt.Errorf("inner error")
-	err := ryn.WrapError(ryn.ErrCodeProviderError, "provider failed", inner)
+	err := niro.WrapError(niro.ErrCodeProviderError, "provider failed", inner)
 	assertTrue(t, err != nil)
 
 	// Check error message contains both
@@ -36,18 +36,18 @@ func TestWrapErrorf(t *testing.T) {
 	t.Parallel()
 
 	inner := fmt.Errorf("inner")
-	err := ryn.WrapErrorf(ryn.ErrCodeProviderError, "failed with code %d", inner, 42)
+	err := niro.WrapErrorf(niro.ErrCodeProviderError, "failed with code %d", inner, 42)
 	assertNotNil(t, err)
 	assertTrue(t, strings.Contains(err.Error(), "failed with code 42"))
 	assertTrue(t, strings.Contains(err.Error(), "inner"))
-	assertTrue(t, ryn.IsRetryable(err) == false)
+	assertTrue(t, niro.IsRetryable(err) == false)
 }
 
 func TestErrorUnwrap(t *testing.T) {
 	t.Parallel()
 
 	inner := fmt.Errorf("root cause")
-	err := ryn.WrapError(ryn.ErrCodeProviderError, "outer", inner)
+	err := niro.WrapError(niro.ErrCodeProviderError, "outer", inner)
 	unwrapped := errors.Unwrap(err)
 	assertEqual(t, unwrapped, inner)
 }
@@ -55,92 +55,92 @@ func TestErrorUnwrap(t *testing.T) {
 func TestErrorIs(t *testing.T) {
 	t.Parallel()
 
-	target := ryn.NewError(ryn.ErrCodeRateLimited, "rate limited")
-	err := ryn.NewError(ryn.ErrCodeRateLimited, "too many")
+	target := niro.NewError(niro.ErrCodeRateLimited, "rate limited")
+	err := niro.NewError(niro.ErrCodeRateLimited, "too many")
 
 	// errors.Is should match on code
 	assertTrue(t, errors.Is(err, target))
 
 	// Different code should not match
-	other := ryn.NewError(ryn.ErrCodeProviderError, "server error")
+	other := niro.NewError(niro.ErrCodeProviderError, "server error")
 	assertEqual(t, errors.Is(other, target), false)
 
 	// Non-Error target
-	wrapped := ryn.WrapError(ryn.ErrCodeProviderError, "wrap", fmt.Errorf("base"))
+	wrapped := niro.WrapError(niro.ErrCodeProviderError, "wrap", fmt.Errorf("base"))
 	assertTrue(t, errors.Is(wrapped, fmt.Errorf("base")) == false) // Err != target
 }
 
 func TestErrorNilReceiver(t *testing.T) {
 	t.Parallel()
-	var e *ryn.Error
+	var e *niro.Error
 	assertEqual(t, e.Error(), "")
 }
 
 func TestErrorWithProvider(t *testing.T) {
 	t.Parallel()
 
-	err := ryn.NewError(ryn.ErrCodeProviderError, "failed")
+	err := niro.NewError(niro.ErrCodeProviderError, "failed")
 	result := err.WithProvider("anthropic")
 	assertTrue(t, result == err) // same pointer
 	assertTrue(t, strings.Contains(err.Error(), "anthropic"))
 
 	// nil receiver
-	var nilErr *ryn.Error
+	var nilErr *niro.Error
 	assertEqual(t, nilErr.WithProvider("x"), nil)
 }
 
 func TestErrorWithRequestID(t *testing.T) {
 	t.Parallel()
 
-	err := ryn.NewError(ryn.ErrCodeProviderError, "failed")
+	err := niro.NewError(niro.ErrCodeProviderError, "failed")
 	err.WithRequestID("req_123")
 	assertTrue(t, strings.Contains(err.Error(), "req_123"))
 
 	// nil receiver
-	var nilErr *ryn.Error
+	var nilErr *niro.Error
 	assertEqual(t, nilErr.WithRequestID("x"), nil)
 }
 
 func TestErrorWithStatusCode(t *testing.T) {
 	t.Parallel()
 
-	err := ryn.NewError(ryn.ErrCodeProviderError, "failed")
+	err := niro.NewError(niro.ErrCodeProviderError, "failed")
 	err.WithStatusCode(503)
 	assertEqual(t, err.StatusCode, 503)
 
 	// nil receiver
-	var nilErr *ryn.Error
+	var nilErr *niro.Error
 	assertEqual(t, nilErr.WithStatusCode(500), nil)
 }
 
 func TestErrorCheckers(t *testing.T) {
 	t.Parallel()
 
-	rateLimitErr := ryn.NewError(ryn.ErrCodeRateLimited, "too many requests")
-	assertTrue(t, ryn.IsRetryable(rateLimitErr))
-	assertTrue(t, ryn.IsRateLimited(rateLimitErr))
-	assertEqual(t, ryn.IsTimeout(rateLimitErr), false)
+	rateLimitErr := niro.NewError(niro.ErrCodeRateLimited, "too many requests")
+	assertTrue(t, niro.IsRetryable(rateLimitErr))
+	assertTrue(t, niro.IsRateLimited(rateLimitErr))
+	assertEqual(t, niro.IsTimeout(rateLimitErr), false)
 
-	authErr := ryn.NewError(ryn.ErrCodeAuthenticationFailed, "invalid key")
-	assertTrue(t, ryn.IsAuthError(authErr))
-	assertEqual(t, ryn.IsRetryable(authErr), false)
+	authErr := niro.NewError(niro.ErrCodeAuthenticationFailed, "invalid key")
+	assertTrue(t, niro.IsAuthError(authErr))
+	assertEqual(t, niro.IsRetryable(authErr), false)
 
-	timeoutErr := ryn.NewError(ryn.ErrCodeTimeout, "took too long")
-	assertTrue(t, ryn.IsTimeout(timeoutErr))
-	assertTrue(t, ryn.IsRetryable(timeoutErr))
+	timeoutErr := niro.NewError(niro.ErrCodeTimeout, "took too long")
+	assertTrue(t, niro.IsTimeout(timeoutErr))
+	assertTrue(t, niro.IsRetryable(timeoutErr))
 
-	// Non-ryn errors return false
+	// Non-niro errors return false
 	plainErr := fmt.Errorf("plain error")
-	assertEqual(t, ryn.IsRetryable(plainErr), false)
-	assertEqual(t, ryn.IsRateLimited(plainErr), false)
-	assertEqual(t, ryn.IsTimeout(plainErr), false)
-	assertEqual(t, ryn.IsAuthError(plainErr), false)
+	assertEqual(t, niro.IsRetryable(plainErr), false)
+	assertEqual(t, niro.IsRateLimited(plainErr), false)
+	assertEqual(t, niro.IsTimeout(plainErr), false)
+	assertEqual(t, niro.IsAuthError(plainErr), false)
 }
 
 func TestErrorWithContext(t *testing.T) {
 	t.Parallel()
 
-	err := ryn.NewError(ryn.ErrCodeProviderError, "failed")
+	err := niro.NewError(niro.ErrCodeProviderError, "failed")
 	err.WithProvider("openai").WithRequestID("req_123").WithStatusCode(500)
 	msg := err.Error()
 	assertTrue(t, strings.Contains(msg, "openai"))
@@ -153,22 +153,22 @@ func TestConvertHTTPStatusToCode(t *testing.T) {
 
 	cases := []struct {
 		status int
-		code   ryn.ErrorCode
+		code   niro.ErrorCode
 	}{
-		{401, ryn.ErrCodeAuthenticationFailed},
-		{404, ryn.ErrCodeModelNotFound},
-		{429, ryn.ErrCodeRateLimited},
-		{400, ryn.ErrCodeInvalidRequest},
-		{422, ryn.ErrCodeInvalidRequest},
-		{503, ryn.ErrCodeServiceUnavailable},
-		{504, ryn.ErrCodeTimeout},
-		{500, ryn.ErrCodeProviderError},
-		{502, ryn.ErrCodeProviderError},
-		{200, ryn.ErrCodeInternalError},
+		{401, niro.ErrCodeAuthenticationFailed},
+		{404, niro.ErrCodeModelNotFound},
+		{429, niro.ErrCodeRateLimited},
+		{400, niro.ErrCodeInvalidRequest},
+		{422, niro.ErrCodeInvalidRequest},
+		{503, niro.ErrCodeServiceUnavailable},
+		{504, niro.ErrCodeTimeout},
+		{500, niro.ErrCodeProviderError},
+		{502, niro.ErrCodeProviderError},
+		{200, niro.ErrCodeInternalError},
 	}
 
 	for _, tc := range cases {
-		got := ryn.ConvertHTTPStatusToCode(tc.status)
+		got := niro.ConvertHTTPStatusToCode(tc.status)
 		if got != tc.code {
 			t.Errorf("ConvertHTTPStatusToCode(%d) = %v, want %v", tc.status, got, tc.code)
 		}
@@ -178,25 +178,25 @@ func TestConvertHTTPStatusToCode(t *testing.T) {
 func TestRetryableCodes(t *testing.T) {
 	t.Parallel()
 
-	retryable := []ryn.ErrorCode{
-		ryn.ErrCodeRateLimited,
-		ryn.ErrCodeServiceUnavailable,
-		ryn.ErrCodeTimeout,
-		ryn.ErrCodeStreamError,
+	retryable := []niro.ErrorCode{
+		niro.ErrCodeRateLimited,
+		niro.ErrCodeServiceUnavailable,
+		niro.ErrCodeTimeout,
+		niro.ErrCodeStreamError,
 	}
 	for _, code := range retryable {
-		err := ryn.NewError(code, "test")
-		assertTrue(t, ryn.IsRetryable(err))
+		err := niro.NewError(code, "test")
+		assertTrue(t, niro.IsRetryable(err))
 	}
 
-	nonRetryable := []ryn.ErrorCode{
-		ryn.ErrCodeInvalidRequest,
-		ryn.ErrCodeAuthenticationFailed,
-		ryn.ErrCodeModelNotFound,
-		ryn.ErrCodeProviderError,
+	nonRetryable := []niro.ErrorCode{
+		niro.ErrCodeInvalidRequest,
+		niro.ErrCodeAuthenticationFailed,
+		niro.ErrCodeModelNotFound,
+		niro.ErrCodeProviderError,
 	}
 	for _, code := range nonRetryable {
-		err := ryn.NewError(code, "test")
-		assertEqual(t, ryn.IsRetryable(err), false)
+		err := niro.NewError(code, "test")
+		assertEqual(t, niro.IsRetryable(err), false)
 	}
 }

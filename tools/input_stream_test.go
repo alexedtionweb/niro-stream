@@ -13,25 +13,25 @@ func TestGenerateInputStreamFallback(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 
-	provider := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+	provider := niro.ProviderFunc(func(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
 		if len(req.Messages) == 0 {
 			return nil, fmt.Errorf("no messages")
 		}
 		last := req.Messages[len(req.Messages)-1]
 		var text string
 		for _, p := range last.Parts {
-			if p.Kind == ryn.KindText {
+			if p.Kind == niro.KindText {
 				text += p.Text
 			}
 		}
-		return ryn.StreamFromSlice([]ryn.Frame{ryn.TextFrame("echo:" + text)}), nil
+		return niro.StreamFromSlice([]niro.Frame{niro.TextFrame("echo:" + text)}), nil
 	})
 
-	in := ryn.StreamFromSlice([]ryn.Frame{ryn.TextFrame("hello "), ryn.TextFrame("world")})
-	out, err := tools.GenerateInputStream(ctx, provider, &ryn.Request{}, in, tools.DefaultInputStreamOptions())
+	in := niro.StreamFromSlice([]niro.Frame{niro.TextFrame("hello "), niro.TextFrame("world")})
+	out, err := tools.GenerateInputStream(ctx, provider, &niro.Request{}, in, tools.DefaultInputStreamOptions())
 	assertNoError(t, err)
 
-	text, err := ryn.CollectText(ctx, out)
+	text, err := niro.CollectText(ctx, out)
 	assertNoError(t, err)
 	assertEqual(t, text, "echo:hello world")
 }
@@ -41,11 +41,11 @@ func TestGenerateInputStreamNative(t *testing.T) {
 	ctx := context.Background()
 
 	p := &nativeInputProviderMock{}
-	in := ryn.StreamFromSlice([]ryn.Frame{ryn.TextFrame("a")})
-	out, err := tools.GenerateInputStream(ctx, p, &ryn.Request{}, in, tools.DefaultInputStreamOptions())
+	in := niro.StreamFromSlice([]niro.Frame{niro.TextFrame("a")})
+	out, err := tools.GenerateInputStream(ctx, p, &niro.Request{}, in, tools.DefaultInputStreamOptions())
 	assertNoError(t, err)
 
-	text, err := ryn.CollectText(ctx, out)
+	text, err := niro.CollectText(ctx, out)
 	assertNoError(t, err)
 	assertEqual(t, text, "native")
 	assertTrue(t, p.called)

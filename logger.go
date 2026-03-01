@@ -1,4 +1,4 @@
-package ryn
+package niro
 
 import (
 	"context"
@@ -46,11 +46,11 @@ const (
 
 // ── Logger interface ──────────────────────────────────────────────────────────
 
-// Logger is the minimal structured-logging interface used internally by ryn.
+// Logger is the minimal structured-logging interface used internally by niro.
 // Any logging backend can be adapted by implementing two methods.
 //
 // Key-value pairs in args follow the slog alternating-key-value convention
-// (string, any, string, any, …). ryn's own call sites use only plain string
+// (string, any, string, any, …). niro's own call sites use only plain string
 // keys and standard Go values — no slog.Attr — so non-slog adapters require
 // no special-case handling.
 //
@@ -58,33 +58,33 @@ const (
 //
 // # PCI-DSS guarantee
 //
-// ryn only ever passes pre-approved, non-sensitive attributes to the logger:
+// niro only ever passes pre-approved, non-sensitive attributes to the logger:
 // error codes, retry counts, durations, and request IDs. Request/response
 // content and credentials are NEVER passed to the logger. Install a [Scrubber]
-// as defence-in-depth if your application extends ryn log call sites.
+// as defence-in-depth if your application extends niro log call sites.
 //
 // # Adapter recipes
 //
 //	// slog (built-in, zero boilerplate):
-//	ryn.SetLogger(ryn.NewSlogAdapter(slog.Default()))
+//	niro.SetLogger(niro.NewSlogAdapter(slog.Default()))
 //
 //	// zap:
-//	ryn.SetLogger(&zapAdapter{l: zapLogger})
+//	niro.SetLogger(&zapAdapter{l: zapLogger})
 //	// Enabled: l.Core().Enabled(zapcore.Level(level+4))
 //	// Log:     l.Sugar().Log(zapcore.Level(level+4), msg, keysAndValues...)
 //
 //	// zerolog:
-//	ryn.SetLogger(&zerologAdapter{l: &zerologLogger})
+//	niro.SetLogger(&zerologAdapter{l: &zerologLogger})
 //	// Enabled: l.GetLevel() <= zerolog.Level(level/4+1)
 //	// Log:     l.WithLevel(...).Fields(args).Msg(msg)
 type Logger interface {
 	// Enabled reports whether records at level would be processed.
 	// MUST be cheap: no allocation, no lock, branch-predictor friendly.
-	// ryn calls Enabled before constructing expensive args; a false return
+	// niro calls Enabled before constructing expensive args; a false return
 	// is a guaranteed zero-cost exit from the log helper.
 	Enabled(ctx context.Context, level Level) bool
 
-	// Log emits a structured record. ryn guarantees Enabled(ctx,level)==true.
+	// Log emits a structured record. niro guarantees Enabled(ctx,level)==true.
 	// args is a flat alternating (string key, any value) list.
 	Log(ctx context.Context, level Level, msg string, args ...any)
 }
@@ -112,22 +112,22 @@ func GetLogger() Logger {
 	return newSlogAdapter(slog.Default()) // live: re-evaluated on every call
 }
 
-// SetLogger replaces the library-wide logger shared by all ryn packages.
+// SetLogger replaces the library-wide logger shared by all niro packages.
 // It is safe to call concurrently at any time.
 //
 // Pass nil to install [Discard] (suppress all output).
 // Call [ResetLogger] to restore live [slog.Default] delegation.
 //
 //	// JSON output at debug level (use only in non-PCI environments):
-//	ryn.SetLogger(ryn.NewSlogAdapter(slog.New(
+//	niro.SetLogger(niro.NewSlogAdapter(slog.New(
 //	    slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}),
 //	)))
 //
 //	// Suppress all output:
-//	ryn.SetLogger(ryn.Discard())
+//	niro.SetLogger(niro.Discard())
 //
 //	// Custom backend (zap, zerolog, …):
-//	ryn.SetLogger(&myZapAdapter{l: zapLogger})
+//	niro.SetLogger(&myZapAdapter{l: zapLogger})
 func SetLogger(l Logger) {
 	if l == nil {
 		l = Discard()
@@ -145,7 +145,7 @@ func ResetLogger() {
 
 type slogAdapter struct{ l *slog.Logger }
 
-// NewSlogAdapter wraps a *slog.Logger as a ryn [Logger].
+// NewSlogAdapter wraps a *slog.Logger as a niro [Logger].
 // The Level↔slog.Level conversion is a zero-cost integer cast (same values).
 // If l is nil, [Discard] is returned.
 func NewSlogAdapter(l *slog.Logger) Logger {
@@ -175,7 +175,7 @@ var discardSingleton Logger = discardLogger{}
 // Discard returns a [Logger] that silently drops all records.
 // Enabled always returns false so callers never build args.
 //
-//	ryn.SetLogger(ryn.Discard())
+//	niro.SetLogger(niro.Discard())
 func Discard() Logger { return discardSingleton }
 
 func (discardLogger) Enabled(_ context.Context, _ Level) bool            { return false }
@@ -186,7 +186,7 @@ func (discardLogger) Log(_ context.Context, _ Level, _ string, _ ...any) {}
 // DiscardHandler is a [slog.Handler] that silently discards all records.
 // Use it when you need a silent *slog.Logger for [NewSlogAdapter]:
 //
-//	ryn.SetLogger(ryn.NewSlogAdapter(slog.New(ryn.DiscardHandler{})))
+//	niro.SetLogger(niro.NewSlogAdapter(slog.New(niro.DiscardHandler{})))
 //
 // For most cases, prefer [Discard] directly.
 type DiscardHandler struct{}
@@ -203,8 +203,8 @@ func (h DiscardHandler) WithGroup(_ string) slog.Handler             { return h 
 //
 // For truly zero-allocation guards around expensive arg construction:
 //
-//	if l := ryn.GetLogger(); l.Enabled(ctx, ryn.LevelDebug) {
-//	    l.Log(ctx, ryn.LevelDebug, "msg", "k", expensiveValue())
+//	if l := niro.GetLogger(); l.Enabled(ctx, niro.LevelDebug) {
+//	    l.Log(ctx, niro.LevelDebug, "msg", "k", expensiveValue())
 //	}
 
 // LogDebug emits a DEBUG record. Zero overhead when DEBUG is disabled.
@@ -244,9 +244,9 @@ func logAt(ctx context.Context, level Level, msg string, args []any) {
 //
 // PCI-DSS Requirements 3.4 and 10.3 prohibit logging PANs, credentials, and
 // authentication tokens in clear text. Install a Scrubber as a
-// defence-in-depth layer. ryn itself never passes sensitive values to the
+// defence-in-depth layer. niro itself never passes sensitive values to the
 // logger; the Scrubber protects against application code that adds attrs to
-// ryn log call sites.
+// niro log call sites.
 //
 // The function receives each attribute key and value; it returns the value to
 // emit, a masked replacement such as "[REDACTED]", or nil to drop the field.
@@ -258,10 +258,10 @@ type Scrubber func(key string, val any) any
 
 var globalScrubber atomic.Pointer[Scrubber]
 
-// SetScrubber installs a global [Scrubber] applied to all ryn log helpers.
+// SetScrubber installs a global [Scrubber] applied to all niro log helpers.
 // Pass nil to remove the installed scrubber (default: none).
 //
-//	ryn.SetScrubber(ryn.DefaultScrubber)
+//	niro.SetScrubber(niro.DefaultScrubber)
 func SetScrubber(s Scrubber) {
 	if s == nil {
 		globalScrubber.Store(nil)

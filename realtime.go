@@ -1,4 +1,4 @@
-package ryn
+package niro
 
 import "context"
 
@@ -19,7 +19,7 @@ type RealtimeProvider interface {
 // Send and Recv operate concurrently. Run the audio-sending loop in a
 // separate goroutine from the receiving loop.
 //
-//	sess, err := provider.Session(ctx, ryn.RealtimeConfig{
+//	sess, err := provider.Session(ctx, niro.RealtimeConfig{
 //	    SystemPrompt: "You are a helpful voice assistant.",
 //	})
 //	defer sess.Close()
@@ -27,12 +27,12 @@ type RealtimeProvider interface {
 //	// --- send goroutine ---
 //	go func() {
 //	    for chunk := range mic.Chunks() {
-//	        if err := sess.Send(ctx, ryn.AudioFrame(chunk, ryn.AudioPCM16k)); err != nil {
+//	        if err := sess.Send(ctx, niro.AudioFrame(chunk, niro.AudioPCM16k)); err != nil {
 //	            return
 //	        }
 //	    }
 //	    // Signal end of user turn; model will respond.
-//	    sess.Send(ctx, ryn.ControlFrame(ryn.SignalEOT))
+//	    sess.Send(ctx, niro.ControlFrame(niro.SignalEOT))
 //	}()
 //
 //	// --- receive loop ---
@@ -40,18 +40,18 @@ type RealtimeProvider interface {
 //	for out.Next(ctx) {
 //	    f := out.Frame()
 //	    switch f.Kind {
-//	    case ryn.KindAudio:
+//	    case niro.KindAudio:
 //	        speaker.Play(f.Data)         // PCM24k synthesized speech
-//	    case ryn.KindText:
+//	    case niro.KindText:
 //	        fmt.Print(f.Text)            // transcript (when available)
-//	    case ryn.KindToolCall:
+//	    case niro.KindToolCall:
 //	        result := executeTool(f.Tool)
-//	        sess.Send(ctx, ryn.ToolResultFrame(&ryn.ToolResult{
+//	        sess.Send(ctx, niro.ToolResultFrame(&niro.ToolResult{
 //	            CallID:  f.Tool.ID,
 //	            Content: result,
 //	        }))
-//	    case ryn.KindControl:
-//	        if f.Signal == ryn.SignalFlush {
+//	    case niro.KindControl:
+//	        if f.Signal == niro.SignalFlush {
 //	            speaker.ClearBuffer() // barge-in: user interrupted
 //	        }
 //	    }

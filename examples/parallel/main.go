@@ -52,13 +52,13 @@ func main() {
 }
 
 // fanDemo generates two independent responses in parallel and prints them merged.
-func fanDemo(ctx context.Context, llm ryn.Provider) {
-	gen := func(question string) func(context.Context) (*ryn.Stream, error) {
-		return func(ctx context.Context) (*ryn.Stream, error) {
-			return llm.Generate(ctx, &ryn.Request{
+func fanDemo(ctx context.Context, llm niro.Provider) {
+	gen := func(question string) func(context.Context) (*niro.Stream, error) {
+		return func(ctx context.Context) (*niro.Stream, error) {
+			return llm.Generate(ctx, &niro.Request{
 				SystemPrompt: "Answer in exactly one sentence.",
-				Messages:     []ryn.Message{ryn.UserText(question)},
-				Options:      ryn.Options{MaxTokens: 80, Temperature: ryn.Temp(0.3)},
+				Messages:     []niro.Message{niro.UserText(question)},
+				Options:      niro.Options{MaxTokens: 80, Temperature: niro.Temp(0.3)},
 			})
 		}
 	}
@@ -69,7 +69,7 @@ func fanDemo(ctx context.Context, llm ryn.Provider) {
 		gen("What is Zig?"),
 	)
 
-	text, err := ryn.CollectText(ctx, stream)
+	text, err := niro.CollectText(ctx, stream)
 	if err != nil {
 		slog.Error("fan failed", "err", err)
 		return
@@ -79,13 +79,13 @@ func fanDemo(ctx context.Context, llm ryn.Provider) {
 
 // raceDemo fires three requests at slightly different temperatures and keeps
 // the first full response that comes back.
-func raceDemo(ctx context.Context, llm ryn.Provider) {
-	gen := func(temp float64) func(context.Context) (*ryn.Stream, error) {
-		return func(ctx context.Context) (*ryn.Stream, error) {
-			return llm.Generate(ctx, &ryn.Request{
+func raceDemo(ctx context.Context, llm niro.Provider) {
+	gen := func(temp float64) func(context.Context) (*niro.Stream, error) {
+		return func(ctx context.Context) (*niro.Stream, error) {
+			return llm.Generate(ctx, &niro.Request{
 				SystemPrompt: "One sentence only.",
-				Messages:     []ryn.Message{ryn.UserText("Define concurrency.")},
-				Options:      ryn.Options{MaxTokens: 64, Temperature: ryn.Temp(temp)},
+				Messages:     []niro.Message{niro.UserText("Define concurrency.")},
+				Options:      niro.Options{MaxTokens: 64, Temperature: niro.Temp(temp)},
 			})
 		}
 	}
@@ -101,22 +101,22 @@ func raceDemo(ctx context.Context, llm ryn.Provider) {
 
 // sequenceDemo composes two steps: first write a haiku, then critique it.
 // Each step's output becomes the next step's input.
-func sequenceDemo(ctx context.Context, llm ryn.Provider) {
+func sequenceDemo(ctx context.Context, llm niro.Provider) {
 	stream, err := orchestrate.Sequence(ctx,
 		// Step 1: write a haiku.
-		func(ctx context.Context, _ string) (*ryn.Stream, error) {
-			return llm.Generate(ctx, &ryn.Request{
+		func(ctx context.Context, _ string) (*niro.Stream, error) {
+			return llm.Generate(ctx, &niro.Request{
 				SystemPrompt: "Write exactly one haiku. No extra text.",
-				Messages:     []ryn.Message{ryn.UserText("Topic: streaming data")},
-				Options:      ryn.Options{MaxTokens: 48},
+				Messages:     []niro.Message{niro.UserText("Topic: streaming data")},
+				Options:      niro.Options{MaxTokens: 48},
 			})
 		},
 		// Step 2: critique the haiku produced by step 1.
-		func(ctx context.Context, haiku string) (*ryn.Stream, error) {
-			return llm.Generate(ctx, &ryn.Request{
+		func(ctx context.Context, haiku string) (*niro.Stream, error) {
+			return llm.Generate(ctx, &niro.Request{
 				SystemPrompt: "You are a concise poetry critic. One sentence.",
-				Messages:     []ryn.Message{ryn.UserText("Critique: " + haiku)},
-				Options:      ryn.Options{MaxTokens: 96},
+				Messages:     []niro.Message{niro.UserText("Critique: " + haiku)},
+				Options:      niro.Options{MaxTokens: 96},
 			})
 		},
 	)
@@ -126,7 +126,7 @@ func sequenceDemo(ctx context.Context, llm ryn.Provider) {
 	}
 
 	for stream.Next(ctx) {
-		if f := stream.Frame(); f.Kind == ryn.KindText {
+		if f := stream.Frame(); f.Kind == niro.KindText {
 			fmt.Print(f.Text)
 		}
 	}
@@ -137,7 +137,7 @@ func sequenceDemo(ctx context.Context, llm ryn.Provider) {
 }
 
 // mustProvider returns a Provider for the selected PROVIDER.
-func mustProvider(ctx context.Context) ryn.Provider {
+func mustProvider(ctx context.Context) niro.Provider {
 	switch strings.ToLower(os.Getenv("PROVIDER")) {
 	case "", "openai":
 		return openai.New(os.Getenv("OPENAI_API_KEY"))

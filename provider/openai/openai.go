@@ -9,7 +9,7 @@
 // # SDK Access
 //
 // Use [Provider.Client] to access the underlying SDK client directly
-// for operations not covered by the ryn abstraction.
+// for operations not covered by the niro abstraction.
 //
 // Use [WithRequestHook] (provider-level) or pass a [RequestHook] as
 // Request.Extra (per-request) to modify the raw SDK params before
@@ -18,9 +18,9 @@
 // # Usage
 //
 //	llm := openai.New(os.Getenv("OPENAI_API_KEY"))
-//	stream, err := llm.Generate(ctx, &ryn.Request{
+//	stream, err := llm.Generate(ctx, &niro.Request{
 //	    Model: "gpt-4o",
-//	    Messages: []ryn.Message{ryn.UserText("Hello")},
+//	    Messages: []niro.Message{niro.UserText("Hello")},
 //	})
 package openai
 
@@ -38,7 +38,7 @@ import (
 )
 
 // RequestHook allows modifying the raw SDK params before the request is sent.
-// Use this to set SDK-specific parameters not exposed by ryn.Request.
+// Use this to set SDK-specific parameters not exposed by niro.Request.
 //
 // Provider-level (every request):
 //
@@ -48,7 +48,7 @@ import (
 //
 // Per-request (via Request.Extra):
 //
-//	stream, _ := llm.Generate(ctx, &ryn.Request{
+//	stream, _ := llm.Generate(ctx, &niro.Request{
 //	    Messages: msgs,
 //	    Extra: openai.RequestHook(func(p *oai.ChatCompletionNewParams) {
 //	        p.LogProbs = oai.Bool(true)
@@ -56,14 +56,14 @@ import (
 //	})
 type RequestHook func(params *oai.ChatCompletionNewParams)
 
-// Provider implements ryn.Provider using the official OpenAI SDK.
+// Provider implements niro.Provider using the official OpenAI SDK.
 type Provider struct {
 	client oai.Client
 	model  string
 	hooks  []RequestHook
 }
 
-var _ ryn.Provider = (*Provider)(nil)
+var _ niro.Provider = (*Provider)(nil)
 
 // Option configures a Provider.
 type Option func(*providerConfig)
@@ -124,11 +124,11 @@ func NewFromClient(client oai.Client, model string) *Provider {
 }
 
 // Client returns the underlying OpenAI SDK client.
-// Use for direct SDK access when the ryn abstraction is insufficient.
+// Use for direct SDK access when the niro abstraction is insufficient.
 func (p *Provider) Client() oai.Client { return p.client }
 
-// Generate implements ryn.Provider.
-func (p *Provider) Generate(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+// Generate implements niro.Provider.
+func (p *Provider) Generate(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
 	model := req.Model
 	if model == "" {
 		model = p.model
@@ -147,13 +147,13 @@ func (p *Provider) Generate(ctx context.Context, req *ryn.Request) (*ryn.Stream,
 
 	sdk := p.client.Chat.Completions.NewStreaming(ctx, params)
 
-	stream, emitter := ryn.NewStream(32)
+	stream, emitter := niro.NewStream(32)
 	go consume(ctx, sdk, emitter)
 	return stream, nil
 }
 
-// consume reads from the SDK stream and emits ryn Frames.
-func consume(ctx context.Context, sdk *ssestream.Stream[oai.ChatCompletionChunk], out *ryn.Emitter) {
+// consume reads from the SDK stream and emits niro Frames.
+func consume(ctx context.Context, sdk *ssestream.Stream[oai.ChatCompletionChunk], out *niro.Emitter) {
 	defer out.Close()
 	defer sdk.Close()
 
@@ -167,7 +167,7 @@ func consume(ctx context.Context, sdk *ssestream.Stream[oai.ChatCompletionChunk]
 		if len(chunk.Choices) > 0 {
 			delta := chunk.Choices[0].Delta
 			if delta.Content != "" {
-				if err := out.Emit(ctx, ryn.TextFrame(delta.Content)); err != nil {
+				if err := out.Emit(ctx, niro.TextFrame(delta.Content)); err != nil {
 					return
 				}
 			}
@@ -175,40 +175,40 @@ func consume(ctx context.Context, sdk *ssestream.Stream[oai.ChatCompletionChunk]
 
 		// Complete tool call detection via accumulator
 		if tool, ok := acc.JustFinishedToolCall(); ok {
-			tc := &ryn.ToolCall{
+			tc := &niro.ToolCall{
 				ID:   tool.Id,
 				Name: tool.Name,
 				Args: json.RawMessage(tool.Arguments),
 			}
-			if err := out.Emit(ctx, ryn.ToolCallFrame(tc)); err != nil {
+			if err := out.Emit(ctx, niro.ToolCallFrame(tc)); err != nil {
 				return
 			}
 		}
 
 		// Token usage (present in the final chunk when StreamOptions.IncludeUsage is set)
 		if chunk.Usage.TotalTokens > 0 {
-			usage := &ryn.Usage{
+			usage := &niro.Usage{
 				InputTokens:  int(chunk.Usage.PromptTokens),
 				OutputTokens: int(chunk.Usage.CompletionTokens),
 				TotalTokens:  int(chunk.Usage.TotalTokens),
 			}
-			if err := out.Emit(ctx, ryn.UsageFrame(usage)); err != nil {
+			if err := out.Emit(ctx, niro.UsageFrame(usage)); err != nil {
 				return
 			}
 		}
 	}
 
 	if err := sdk.Err(); err != nil {
-		out.Error(fmt.Errorf("ryn/openai: stream: %w", err))
+		out.Error(fmt.Errorf("niro/openai: stream: %w", err))
 		return
 	}
 
 	// Set response metadata from accumulated completion
 	completion := acc.ChatCompletion
-	meta := &ryn.ResponseMeta{
+	meta := &niro.ResponseMeta{
 		ID:    completion.ID,
 		Model: completion.Model,
-		Usage: ryn.Usage{
+		Usage: niro.Usage{
 			InputTokens:  int(completion.Usage.PromptTokens),
 			OutputTokens: int(completion.Usage.CompletionTokens),
 			TotalTokens:  int(completion.Usage.TotalTokens),
@@ -222,7 +222,7 @@ func consume(ctx context.Context, sdk *ssestream.Stream[oai.ChatCompletionChunk]
 
 // --- Request building ---
 
-func buildParams(model string, req *ryn.Request) oai.ChatCompletionNewParams {
+func buildParams(model string, req *niro.Request) oai.ChatCompletionNewParams {
 	params := oai.ChatCompletionNewParams{
 		Model: model,
 		StreamOptions: oai.ChatCompletionStreamOptionsParam{
@@ -274,15 +274,15 @@ func buildParams(model string, req *ryn.Request) oai.ChatCompletionNewParams {
 	// Tool choice
 	if req.ToolChoice != "" {
 		switch req.ToolChoice {
-		case ryn.ToolChoiceAuto:
+		case niro.ToolChoiceAuto:
 			params.ToolChoice = oai.ChatCompletionToolChoiceOptionUnionParam{
 				OfAuto: oai.String(string(oai.ChatCompletionToolChoiceOptionAutoAuto)),
 			}
-		case ryn.ToolChoiceNone:
+		case niro.ToolChoiceNone:
 			params.ToolChoice = oai.ChatCompletionToolChoiceOptionUnionParam{
 				OfAuto: oai.String(string(oai.ChatCompletionToolChoiceOptionAutoNone)),
 			}
-		case ryn.ToolChoiceRequired:
+		case niro.ToolChoiceRequired:
 			params.ToolChoice = oai.ChatCompletionToolChoiceOptionUnionParam{
 				OfAuto: oai.String(string(oai.ChatCompletionToolChoiceOptionAutoRequired)),
 			}
@@ -300,15 +300,15 @@ func buildParams(model string, req *ryn.Request) oai.ChatCompletionNewParams {
 	return params
 }
 
-// convertMessages converts a ryn.Message to one or more OpenAI message params.
+// convertMessages converts a niro.Message to one or more OpenAI message params.
 // RoleTool messages may contain multiple tool results (from parallel tool calls
 // in one round). OpenAI requires one tool message per result, so this function
 // expands them. All other roles produce exactly one param.
-func convertMessages(msg ryn.Message) []oai.ChatCompletionMessageParamUnion {
-	if msg.Role == ryn.RoleTool {
+func convertMessages(msg niro.Message) []oai.ChatCompletionMessageParamUnion {
+	if msg.Role == niro.RoleTool {
 		var out []oai.ChatCompletionMessageParamUnion
 		for _, p := range msg.Parts {
-			if p.Kind == ryn.KindToolResult && p.Result != nil {
+			if p.Kind == niro.KindToolResult && p.Result != nil {
 				out = append(out, oai.ToolMessage(p.Result.Content, p.Result.CallID))
 			}
 		}
@@ -321,23 +321,23 @@ func convertMessages(msg ryn.Message) []oai.ChatCompletionMessageParamUnion {
 	return []oai.ChatCompletionMessageParamUnion{convertMessage(msg)}
 }
 
-func convertMessage(msg ryn.Message) oai.ChatCompletionMessageParamUnion {
+func convertMessage(msg niro.Message) oai.ChatCompletionMessageParamUnion {
 	switch msg.Role {
-	case ryn.RoleSystem:
+	case niro.RoleSystem:
 		return oai.SystemMessage(extractText(msg))
 
-	case ryn.RoleUser:
+	case niro.RoleUser:
 		// Single text part — use simple constructor
-		if len(msg.Parts) == 1 && msg.Parts[0].Kind == ryn.KindText {
+		if len(msg.Parts) == 1 && msg.Parts[0].Kind == niro.KindText {
 			return oai.UserMessage(msg.Parts[0].Text)
 		}
 		// Multimodal — build content parts
 		var parts []oai.ChatCompletionContentPartUnionParam
 		for _, p := range msg.Parts {
 			switch p.Kind {
-			case ryn.KindText:
+			case niro.KindText:
 				parts = append(parts, oai.TextContentPart(p.Text))
-			case ryn.KindImage:
+			case niro.KindImage:
 				url := p.URL
 				if url == "" && len(p.Data) > 0 {
 					url = dataURI(p.Data, p.Mime)
@@ -349,13 +349,13 @@ func convertMessage(msg ryn.Message) oai.ChatCompletionMessageParamUnion {
 		}
 		return oai.UserMessage(parts)
 
-	case ryn.RoleAssistant:
+	case niro.RoleAssistant:
 		text := extractText(msg)
 		m := oai.AssistantMessage(text)
 		// Attach tool calls if present
 		if m.OfAssistant != nil {
 			for _, p := range msg.Parts {
-				if p.Kind == ryn.KindToolCall && p.Tool != nil {
+				if p.Kind == niro.KindToolCall && p.Tool != nil {
 					tc := oai.ChatCompletionMessageToolCallParam{
 						ID: p.Tool.ID,
 						Function: oai.ChatCompletionMessageToolCallFunctionParam{
@@ -369,7 +369,7 @@ func convertMessage(msg ryn.Message) oai.ChatCompletionMessageParamUnion {
 		}
 		return m
 
-	case ryn.RoleTool:
+	case niro.RoleTool:
 		if len(msg.Parts) > 0 && msg.Parts[0].Result != nil {
 			r := msg.Parts[0].Result
 			return oai.ToolMessage(r.Content, r.CallID)
@@ -381,9 +381,9 @@ func convertMessage(msg ryn.Message) oai.ChatCompletionMessageParamUnion {
 	}
 }
 
-func extractText(msg ryn.Message) string {
+func extractText(msg niro.Message) string {
 	for _, p := range msg.Parts {
-		if p.Kind == ryn.KindText {
+		if p.Kind == niro.KindText {
 			return p.Text
 		}
 	}
@@ -402,6 +402,6 @@ func rawToMap(raw json.RawMessage) map[string]any {
 		return nil
 	}
 	var m map[string]any
-	_ = ryn.JSONUnmarshal(raw, &m)
+	_ = niro.JSONUnmarshal(raw, &m)
 	return m
 }

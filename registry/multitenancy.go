@@ -9,11 +9,11 @@ import (
 
 // ClientSelector resolves a client/provider name for a request.
 // Return an empty string to defer to other resolution sources.
-type ClientSelector func(ctx context.Context, req *ryn.Request) (string, error)
+type ClientSelector func(ctx context.Context, req *niro.Request) (string, error)
 
 // RequestMutator modifies a cloned request before dispatching to a
 // selected client/provider.
-type RequestMutator func(ctx context.Context, req *ryn.Request) error
+type RequestMutator func(ctx context.Context, req *niro.Request) error
 
 // MultiTenantOption configures MultiTenantProvider.
 type MultiTenantOption func(*multiTenantConfig)
@@ -67,7 +67,7 @@ type MultiTenantProvider struct {
 	clientMutators map[string]RequestMutator
 }
 
-var _ ryn.Provider = (*MultiTenantProvider)(nil)
+var _ niro.Provider = (*MultiTenantProvider)(nil)
 
 // NewMultiTenantProvider creates a provider router backed by a Registry.
 func NewMultiTenantProvider(reg *Registry, opts ...MultiTenantOption) *MultiTenantProvider {
@@ -84,12 +84,12 @@ func NewMultiTenantProvider(reg *Registry, opts ...MultiTenantOption) *MultiTena
 }
 
 // Generate resolves a runtime client and forwards the request.
-func (p *MultiTenantProvider) Generate(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+func (p *MultiTenantProvider) Generate(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
 	if p == nil || p.registry == nil {
-		return nil, fmt.Errorf("ryn: multi-tenant provider requires a registry")
+		return nil, fmt.Errorf("niro: multi-tenant provider requires a registry")
 	}
 	if req == nil {
-		return nil, fmt.Errorf("ryn: request cannot be nil")
+		return nil, fmt.Errorf("niro: request cannot be nil")
 	}
 
 	client, err := p.resolveClient(ctx, req)
@@ -105,14 +105,14 @@ func (p *MultiTenantProvider) Generate(ctx context.Context, req *ryn.Request) (*
 	cloned := cloneRequest(req)
 	if mutator, ok := p.clientMutators[client]; ok && mutator != nil {
 		if err := mutator(ctx, cloned); err != nil {
-			return nil, fmt.Errorf("ryn: client mutator %q: %w", client, err)
+			return nil, fmt.Errorf("niro: client mutator %q: %w", client, err)
 		}
 	}
 
 	return provider.Generate(ctx, cloned)
 }
 
-func (p *MultiTenantProvider) resolveClient(ctx context.Context, req *ryn.Request) (string, error) {
+func (p *MultiTenantProvider) resolveClient(ctx context.Context, req *niro.Request) (string, error) {
 	if p.selector != nil {
 		name, err := p.selector(ctx, req)
 		if err != nil {
@@ -137,7 +137,7 @@ func (p *MultiTenantProvider) resolveClient(ctx context.Context, req *ryn.Reques
 			return name, nil
 		}
 	}
-	return "", fmt.Errorf("ryn: no client selected (set request.Client, context client, or default)")
+	return "", fmt.Errorf("niro: no client selected (set request.Client, context client, or default)")
 }
 
 type clientContextKey struct{}
@@ -154,20 +154,20 @@ func ClientFromContext(ctx context.Context) (string, bool) {
 	return s, ok
 }
 
-func cloneRequest(req *ryn.Request) *ryn.Request {
+func cloneRequest(req *niro.Request) *niro.Request {
 	if req == nil {
 		return nil
 	}
 	out := *req
 
 	if len(req.Messages) > 0 {
-		out.Messages = make([]ryn.Message, len(req.Messages))
+		out.Messages = make([]niro.Message, len(req.Messages))
 		for i, m := range req.Messages {
 			out.Messages[i] = cloneMessage(m)
 		}
 	}
 	if len(req.Tools) > 0 {
-		out.Tools = append([]ryn.Tool(nil), req.Tools...)
+		out.Tools = append([]niro.Tool(nil), req.Tools...)
 	}
 	if len(req.ResponseSchema) > 0 {
 		out.ResponseSchema = append([]byte(nil), req.ResponseSchema...)
@@ -199,10 +199,10 @@ func cloneRequest(req *ryn.Request) *ryn.Request {
 	return &out
 }
 
-func cloneMessage(in ryn.Message) ryn.Message {
+func cloneMessage(in niro.Message) niro.Message {
 	m := in
 	if len(in.Parts) > 0 {
-		m.Parts = make([]ryn.Part, len(in.Parts))
+		m.Parts = make([]niro.Part, len(in.Parts))
 		copy(m.Parts, in.Parts)
 		for i := range m.Parts {
 			if len(m.Parts[i].Data) > 0 {

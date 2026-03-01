@@ -20,13 +20,13 @@ import (
 //   - Telemetry hooks on every generation
 //   - Consistent post-processing pipeline
 type Runtime struct {
-	provider ryn.Provider
+	provider niro.Provider
 	pipeline *pipe.Pipeline
 	hook     hook.Hook
 }
 
 // New creates a Runtime with the given Provider.
-func New(p ryn.Provider) *Runtime {
+func New(p niro.Provider) *Runtime {
 	return &Runtime{provider: p}
 }
 
@@ -46,7 +46,7 @@ func (r *Runtime) WithHook(h hook.Hook) *Runtime {
 // Generate sends a request to the provider and returns a stream
 // of frames, optionally processed through the attached pipeline.
 // Hooks are invoked at each stage.
-func (r *Runtime) Generate(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+func (r *Runtime) Generate(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
 	start := time.Now()
 
 	model := req.Model
@@ -90,8 +90,8 @@ func (r *Runtime) Generate(ctx context.Context, req *ryn.Request) (*ryn.Stream, 
 }
 
 // wrapStream interposes a hook between the provider stream and the consumer.
-func (r *Runtime) wrapStream(ctx context.Context, src *ryn.Stream, model string, start time.Time) *ryn.Stream {
-	out, emitter := ryn.NewStream(32)
+func (r *Runtime) wrapStream(ctx context.Context, src *niro.Stream, model string, start time.Time) *niro.Stream {
+	out, emitter := niro.NewStream(32)
 
 	go func() {
 		defer emitter.Close()

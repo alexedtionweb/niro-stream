@@ -17,7 +17,7 @@ import (
 type ToolHandler func(ctx context.Context, args json.RawMessage) (any, error)
 
 // ToolDefinition is a high-level tool abstraction.
-// It maps to ryn.Request.Tools for providers and supports runtime execution.
+// It maps to niro.Request.Tools for providers and supports runtime execution.
 type ToolDefinition struct {
 	Name        string
 	Description string
@@ -41,7 +41,7 @@ func NewToolDefinition(name, description string, schema json.RawMessage, handler
 
 // NewToolDefinitionAny creates a tool using the configured JSON backend.
 func NewToolDefinitionAny(name, description string, schema any, handler ToolHandler) (ToolDefinition, error) {
-	b, err := ryn.JSONMarshal(schema)
+	b, err := niro.JSONMarshal(schema)
 	if err != nil {
 		return ToolDefinition{}, err
 	}
@@ -49,7 +49,7 @@ func NewToolDefinitionAny(name, description string, schema any, handler ToolHand
 }
 
 // Validate validates tool definition shape and schema.
-// It delegates name format, description, and schema checks to ryn.Tool.Validate
+// It delegates name format, description, and schema checks to niro.Tool.Validate
 // so that the same cross-provider rules are enforced in one place.
 func (d ToolDefinition) Validate() error {
 	t := d.ToTool()
@@ -62,9 +62,9 @@ func (d ToolDefinition) Validate() error {
 	return nil
 }
 
-// ToTool converts definition to provider-facing ryn.Tool.
-func (d ToolDefinition) ToTool() ryn.Tool {
-	return ryn.Tool{
+// ToTool converts definition to provider-facing niro.Tool.
+func (d ToolDefinition) ToTool() niro.Tool {
+	return niro.Tool{
 		Name:        d.Name,
 		Description: d.Description,
 		Parameters:  d.Schema,
@@ -83,14 +83,14 @@ type ToolExecutionInfo struct {
 	Name   string
 	CallID string
 	Args   json.RawMessage
-	Result ryn.ToolResult
+	Result niro.ToolResult
 	Err    error
 }
 
 // ToolRuntimeHook receives tool validation/execution lifecycle events.
 type ToolRuntimeHook interface {
 	OnToolValidate(ctx context.Context, info ToolValidationInfo)
-	OnToolExecuteStart(ctx context.Context, call ryn.ToolCall)
+	OnToolExecuteStart(ctx context.Context, call niro.ToolCall)
 	OnToolExecuteEnd(ctx context.Context, info ToolExecutionInfo)
 }
 
@@ -114,7 +114,7 @@ type ToolApproval struct {
 // Example — channel-based human approval:
 //
 //	type ChannelApprover struct { Requests chan ApprovalRequest }
-//	func (a *ChannelApprover) Approve(ctx context.Context, call ryn.ToolCall) (ToolApproval, error) {
+//	func (a *ChannelApprover) Approve(ctx context.Context, call niro.ToolCall) (ToolApproval, error) {
 //		req := ApprovalRequest{Call: call, Reply: make(chan ToolApproval, 1)}
 //		select {
 //		case a.Requests <- req:
@@ -126,20 +126,20 @@ type ToolApproval struct {
 //		}
 //	}
 type ToolApprover interface {
-	Approve(ctx context.Context, call ryn.ToolCall) (ToolApproval, error)
+	Approve(ctx context.Context, call niro.ToolCall) (ToolApproval, error)
 }
 
 // ToolApproverFunc adapts a function to the ToolApprover interface.
-type ToolApproverFunc func(ctx context.Context, call ryn.ToolCall) (ToolApproval, error)
+type ToolApproverFunc func(ctx context.Context, call niro.ToolCall) (ToolApproval, error)
 
-func (f ToolApproverFunc) Approve(ctx context.Context, call ryn.ToolCall) (ToolApproval, error) {
+func (f ToolApproverFunc) Approve(ctx context.Context, call niro.ToolCall) (ToolApproval, error) {
 	return f(ctx, call)
 }
 
 // ApproveAll returns a ToolApprover that approves every call unconditionally.
 // Use as a no-op placeholder or in tests.
 func ApproveAll() ToolApprover {
-	return ToolApproverFunc(func(_ context.Context, _ ryn.ToolCall) (ToolApproval, error) {
+	return ToolApproverFunc(func(_ context.Context, _ niro.ToolCall) (ToolApproval, error) {
 		return ToolApproval{Approved: true}, nil
 	})
 }
@@ -150,7 +150,7 @@ func DenyAll(reason string) ToolApprover {
 	if reason == "" {
 		reason = "all tool calls are currently denied"
 	}
-	return ToolApproverFunc(func(_ context.Context, call ryn.ToolCall) (ToolApproval, error) {
+	return ToolApproverFunc(func(_ context.Context, call niro.ToolCall) (ToolApproval, error) {
 		return ToolApproval{Approved: false, Reason: reason}, nil
 	})
 }
@@ -223,7 +223,7 @@ func CurrentToolSchemaValidator() ToolSchemaValidator {
 
 func defaultToolSchemaValidator() ToolSchemaValidator {
 	return toolSchemaValidatorFunc(func(schema json.RawMessage, args json.RawMessage) error {
-		if len(args) > 0 && !ryn.JSONValid(args) {
+		if len(args) > 0 && !niro.JSONValid(args) {
 			return fmt.Errorf("tool args are not valid JSON")
 		}
 		if len(schema) == 0 || len(args) == 0 {
@@ -231,7 +231,7 @@ func defaultToolSchemaValidator() ToolSchemaValidator {
 		}
 
 		var s map[string]any
-		if err := ryn.JSONUnmarshal(schema, &s); err != nil {
+		if err := niro.JSONUnmarshal(schema, &s); err != nil {
 			return fmt.Errorf("invalid schema json: %w", err)
 		}
 
@@ -245,7 +245,7 @@ func defaultToolSchemaValidator() ToolSchemaValidator {
 		}
 
 		var payload map[string]any
-		if err := ryn.JSONUnmarshal(args, &payload); err != nil {
+		if err := niro.JSONUnmarshal(args, &payload); err != nil {
 			return fmt.Errorf("invalid args json: %w", err)
 		}
 		for _, item := range reqList {
@@ -377,7 +377,7 @@ func (ts *Toolset) WithApprover(a ToolApprover) *Toolset {
 }
 
 // Tools returns provider-facing tool list sorted by name for deterministic ordering.
-func (ts *Toolset) Tools() []ryn.Tool {
+func (ts *Toolset) Tools() []niro.Tool {
 	ts.mu.RLock()
 	defer ts.mu.RUnlock()
 	names := make([]string, 0, len(ts.defs))
@@ -385,7 +385,7 @@ func (ts *Toolset) Tools() []ryn.Tool {
 		names = append(names, name)
 	}
 	sort.Strings(names)
-	out := make([]ryn.Tool, 0, len(names))
+	out := make([]niro.Tool, 0, len(names))
 	for _, name := range names {
 		out = append(out, ts.defs[name].ToTool())
 	}
@@ -393,7 +393,7 @@ func (ts *Toolset) Tools() []ryn.Tool {
 }
 
 // Apply returns a shallow copy of req with toolset tools attached.
-func (ts *Toolset) Apply(req *ryn.Request) *ryn.Request {
+func (ts *Toolset) Apply(req *niro.Request) *niro.Request {
 	if req == nil {
 		return nil
 	}
@@ -404,24 +404,24 @@ func (ts *Toolset) Apply(req *ryn.Request) *ryn.Request {
 
 // Execute implements ToolExecutor.
 func (ts *Toolset) Execute(ctx context.Context, name string, args json.RawMessage) (string, error) {
-	res, err := ts.ExecuteCall(ctx, ryn.ToolCall{Name: name, Args: args})
+	res, err := ts.ExecuteCall(ctx, niro.ToolCall{Name: name, Args: args})
 	if err != nil {
 		return "", err
 	}
 	return res.Content, nil
 }
 
-// ExecuteCall validates args, invokes handler, and returns ryn.ToolResult.
-func (ts *Toolset) ExecuteCall(ctx context.Context, call ryn.ToolCall) (ryn.ToolResult, error) {
+// ExecuteCall validates args, invokes handler, and returns niro.ToolResult.
+func (ts *Toolset) ExecuteCall(ctx context.Context, call niro.ToolCall) (niro.ToolResult, error) {
 	def, ok := ts.get(call.Name)
 	if !ok {
-		return ryn.ToolResult{CallID: call.ID, Content: "tool not found", IsError: true}, ryn.NewErrorf(ryn.ErrCodeInvalidRequest, "tool %q not found", call.Name)
+		return niro.ToolResult{CallID: call.ID, Content: "tool not found", IsError: true}, niro.NewErrorf(niro.ErrCodeInvalidRequest, "tool %q not found", call.Name)
 	}
 
 	valErr := ts.validator.Validate(def.Schema, call.Args)
 	ts.emitValidate(ctx, ToolValidationInfo{Name: call.Name, Args: call.Args, Err: valErr})
 	if valErr != nil {
-		return ryn.ToolResult{CallID: call.ID, Content: valErr.Error(), IsError: true}, valErr
+		return niro.ToolResult{CallID: call.ID, Content: valErr.Error(), IsError: true}, valErr
 	}
 
 	// HITL: approval gate — runs after validation but before execution.
@@ -435,7 +435,7 @@ func (ts *Toolset) ExecuteCall(ctx context.Context, call ryn.ToolCall) (ryn.Tool
 	if approver != nil {
 		decision, approveErr := approver.Approve(ctx, call)
 		if approveErr != nil {
-			return ryn.ToolResult{
+			return niro.ToolResult{
 				CallID:  call.ID,
 				Content: "approval error: " + approveErr.Error(),
 				IsError: true,
@@ -447,7 +447,7 @@ func (ts *Toolset) ExecuteCall(ctx context.Context, call ryn.ToolCall) (ryn.Tool
 				reason = "tool call was not approved"
 			}
 			denied := &ErrToolDenied{CallName: call.Name, Reason: reason}
-			return ryn.ToolResult{CallID: call.ID, Content: denied.Error(), IsError: true}, denied
+			return niro.ToolResult{CallID: call.ID, Content: denied.Error(), IsError: true}, denied
 		}
 	}
 
@@ -458,7 +458,7 @@ func (ts *Toolset) ExecuteCall(ctx context.Context, call ryn.ToolCall) (ryn.Tool
 			Name:   call.Name,
 			CallID: call.ID,
 			Args:   call.Args,
-			Result: ryn.ToolResult{CallID: call.ID, Content: err.Error(), IsError: true},
+			Result: niro.ToolResult{CallID: call.ID, Content: err.Error(), IsError: true},
 			Err:    err,
 		}
 		ts.emitExecEnd(ctx, info)
@@ -471,14 +471,14 @@ func (ts *Toolset) ExecuteCall(ctx context.Context, call ryn.ToolCall) (ryn.Tool
 			Name:   call.Name,
 			CallID: call.ID,
 			Args:   call.Args,
-			Result: ryn.ToolResult{CallID: call.ID, Content: convErr.Error(), IsError: true},
+			Result: niro.ToolResult{CallID: call.ID, Content: convErr.Error(), IsError: true},
 			Err:    convErr,
 		}
 		ts.emitExecEnd(ctx, info)
 		return info.Result, convErr
 	}
 
-	res := ryn.ToolResult{CallID: call.ID, Content: content, IsError: false}
+	res := niro.ToolResult{CallID: call.ID, Content: content, IsError: false}
 	ts.emitExecEnd(ctx, ToolExecutionInfo{Name: call.Name, CallID: call.ID, Args: call.Args, Result: res})
 	return res, nil
 }
@@ -499,7 +499,7 @@ func (ts *Toolset) emitValidate(ctx context.Context, info ToolValidationInfo) {
 	}
 }
 
-func (ts *Toolset) emitExecStart(ctx context.Context, call ryn.ToolCall) {
+func (ts *Toolset) emitExecStart(ctx context.Context, call niro.ToolCall) {
 	ts.mu.RLock()
 	hooks := append([]ToolRuntimeHook(nil), ts.hooks...)
 	ts.mu.RUnlock()
@@ -528,7 +528,7 @@ func normalizeToolOutput(v any) (string, error) {
 	case json.RawMessage:
 		return string(x), nil
 	default:
-		b, err := ryn.JSONMarshal(x)
+		b, err := niro.JSONMarshal(x)
 		if err != nil {
 			return "", err
 		}
@@ -539,13 +539,13 @@ func normalizeToolOutput(v any) (string, error) {
 // ToolingProvider is a smart provider wrapper that applies declared tools
 // and executes tool loops with validation + hooks.
 type ToolingProvider struct {
-	base ryn.Provider
+	base niro.Provider
 	set  *Toolset
 	opts ToolStreamOptions
 }
 
 // NewToolingProvider creates a provider wrapper that uses a Toolset.
-func NewToolingProvider(base ryn.Provider, set *Toolset, opts ToolStreamOptions) *ToolingProvider {
+func NewToolingProvider(base niro.Provider, set *Toolset, opts ToolStreamOptions) *ToolingProvider {
 	if set == nil {
 		set = NewToolset()
 	}
@@ -556,12 +556,12 @@ func NewToolingProvider(base ryn.Provider, set *Toolset, opts ToolStreamOptions)
 }
 
 // Generate applies tool definitions and executes tool loop.
-func (p *ToolingProvider) Generate(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+func (p *ToolingProvider) Generate(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
 	if p == nil || p.base == nil {
-		return nil, ryn.NewError(ryn.ErrCodeInvalidRequest, "base provider is nil")
+		return nil, niro.NewError(niro.ErrCodeInvalidRequest, "base provider is nil")
 	}
 	if req == nil {
-		return nil, ryn.NewError(ryn.ErrCodeInvalidRequest, "request is nil")
+		return nil, niro.NewError(niro.ErrCodeInvalidRequest, "request is nil")
 	}
 	r := p.set.Apply(req)
 	loop := NewToolLoopWithOptions(p.set, p.opts)

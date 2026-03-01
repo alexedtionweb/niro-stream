@@ -15,9 +15,9 @@
 // # Usage
 //
 //	llm := anthropic.New(os.Getenv("ANTHROPIC_API_KEY"))
-//	stream, err := llm.Generate(ctx, &ryn.Request{
+//	stream, err := llm.Generate(ctx, &niro.Request{
 //	    Model: "claude-sonnet-4-5",
-//	    Messages: []ryn.Message{ryn.UserText("Hello")},
+//	    Messages: []niro.Message{niro.UserText("Hello")},
 //	})
 package anthropic
 
@@ -44,20 +44,20 @@ import (
 //
 // Per-request (via Request.Extra):
 //
-//	stream, _ := llm.Generate(ctx, &ryn.Request{
+//	stream, _ := llm.Generate(ctx, &niro.Request{
 //	    Messages: msgs,
 //	    Extra: anthropic.RequestHook(func(p *ant.MessageNewParams) { ... }),
 //	})
 type RequestHook func(params *ant.MessageNewParams)
 
-// Provider implements ryn.Provider using the official Anthropic SDK.
+// Provider implements niro.Provider using the official Anthropic SDK.
 type Provider struct {
 	client ant.Client
 	model  string
 	hooks  []RequestHook
 }
 
-var _ ryn.Provider = (*Provider)(nil)
+var _ niro.Provider = (*Provider)(nil)
 
 // Option configures a Provider.
 type Option func(*providerConfig)
@@ -108,11 +108,11 @@ func NewFromClient(client ant.Client, model string) *Provider {
 }
 
 // Client returns the underlying Anthropic SDK client.
-// Use for direct SDK access when the ryn abstraction is insufficient.
+// Use for direct SDK access when the niro abstraction is insufficient.
 func (p *Provider) Client() ant.Client { return p.client }
 
-// Generate implements ryn.Provider.
-func (p *Provider) Generate(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+// Generate implements niro.Provider.
+func (p *Provider) Generate(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
 	model := req.Model
 	if model == "" {
 		model = p.model
@@ -131,12 +131,12 @@ func (p *Provider) Generate(ctx context.Context, req *ryn.Request) (*ryn.Stream,
 
 	sdk := p.client.Messages.NewStreaming(ctx, params)
 
-	stream, emitter := ryn.NewStream(32)
+	stream, emitter := niro.NewStream(32)
 	go p.consume(ctx, sdk, emitter)
 	return stream, nil
 }
 
-func (p *Provider) consume(ctx context.Context, sdk *ssestream.Stream[ant.MessageStreamEventUnion], out *ryn.Emitter) {
+func (p *Provider) consume(ctx context.Context, sdk *ssestream.Stream[ant.MessageStreamEventUnion], out *niro.Emitter) {
 	defer out.Close()
 	defer sdk.Close()
 
@@ -150,7 +150,7 @@ func (p *Provider) consume(ctx context.Context, sdk *ssestream.Stream[ant.Messag
 		case ant.ContentBlockDeltaEvent:
 			switch delta := variant.Delta.AsAny().(type) {
 			case ant.TextDelta:
-				if err := out.Emit(ctx, ryn.TextFrame(delta.Text)); err != nil {
+				if err := out.Emit(ctx, niro.TextFrame(delta.Text)); err != nil {
 					return
 				}
 			}
@@ -160,26 +160,26 @@ func (p *Provider) consume(ctx context.Context, sdk *ssestream.Stream[ant.Messag
 	}
 
 	if err := sdk.Err(); err != nil {
-		out.Error(fmt.Errorf("ryn/anthropic: stream: %w", err))
+		out.Error(fmt.Errorf("niro/anthropic: stream: %w", err))
 		return
 	}
 
 	// Emit completed tool calls from accumulated message
 	for _, block := range message.Content {
 		if tu, ok := block.AsAny().(ant.ToolUseBlock); ok {
-			tc := &ryn.ToolCall{
+			tc := &niro.ToolCall{
 				ID:   tu.ID,
 				Name: tu.Name,
 				Args: json.RawMessage(tu.Input),
 			}
-			if err := out.Emit(ctx, ryn.ToolCallFrame(tc)); err != nil {
+			if err := out.Emit(ctx, niro.ToolCallFrame(tc)); err != nil {
 				return
 			}
 		}
 	}
 
 	// Emit usage
-	usage := &ryn.Usage{
+	usage := &niro.Usage{
 		InputTokens:  int(message.Usage.InputTokens),
 		OutputTokens: int(message.Usage.OutputTokens),
 		TotalTokens:  int(message.Usage.InputTokens + message.Usage.OutputTokens),
@@ -190,10 +190,10 @@ func (p *Provider) consume(ctx context.Context, sdk *ssestream.Stream[ant.Messag
 			"cache_creation_input_tokens": int(message.Usage.CacheCreationInputTokens),
 		}
 	}
-	_ = out.Emit(ctx, ryn.UsageFrame(usage))
+	_ = out.Emit(ctx, niro.UsageFrame(usage))
 
 	// Response metadata
-	out.SetResponse(&ryn.ResponseMeta{
+	out.SetResponse(&niro.ResponseMeta{
 		ID:           message.ID,
 		Model:        string(message.Model),
 		FinishReason: string(message.StopReason),
@@ -201,7 +201,7 @@ func (p *Provider) consume(ctx context.Context, sdk *ssestream.Stream[ant.Messag
 	})
 }
 
-func (p *Provider) buildParams(model string, req *ryn.Request) ant.MessageNewParams {
+func (p *Provider) buildParams(model string, req *niro.Request) ant.MessageNewParams {
 	params := ant.MessageNewParams{
 		Model: ant.Model(model),
 	}
@@ -222,10 +222,10 @@ func (p *Provider) buildParams(model string, req *ryn.Request) ant.MessageNewPar
 
 	// Messages
 	for _, msg := range req.Messages {
-		if msg.Role == ryn.RoleSystem {
+		if msg.Role == niro.RoleSystem {
 			// Anthropic: system messages go into params.System
 			for _, part := range msg.Parts {
-				if part.Kind == ryn.KindText {
+				if part.Kind == niro.KindText {
 					params.System = append(params.System, ant.TextBlockParam{
 						Text: part.Text,
 					})
@@ -255,7 +255,7 @@ func (p *Provider) buildParams(model string, req *ryn.Request) ant.MessageNewPar
 		schema := ant.ToolInputSchemaParam{}
 		if len(tool.Parameters) > 0 {
 			var props map[string]any
-			_ = ryn.JSONUnmarshal(tool.Parameters, &props)
+			_ = niro.JSONUnmarshal(tool.Parameters, &props)
 			if p, ok := props["properties"]; ok {
 				schema.Properties = p
 			}
@@ -279,15 +279,15 @@ func (p *Provider) buildParams(model string, req *ryn.Request) ant.MessageNewPar
 	return params
 }
 
-func convertMessage(msg ryn.Message) ant.MessageParam {
+func convertMessage(msg niro.Message) ant.MessageParam {
 	switch msg.Role {
-	case ryn.RoleUser:
+	case niro.RoleUser:
 		var blocks []ant.ContentBlockParamUnion
 		for _, p := range msg.Parts {
 			switch p.Kind {
-			case ryn.KindText:
+			case niro.KindText:
 				blocks = append(blocks, ant.NewTextBlock(p.Text))
-			case ryn.KindImage:
+			case niro.KindImage:
 				if len(p.Data) > 0 {
 					b64 := base64.StdEncoding.EncodeToString(p.Data)
 					blocks = append(blocks, ant.NewImageBlockBase64(p.Mime, b64))
@@ -296,27 +296,27 @@ func convertMessage(msg ryn.Message) ant.MessageParam {
 		}
 		return ant.NewUserMessage(blocks...)
 
-	case ryn.RoleAssistant:
+	case niro.RoleAssistant:
 		var blocks []ant.ContentBlockParamUnion
 		for _, p := range msg.Parts {
 			switch p.Kind {
-			case ryn.KindText:
+			case niro.KindText:
 				blocks = append(blocks, ant.NewTextBlock(p.Text))
-			case ryn.KindToolCall:
+			case niro.KindToolCall:
 				if p.Tool != nil {
 					var input any
-					_ = ryn.JSONUnmarshal(p.Tool.Args, &input)
+					_ = niro.JSONUnmarshal(p.Tool.Args, &input)
 					blocks = append(blocks, ant.NewToolUseBlock(p.Tool.ID, input, p.Tool.Name))
 				}
 			}
 		}
 		return ant.NewAssistantMessage(blocks...)
 
-	case ryn.RoleTool:
+	case niro.RoleTool:
 		// Anthropic: tool results are in user turns
 		var blocks []ant.ContentBlockParamUnion
 		for _, p := range msg.Parts {
-			if p.Kind == ryn.KindToolResult && p.Result != nil {
+			if p.Kind == niro.KindToolResult && p.Result != nil {
 				blocks = append(blocks, ant.NewToolResultBlock(
 					p.Result.CallID,
 					p.Result.Content,
@@ -331,9 +331,9 @@ func convertMessage(msg ryn.Message) ant.MessageParam {
 	}
 }
 
-func extractText(msg ryn.Message) string {
+func extractText(msg niro.Message) string {
 	for _, p := range msg.Parts {
-		if p.Kind == ryn.KindText {
+		if p.Kind == niro.KindText {
 			return p.Text
 		}
 	}

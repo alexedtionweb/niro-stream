@@ -21,7 +21,7 @@ func (h *toolHookMock) OnToolValidate(ctx context.Context, info tools.ToolValida
 	h.validateCalls++
 }
 
-func (h *toolHookMock) OnToolExecuteStart(ctx context.Context, call ryn.ToolCall) {
+func (h *toolHookMock) OnToolExecuteStart(ctx context.Context, call niro.ToolCall) {
 	h.startCalls++
 }
 
@@ -34,13 +34,13 @@ type nativeInputProviderMock struct {
 	called bool
 }
 
-func (m *nativeInputProviderMock) Generate(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
-	return ryn.StreamFromSlice([]ryn.Frame{ryn.TextFrame("fallback")}), nil
+func (m *nativeInputProviderMock) Generate(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
+	return niro.StreamFromSlice([]niro.Frame{niro.TextFrame("fallback")}), nil
 }
 
-func (m *nativeInputProviderMock) GenerateInputStream(ctx context.Context, req *ryn.Request, input *ryn.Stream) (*ryn.Stream, error) {
+func (m *nativeInputProviderMock) GenerateInputStream(ctx context.Context, req *niro.Request, input *niro.Stream) (*niro.Stream, error) {
 	m.called = true
-	return ryn.StreamFromSlice([]ryn.Frame{ryn.TextFrame("native")}), nil
+	return niro.StreamFromSlice([]niro.Frame{niro.TextFrame("native")}), nil
 }
 
 // testSchemaValidator implements tools.ToolSchemaValidator for tests.

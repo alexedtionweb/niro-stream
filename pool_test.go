@@ -1,4 +1,4 @@
-package ryn_test
+package niro_test
 
 import (
 	"sync"
@@ -9,7 +9,7 @@ import (
 
 func TestBytePoolGetPut(t *testing.T) {
 	t.Parallel()
-	pool := ryn.NewBytePool()
+	pool := niro.NewBytePool()
 
 	// Small buffer
 	buf := pool.Get(100)
@@ -35,7 +35,7 @@ func TestBytePoolGetPut(t *testing.T) {
 
 func TestBytePoolConcurrent(t *testing.T) {
 	t.Parallel()
-	pool := ryn.NewBytePool()
+	pool := niro.NewBytePool()
 
 	var wg sync.WaitGroup
 	for i := 0; i < 100; i++ {
@@ -54,63 +54,63 @@ func TestBytePoolConcurrent(t *testing.T) {
 
 func TestPooledFrameConstructors(t *testing.T) {
 	t.Parallel()
-	pool := ryn.NewBytePool()
+	pool := niro.NewBytePool()
 
 	data := []byte{1, 2, 3, 4, 5}
 
-	af := ryn.AudioFramePooled(pool, data, "audio/pcm")
-	assertEqual(t, af.Kind, ryn.KindAudio)
+	af := niro.AudioFramePooled(pool, data, "audio/pcm")
+	assertEqual(t, af.Kind, niro.KindAudio)
 	assertEqual(t, len(af.Data), 5)
 	assertEqual(t, af.Data[0], byte(1))
 	assertEqual(t, af.Mime, "audio/pcm")
 	pool.Put(af.Data)
 
-	imgF := ryn.ImageFramePooled(pool, data, "image/png")
-	assertEqual(t, imgF.Kind, ryn.KindImage)
+	imgF := niro.ImageFramePooled(pool, data, "image/png")
+	assertEqual(t, imgF.Kind, niro.KindImage)
 	pool.Put(imgF.Data)
 
-	vf := ryn.VideoFramePooled(pool, data, "video/mp4")
-	assertEqual(t, vf.Kind, ryn.KindVideo)
+	vf := niro.VideoFramePooled(pool, data, "video/mp4")
+	assertEqual(t, vf.Kind, niro.KindVideo)
 	pool.Put(vf.Data)
 }
 
 func TestUsagePool(t *testing.T) {
 	t.Parallel()
-	u := ryn.GetUsage()
+	u := niro.GetUsage()
 	assertEqual(t, u.InputTokens, 0)
 	assertEqual(t, u.OutputTokens, 0)
 
 	u.InputTokens = 100
 	u.OutputTokens = 50
 	u.Detail = map[string]int{"cached": 10}
-	ryn.PutUsage(u)
+	niro.PutUsage(u)
 
 	// After put, getting a new one should be zeroed
-	u2 := ryn.GetUsage()
+	u2 := niro.GetUsage()
 	assertEqual(t, u2.InputTokens, 0)
 	assertTrue(t, u2.Detail == nil)
-	ryn.PutUsage(u2)
+	niro.PutUsage(u2)
 }
 
 func TestResponseMetaPool(t *testing.T) {
 	t.Parallel()
-	m := ryn.GetResponseMeta()
+	m := niro.GetResponseMeta()
 	assertEqual(t, m.Model, "")
 	assertEqual(t, m.ID, "")
 
 	m.Model = "gpt-4o"
 	m.ProviderMeta = map[string]any{"x": 1}
-	ryn.PutResponseMeta(m)
+	niro.PutResponseMeta(m)
 
-	m2 := ryn.GetResponseMeta()
+	m2 := niro.GetResponseMeta()
 	assertEqual(t, m2.Model, "")
 	assertTrue(t, m2.ProviderMeta == nil)
-	ryn.PutResponseMeta(m2)
+	niro.PutResponseMeta(m2)
 }
 
 func TestUsageReset(t *testing.T) {
 	t.Parallel()
-	u := ryn.Usage{
+	u := niro.Usage{
 		InputTokens:  100,
 		OutputTokens: 50,
 		TotalTokens:  150,
@@ -126,11 +126,11 @@ func TestUsageReset(t *testing.T) {
 func TestPutUsageNil(t *testing.T) {
 	t.Parallel()
 	// PutUsage(nil) should be a no-op and not panic.
-	ryn.PutUsage(nil)
+	niro.PutUsage(nil)
 }
 
 func TestPutResponseMetaNil(t *testing.T) {
 	t.Parallel()
 	// PutResponseMeta(nil) should be a no-op and not panic.
-	ryn.PutResponseMeta(nil)
+	niro.PutResponseMeta(nil)
 }

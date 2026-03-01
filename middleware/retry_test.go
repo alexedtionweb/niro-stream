@@ -14,25 +14,25 @@ func TestRetryProvider(t *testing.T) {
 	ctx := context.Background()
 
 	attempts := 0
-	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+	mock := niro.ProviderFunc(func(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
 		attempts++
 		if attempts < 3 {
-			return nil, ryn.NewError(ryn.ErrCodeRateLimited, "too fast")
+			return nil, niro.NewError(niro.ErrCodeRateLimited, "too fast")
 		}
-		return ryn.StreamFromSlice([]ryn.Frame{ryn.TextFrame("ok")}), nil
+		return niro.StreamFromSlice([]niro.Frame{niro.TextFrame("ok")}), nil
 	})
 
 	config := middleware.RetryConfig{
 		MaxAttempts: 5,
 		Backoff:     middleware.ConstantBackoff{Duration: 5 * time.Millisecond},
-		ShouldRetry: ryn.IsRetryable,
+		ShouldRetry: niro.IsRetryable,
 	}
 
 	provider := middleware.NewRetryProvider(mock, config)
-	stream, err := provider.Generate(ctx, &ryn.Request{Messages: []ryn.Message{ryn.UserText("test")}})
+	stream, err := provider.Generate(ctx, &niro.Request{Messages: []niro.Message{niro.UserText("test")}})
 
 	assertNoError(t, err)
-	text, _ := ryn.CollectText(ctx, stream)
+	text, _ := niro.CollectText(ctx, stream)
 	assertEqual(t, text, "ok")
 	assertEqual(t, attempts, 3)
 }
@@ -44,9 +44,9 @@ func TestWrapWithSmartRetrySkipsWhenProviderRetries(t *testing.T) {
 	attempts := 0
 	p := &retryHintProviderMock{
 		handlesRetries: true,
-		fn: func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+		fn: func(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
 			attempts++
-			return nil, ryn.NewError(ryn.ErrCodeRateLimited, "rate limited")
+			return nil, niro.NewError(niro.ErrCodeRateLimited, "rate limited")
 		},
 	}
 
@@ -55,7 +55,7 @@ func TestWrapWithSmartRetrySkipsWhenProviderRetries(t *testing.T) {
 	cfg.Backoff = middleware.ConstantBackoff{Duration: time.Millisecond}
 
 	wrapped := middleware.WrapWithSmartRetry(p, cfg)
-	_, _ = wrapped.Generate(ctx, &ryn.Request{Messages: []ryn.Message{ryn.UserText("hi")}})
+	_, _ = wrapped.Generate(ctx, &niro.Request{Messages: []niro.Message{niro.UserText("hi")}})
 
 	// Should not add another retry layer when provider says SDK retries internally.
 	assertEqual(t, attempts, 1)
@@ -119,8 +119,8 @@ func TestNewRetryProviderNilDefaults(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 
-	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
-		return ryn.StreamFromSlice([]ryn.Frame{ryn.TextFrame("ok")}), nil
+	mock := niro.ProviderFunc(func(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
+		return niro.StreamFromSlice([]niro.Frame{niro.TextFrame("ok")}), nil
 	})
 
 	// Zero/nil values → defaults fill in: MaxAttempts=3, ExponentialBackoff, IsRetryable.
@@ -131,9 +131,9 @@ func TestNewRetryProviderNilDefaults(t *testing.T) {
 	}
 
 	provider := middleware.NewRetryProvider(mock, config)
-	stream, err := provider.Generate(ctx, &ryn.Request{Messages: []ryn.Message{ryn.UserText("test")}})
+	stream, err := provider.Generate(ctx, &niro.Request{Messages: []niro.Message{niro.UserText("test")}})
 	assertNoError(t, err)
-	text, _ := ryn.CollectText(ctx, stream)
+	text, _ := niro.CollectText(ctx, stream)
 	assertEqual(t, text, "ok")
 }
 
@@ -142,19 +142,19 @@ func TestRetryNonRetryableError(t *testing.T) {
 	ctx := context.Background()
 
 	calls := 0
-	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+	mock := niro.ProviderFunc(func(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
 		calls++
-		return nil, ryn.NewError(ryn.ErrCodeInvalidRequest, "bad request")
+		return nil, niro.NewError(niro.ErrCodeInvalidRequest, "bad request")
 	})
 
 	config := middleware.RetryConfig{
 		MaxAttempts: 5,
 		Backoff:     middleware.ConstantBackoff{Duration: time.Millisecond},
-		ShouldRetry: ryn.IsRetryable,
+		ShouldRetry: niro.IsRetryable,
 	}
 
 	provider := middleware.NewRetryProvider(mock, config)
-	_, err := provider.Generate(ctx, &ryn.Request{Messages: []ryn.Message{ryn.UserText("test")}})
+	_, err := provider.Generate(ctx, &niro.Request{Messages: []niro.Message{niro.UserText("test")}})
 	assertErrorContains(t, err, "bad request")
 	// Should not retry a non-retryable error.
 	assertEqual(t, calls, 1)
@@ -167,27 +167,27 @@ func TestRetryOnRetryCallback(t *testing.T) {
 	callbackCount := 0
 	attempts := 0
 
-	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+	mock := niro.ProviderFunc(func(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
 		attempts++
 		if attempts < 3 {
-			return nil, ryn.NewError(ryn.ErrCodeRateLimited, "rate limited")
+			return nil, niro.NewError(niro.ErrCodeRateLimited, "rate limited")
 		}
-		return ryn.StreamFromSlice([]ryn.Frame{ryn.TextFrame("ok")}), nil
+		return niro.StreamFromSlice([]niro.Frame{niro.TextFrame("ok")}), nil
 	})
 
 	config := middleware.RetryConfig{
 		MaxAttempts: 5,
 		Backoff:     middleware.ConstantBackoff{Duration: time.Millisecond},
-		ShouldRetry: ryn.IsRetryable,
+		ShouldRetry: niro.IsRetryable,
 		OnRetry: func(attempt int, err error) {
 			callbackCount++
 		},
 	}
 
 	provider := middleware.NewRetryProvider(mock, config)
-	stream, err := provider.Generate(ctx, &ryn.Request{Messages: []ryn.Message{ryn.UserText("test")}})
+	stream, err := provider.Generate(ctx, &niro.Request{Messages: []niro.Message{niro.UserText("test")}})
 	assertNoError(t, err)
-	ryn.CollectText(ctx, stream)
+	niro.CollectText(ctx, stream)
 
 	// Two failures before success → callback called twice.
 	assertEqual(t, callbackCount, 2)
@@ -198,19 +198,19 @@ func TestRetryContextCancelledDuringBackoff(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 
-	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+	mock := niro.ProviderFunc(func(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
 		cancel() // cancel immediately after first attempt
-		return nil, ryn.NewError(ryn.ErrCodeRateLimited, "rate limited")
+		return nil, niro.NewError(niro.ErrCodeRateLimited, "rate limited")
 	})
 
 	config := middleware.RetryConfig{
 		MaxAttempts: 5,
 		Backoff:     middleware.ConstantBackoff{Duration: time.Hour}, // very long delay
-		ShouldRetry: ryn.IsRetryable,
+		ShouldRetry: niro.IsRetryable,
 	}
 
 	provider := middleware.NewRetryProvider(mock, config)
-	_, err := provider.Generate(ctx, &ryn.Request{Messages: []ryn.Message{ryn.UserText("test")}})
+	_, err := provider.Generate(ctx, &niro.Request{Messages: []niro.Message{niro.UserText("test")}})
 	assertErrorContains(t, err, "cancel")
 }
 
@@ -219,19 +219,19 @@ func TestRetryExhaustsAllAttempts(t *testing.T) {
 	ctx := context.Background()
 
 	calls := 0
-	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+	mock := niro.ProviderFunc(func(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
 		calls++
-		return nil, ryn.NewError(ryn.ErrCodeRateLimited, "always fails")
+		return nil, niro.NewError(niro.ErrCodeRateLimited, "always fails")
 	})
 
 	config := middleware.RetryConfig{
 		MaxAttempts: 3,
 		Backoff:     middleware.ConstantBackoff{Duration: time.Millisecond},
-		ShouldRetry: ryn.IsRetryable,
+		ShouldRetry: niro.IsRetryable,
 	}
 
 	provider := middleware.NewRetryProvider(mock, config)
-	_, err := provider.Generate(ctx, &ryn.Request{Messages: []ryn.Message{ryn.UserText("test")}})
+	_, err := provider.Generate(ctx, &niro.Request{Messages: []niro.Message{niro.UserText("test")}})
 	assertErrorContains(t, err, "attempts")
 	assertEqual(t, calls, 3)
 }
@@ -257,17 +257,17 @@ func TestRetryContextPreCancelled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // already cancelled before any attempt
 
-	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
-		return ryn.StreamFromSlice([]ryn.Frame{ryn.TextFrame("ok")}), nil
+	mock := niro.ProviderFunc(func(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
+		return niro.StreamFromSlice([]niro.Frame{niro.TextFrame("ok")}), nil
 	})
 
 	config := middleware.RetryConfig{
 		MaxAttempts: 3,
 		Backoff:     middleware.ConstantBackoff{Duration: time.Millisecond},
-		ShouldRetry: ryn.IsRetryable,
+		ShouldRetry: niro.IsRetryable,
 	}
 
 	provider := middleware.NewRetryProvider(mock, config)
-	_, err := provider.Generate(ctx, &ryn.Request{Messages: []ryn.Message{ryn.UserText("test")}})
+	_, err := provider.Generate(ctx, &niro.Request{Messages: []niro.Message{niro.UserText("test")}})
 	assertErrorContains(t, err, "cancel")
 }

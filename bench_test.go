@@ -1,4 +1,4 @@
-package ryn_test
+package niro_test
 
 import (
 	"context"
@@ -20,7 +20,7 @@ import (
 func BenchmarkTextFrame(b *testing.B) {
 	b.ReportAllocs()
 	for b.Loop() {
-		_ = ryn.TextFrame("token")
+		_ = niro.TextFrame("token")
 	}
 }
 
@@ -28,23 +28,23 @@ func BenchmarkAudioFrame(b *testing.B) {
 	data := make([]byte, 960) // 20ms 48kHz mono PCM
 	b.ReportAllocs()
 	for b.Loop() {
-		_ = ryn.AudioFrame(data, "audio/pcm")
+		_ = niro.AudioFrame(data, "audio/pcm")
 	}
 }
 
 func BenchmarkToolCallFrame(b *testing.B) {
-	tc := &ryn.ToolCall{ID: "call_1", Name: "get_weather", Args: json.RawMessage(`{"city":"NYC"}`)}
+	tc := &niro.ToolCall{ID: "call_1", Name: "get_weather", Args: json.RawMessage(`{"city":"NYC"}`)}
 	b.ReportAllocs()
 	for b.Loop() {
-		_ = ryn.ToolCallFrame(tc)
+		_ = niro.ToolCallFrame(tc)
 	}
 }
 
 func BenchmarkUsageFrame(b *testing.B) {
-	u := &ryn.Usage{InputTokens: 100, OutputTokens: 200, TotalTokens: 300}
+	u := &niro.Usage{InputTokens: 100, OutputTokens: 200, TotalTokens: 300}
 	b.ReportAllocs()
 	for b.Loop() {
-		_ = ryn.UsageFrame(u)
+		_ = niro.UsageFrame(u)
 	}
 }
 
@@ -52,12 +52,12 @@ func BenchmarkUsageFrame(b *testing.B) {
 
 func BenchmarkStreamEmitConsume(b *testing.B) {
 	ctx := context.Background()
-	f := ryn.TextFrame("tok")
+	f := niro.TextFrame("tok")
 	b.ReportAllocs()
 	b.ResetTimer()
 
 	for b.Loop() {
-		s, e := ryn.NewStream(64)
+		s, e := niro.NewStream(64)
 		go func() {
 			defer e.Close()
 			for range 100 {
@@ -71,12 +71,12 @@ func BenchmarkStreamEmitConsume(b *testing.B) {
 
 func BenchmarkStreamUnbuffered(b *testing.B) {
 	ctx := context.Background()
-	f := ryn.TextFrame("tok")
+	f := niro.TextFrame("tok")
 	b.ReportAllocs()
 	b.ResetTimer()
 
 	for b.Loop() {
-		s, e := ryn.NewStream(0)
+		s, e := niro.NewStream(0)
 		go func() {
 			defer e.Close()
 			for range 100 {
@@ -92,49 +92,49 @@ func BenchmarkStreamUnbuffered(b *testing.B) {
 
 func BenchmarkCollect(b *testing.B) {
 	ctx := context.Background()
-	frames := make([]ryn.Frame, 500)
+	frames := make([]niro.Frame, 500)
 	for i := range frames {
-		frames[i] = ryn.TextFrame("tok")
+		frames[i] = niro.TextFrame("tok")
 	}
 	b.ReportAllocs()
 	b.ResetTimer()
 
 	for b.Loop() {
-		s := ryn.StreamFromSlice(frames)
-		_, _ = ryn.Collect(ctx, s)
+		s := niro.StreamFromSlice(frames)
+		_, _ = niro.Collect(ctx, s)
 	}
 }
 
 func BenchmarkCollectText(b *testing.B) {
 	ctx := context.Background()
-	frames := make([]ryn.Frame, 500)
+	frames := make([]niro.Frame, 500)
 	for i := range frames {
-		frames[i] = ryn.TextFrame("hello")
+		frames[i] = niro.TextFrame("hello")
 	}
 	b.ReportAllocs()
 	b.ResetTimer()
 
 	for b.Loop() {
-		s := ryn.StreamFromSlice(frames)
-		_, _ = ryn.CollectText(ctx, s)
+		s := niro.StreamFromSlice(frames)
+		_, _ = niro.CollectText(ctx, s)
 	}
 }
 
 func BenchmarkStreamFromSlice(b *testing.B) {
-	frames := make([]ryn.Frame, 100)
+	frames := make([]niro.Frame, 100)
 	for i := range frames {
-		frames[i] = ryn.TextFrame("x")
+		frames[i] = niro.TextFrame("x")
 	}
 	b.ReportAllocs()
 	for b.Loop() {
-		_ = ryn.StreamFromSlice(frames)
+		_ = niro.StreamFromSlice(frames)
 	}
 }
 
 // ─── Usage Accumulation ─────────────────────────────────────
 
 func BenchmarkUsageAdd(b *testing.B) {
-	other := &ryn.Usage{
+	other := &niro.Usage{
 		InputTokens:  50,
 		OutputTokens: 100,
 		TotalTokens:  150,
@@ -142,7 +142,7 @@ func BenchmarkUsageAdd(b *testing.B) {
 	}
 	b.ReportAllocs()
 	for b.Loop() {
-		u := ryn.Usage{}
+		u := niro.Usage{}
 		u.Add(other)
 	}
 }
@@ -150,12 +150,12 @@ func BenchmarkUsageAdd(b *testing.B) {
 func BenchmarkUsageAutoAccumulate(b *testing.B) {
 	// Stream.Next silently accumulates KindUsage frames
 	ctx := context.Background()
-	frames := make([]ryn.Frame, 0, 110)
+	frames := make([]niro.Frame, 0, 110)
 	for range 100 {
-		frames = append(frames, ryn.TextFrame("tok"))
+		frames = append(frames, niro.TextFrame("tok"))
 	}
 	for range 10 {
-		frames = append(frames, ryn.UsageFrame(&ryn.Usage{
+		frames = append(frames, niro.UsageFrame(&niro.Usage{
 			InputTokens: 10, OutputTokens: 5, TotalTokens: 15,
 		}))
 	}
@@ -163,7 +163,7 @@ func BenchmarkUsageAutoAccumulate(b *testing.B) {
 	b.ResetTimer()
 
 	for b.Loop() {
-		s := ryn.StreamFromSlice(frames)
+		s := niro.StreamFromSlice(frames)
 		for s.Next(ctx) {
 		}
 		_ = s.Usage()
@@ -174,16 +174,16 @@ func BenchmarkUsageAutoAccumulate(b *testing.B) {
 
 func BenchmarkPipelinePassthrough(b *testing.B) {
 	ctx := context.Background()
-	frames := make([]ryn.Frame, 200)
+	frames := make([]niro.Frame, 200)
 	for i := range frames {
-		frames[i] = ryn.TextFrame("tok")
+		frames[i] = niro.TextFrame("tok")
 	}
 	p := pipe.New(pipe.PassThrough())
 	b.ReportAllocs()
 	b.ResetTimer()
 
 	for b.Loop() {
-		in := ryn.StreamFromSlice(frames)
+		in := niro.StreamFromSlice(frames)
 		out := p.Run(ctx, in)
 		for out.Next(ctx) {
 		}
@@ -192,12 +192,12 @@ func BenchmarkPipelinePassthrough(b *testing.B) {
 
 func BenchmarkPipelineFilter(b *testing.B) {
 	ctx := context.Background()
-	frames := make([]ryn.Frame, 200)
+	frames := make([]niro.Frame, 200)
 	for i := range frames {
 		if i%2 == 0 {
-			frames[i] = ryn.TextFrame("tok")
+			frames[i] = niro.TextFrame("tok")
 		} else {
-			frames[i] = ryn.ControlFrame(ryn.SignalFlush)
+			frames[i] = niro.ControlFrame(niro.SignalFlush)
 		}
 	}
 	p := pipe.New(pipe.TextOnly())
@@ -205,7 +205,7 @@ func BenchmarkPipelineFilter(b *testing.B) {
 	b.ResetTimer()
 
 	for b.Loop() {
-		in := ryn.StreamFromSlice(frames)
+		in := niro.StreamFromSlice(frames)
 		out := p.Run(ctx, in)
 		for out.Next(ctx) {
 		}
@@ -214,12 +214,12 @@ func BenchmarkPipelineFilter(b *testing.B) {
 
 func BenchmarkPipelineMap(b *testing.B) {
 	ctx := context.Background()
-	frames := make([]ryn.Frame, 200)
+	frames := make([]niro.Frame, 200)
 	for i := range frames {
-		frames[i] = ryn.TextFrame("tok")
+		frames[i] = niro.TextFrame("tok")
 	}
-	upper := pipe.Map(func(f ryn.Frame) ryn.Frame {
-		if f.Kind == ryn.KindText {
+	upper := pipe.Map(func(f niro.Frame) niro.Frame {
+		if f.Kind == niro.KindText {
 			f.Text = "[" + f.Text + "]"
 		}
 		return f
@@ -229,7 +229,7 @@ func BenchmarkPipelineMap(b *testing.B) {
 	b.ResetTimer()
 
 	for b.Loop() {
-		in := ryn.StreamFromSlice(frames)
+		in := niro.StreamFromSlice(frames)
 		out := p.Run(ctx, in)
 		for out.Next(ctx) {
 		}
@@ -238,16 +238,16 @@ func BenchmarkPipelineMap(b *testing.B) {
 
 func BenchmarkPipelineAccumulate(b *testing.B) {
 	ctx := context.Background()
-	frames := make([]ryn.Frame, 500)
+	frames := make([]niro.Frame, 500)
 	for i := range frames {
-		frames[i] = ryn.TextFrame("a")
+		frames[i] = niro.TextFrame("a")
 	}
 	p := pipe.New(pipe.Accumulate())
 	b.ReportAllocs()
 	b.ResetTimer()
 
 	for b.Loop() {
-		in := ryn.StreamFromSlice(frames)
+		in := niro.StreamFromSlice(frames)
 		out := p.Run(ctx, in)
 		for out.Next(ctx) {
 		}
@@ -256,20 +256,20 @@ func BenchmarkPipelineAccumulate(b *testing.B) {
 
 func BenchmarkPipelineThreeStages(b *testing.B) {
 	ctx := context.Background()
-	frames := make([]ryn.Frame, 200)
+	frames := make([]niro.Frame, 200)
 	for i := range frames {
-		frames[i] = ryn.TextFrame("tok")
+		frames[i] = niro.TextFrame("tok")
 	}
 	p := pipe.New(
 		pipe.PassThrough(),
-		pipe.Map(func(f ryn.Frame) ryn.Frame { return f }),
+		pipe.Map(func(f niro.Frame) niro.Frame { return f }),
 		pipe.PassThrough(),
 	)
 	b.ReportAllocs()
 	b.ResetTimer()
 
 	for b.Loop() {
-		in := ryn.StreamFromSlice(frames)
+		in := niro.StreamFromSlice(frames)
 		out := p.Run(ctx, in)
 		for out.Next(ctx) {
 		}
@@ -280,19 +280,19 @@ func BenchmarkPipelineThreeStages(b *testing.B) {
 
 func BenchmarkForward(b *testing.B) {
 	ctx := context.Background()
-	frames := make([]ryn.Frame, 200)
+	frames := make([]niro.Frame, 200)
 	for i := range frames {
-		frames[i] = ryn.TextFrame("tok")
+		frames[i] = niro.TextFrame("tok")
 	}
 	b.ReportAllocs()
 	b.ResetTimer()
 
 	for b.Loop() {
-		in := ryn.StreamFromSlice(frames)
-		out, e := ryn.NewStream(64)
+		in := niro.StreamFromSlice(frames)
+		out, e := niro.NewStream(64)
 		go func() {
 			defer e.Close()
-			_ = ryn.Forward(ctx, in, e)
+			_ = niro.Forward(ctx, in, e)
 		}()
 		for out.Next(ctx) {
 		}
@@ -303,13 +303,13 @@ func BenchmarkForward(b *testing.B) {
 
 func BenchmarkFan(b *testing.B) {
 	ctx := context.Background()
-	makeGen := func(n int) func(context.Context) (*ryn.Stream, error) {
-		return func(_ context.Context) (*ryn.Stream, error) {
-			frames := make([]ryn.Frame, n)
+	makeGen := func(n int) func(context.Context) (*niro.Stream, error) {
+		return func(_ context.Context) (*niro.Stream, error) {
+			frames := make([]niro.Frame, n)
 			for i := range frames {
-				frames[i] = ryn.TextFrame("t")
+				frames[i] = niro.TextFrame("t")
 			}
-			return ryn.StreamFromSlice(frames), nil
+			return niro.StreamFromSlice(frames), nil
 		}
 	}
 	b.ReportAllocs()
@@ -324,13 +324,13 @@ func BenchmarkFan(b *testing.B) {
 
 func BenchmarkRace(b *testing.B) {
 	ctx := context.Background()
-	makeGen := func(n int) func(context.Context) (*ryn.Stream, error) {
-		return func(_ context.Context) (*ryn.Stream, error) {
-			frames := make([]ryn.Frame, n)
+	makeGen := func(n int) func(context.Context) (*niro.Stream, error) {
+		return func(_ context.Context) (*niro.Stream, error) {
+			frames := make([]niro.Frame, n)
 			for i := range frames {
-				frames[i] = ryn.TextFrame("t")
+				frames[i] = niro.TextFrame("t")
 			}
-			return ryn.StreamFromSlice(frames), nil
+			return niro.StreamFromSlice(frames), nil
 		}
 	}
 	b.ReportAllocs()
@@ -343,9 +343,9 @@ func BenchmarkRace(b *testing.B) {
 
 func BenchmarkSequence(b *testing.B) {
 	ctx := context.Background()
-	step := func(_ context.Context, input string) (*ryn.Stream, error) {
-		frames := []ryn.Frame{ryn.TextFrame(input + " step")}
-		return ryn.StreamFromSlice(frames), nil
+	step := func(_ context.Context, input string) (*niro.Stream, error) {
+		frames := []niro.Frame{niro.TextFrame(input + " step")}
+		return niro.StreamFromSlice(frames), nil
 	}
 	b.ReportAllocs()
 	b.ResetTimer()
@@ -362,7 +362,7 @@ func BenchmarkSequence(b *testing.B) {
 func BenchmarkUserText(b *testing.B) {
 	b.ReportAllocs()
 	for b.Loop() {
-		_ = ryn.UserText("hello world")
+		_ = niro.UserText("hello world")
 	}
 }
 
@@ -370,20 +370,20 @@ func BenchmarkMultiPartMessage(b *testing.B) {
 	img := make([]byte, 1024)
 	b.ReportAllocs()
 	for b.Loop() {
-		_ = ryn.Multi(ryn.RoleUser,
-			ryn.TextPart("describe this image"),
-			ryn.ImagePart(img, "image/png"),
+		_ = niro.Multi(niro.RoleUser,
+			niro.TextPart("describe this image"),
+			niro.ImagePart(img, "image/png"),
 		)
 	}
 }
 
 func BenchmarkEffectiveMessages(b *testing.B) {
-	req := &ryn.Request{
+	req := &niro.Request{
 		SystemPrompt: "You are helpful.",
-		Messages: []ryn.Message{
-			ryn.UserText("hello"),
-			ryn.AssistantText("hi"),
-			ryn.UserText("how are you?"),
+		Messages: []niro.Message{
+			niro.UserText("hello"),
+			niro.AssistantText("hi"),
+			niro.UserText("how are you?"),
 		},
 	}
 	b.ReportAllocs()
@@ -397,7 +397,7 @@ func BenchmarkEffectiveMessages(b *testing.B) {
 func BenchmarkHooksComposite(b *testing.B) {
 	h := hook.Compose(hook.NoOpHook{}, hook.NoOpHook{}, hook.NoOpHook{})
 	ctx := context.Background()
-	f := ryn.TextFrame("tok")
+	f := niro.TextFrame("tok")
 	b.ReportAllocs()
 	b.ResetTimer()
 
@@ -422,16 +422,16 @@ func BenchmarkHookOnGenerateStart(b *testing.B) {
 
 func BenchmarkRuntimeGenerate(b *testing.B) {
 	ctx := context.Background()
-	mock := ryn.ProviderFunc(func(_ context.Context, _ *ryn.Request) (*ryn.Stream, error) {
-		frames := make([]ryn.Frame, 50)
+	mock := niro.ProviderFunc(func(_ context.Context, _ *niro.Request) (*niro.Stream, error) {
+		frames := make([]niro.Frame, 50)
 		for i := range frames {
-			frames[i] = ryn.TextFrame("tok")
+			frames[i] = niro.TextFrame("tok")
 		}
-		s := ryn.StreamFromSlice(frames)
+		s := niro.StreamFromSlice(frames)
 		return s, nil
 	})
 	rt := runtime.New(mock)
-	req := &ryn.Request{Messages: []ryn.Message{ryn.UserText("hi")}}
+	req := &niro.Request{Messages: []niro.Message{niro.UserText("hi")}}
 	b.ReportAllocs()
 	b.ResetTimer()
 
@@ -444,15 +444,15 @@ func BenchmarkRuntimeGenerate(b *testing.B) {
 
 func BenchmarkRuntimeWithHook(b *testing.B) {
 	ctx := context.Background()
-	mock := ryn.ProviderFunc(func(_ context.Context, _ *ryn.Request) (*ryn.Stream, error) {
-		frames := make([]ryn.Frame, 50)
+	mock := niro.ProviderFunc(func(_ context.Context, _ *niro.Request) (*niro.Stream, error) {
+		frames := make([]niro.Frame, 50)
 		for i := range frames {
-			frames[i] = ryn.TextFrame("tok")
+			frames[i] = niro.TextFrame("tok")
 		}
-		return ryn.StreamFromSlice(frames), nil
+		return niro.StreamFromSlice(frames), nil
 	})
 	rt := runtime.New(mock).WithHook(hook.NoOpHook{})
-	req := &ryn.Request{Messages: []ryn.Message{ryn.UserText("hi")}}
+	req := &niro.Request{Messages: []niro.Message{niro.UserText("hi")}}
 	b.ReportAllocs()
 	b.ResetTimer()
 
@@ -465,16 +465,16 @@ func BenchmarkRuntimeWithHook(b *testing.B) {
 
 func BenchmarkRuntimeWithPipeline(b *testing.B) {
 	ctx := context.Background()
-	mock := ryn.ProviderFunc(func(_ context.Context, _ *ryn.Request) (*ryn.Stream, error) {
-		frames := make([]ryn.Frame, 50)
+	mock := niro.ProviderFunc(func(_ context.Context, _ *niro.Request) (*niro.Stream, error) {
+		frames := make([]niro.Frame, 50)
 		for i := range frames {
-			frames[i] = ryn.TextFrame("tok")
+			frames[i] = niro.TextFrame("tok")
 		}
-		return ryn.StreamFromSlice(frames), nil
+		return niro.StreamFromSlice(frames), nil
 	})
-	p := pipe.New(pipe.PassThrough(), pipe.Map(func(f ryn.Frame) ryn.Frame { return f }))
+	p := pipe.New(pipe.PassThrough(), pipe.Map(func(f niro.Frame) niro.Frame { return f }))
 	rt := runtime.New(mock).WithPipeline(p)
-	req := &ryn.Request{Messages: []ryn.Message{ryn.UserText("hi")}}
+	req := &niro.Request{Messages: []niro.Message{niro.UserText("hi")}}
 	b.ReportAllocs()
 	b.ResetTimer()
 
@@ -487,19 +487,19 @@ func BenchmarkRuntimeWithPipeline(b *testing.B) {
 
 func BenchmarkRuntimeFullStack(b *testing.B) {
 	ctx := context.Background()
-	mock := ryn.ProviderFunc(func(_ context.Context, _ *ryn.Request) (*ryn.Stream, error) {
-		frames := make([]ryn.Frame, 50)
+	mock := niro.ProviderFunc(func(_ context.Context, _ *niro.Request) (*niro.Stream, error) {
+		frames := make([]niro.Frame, 50)
 		for i := range frames {
-			frames[i] = ryn.TextFrame("tok")
+			frames[i] = niro.TextFrame("tok")
 		}
-		frames = append(frames, ryn.UsageFrame(&ryn.Usage{InputTokens: 10, OutputTokens: 50, TotalTokens: 60}))
-		return ryn.StreamFromSlice(frames), nil
+		frames = append(frames, niro.UsageFrame(&niro.Usage{InputTokens: 10, OutputTokens: 50, TotalTokens: 60}))
+		return niro.StreamFromSlice(frames), nil
 	})
 	p := pipe.New(pipe.PassThrough())
 	rt := runtime.New(mock).WithHook(hook.NoOpHook{}).WithPipeline(p)
-	req := &ryn.Request{
+	req := &niro.Request{
 		SystemPrompt: "You are helpful.",
-		Messages:     []ryn.Message{ryn.UserText("hi")},
+		Messages:     []niro.Message{niro.UserText("hi")},
 	}
 	b.ReportAllocs()
 	b.ResetTimer()
@@ -514,7 +514,7 @@ func BenchmarkRuntimeFullStack(b *testing.B) {
 // ─── BytePool ───────────────────────────────────────────────
 
 func BenchmarkBytePoolSmall(b *testing.B) {
-	pool := ryn.NewBytePool()
+	pool := niro.NewBytePool()
 	b.ReportAllocs()
 	for b.Loop() {
 		buf := pool.Get(960) // typical 20ms PCM audio chunk
@@ -523,7 +523,7 @@ func BenchmarkBytePoolSmall(b *testing.B) {
 }
 
 func BenchmarkBytePoolMedium(b *testing.B) {
-	pool := ryn.NewBytePool()
+	pool := niro.NewBytePool()
 	b.ReportAllocs()
 	for b.Loop() {
 		buf := pool.Get(32 * 1024) // 32KB image tile
@@ -532,7 +532,7 @@ func BenchmarkBytePoolMedium(b *testing.B) {
 }
 
 func BenchmarkBytePoolLarge(b *testing.B) {
-	pool := ryn.NewBytePool()
+	pool := niro.NewBytePool()
 	b.ReportAllocs()
 	for b.Loop() {
 		buf := pool.Get(512 * 1024) // 512KB video frame
@@ -541,7 +541,7 @@ func BenchmarkBytePoolLarge(b *testing.B) {
 }
 
 func BenchmarkBytePoolParallel(b *testing.B) {
-	pool := ryn.NewBytePool()
+	pool := niro.NewBytePool()
 	b.ReportAllocs()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
@@ -552,11 +552,11 @@ func BenchmarkBytePoolParallel(b *testing.B) {
 }
 
 func BenchmarkPooledAudioFrame(b *testing.B) {
-	pool := ryn.NewBytePool()
+	pool := niro.NewBytePool()
 	data := make([]byte, 960)
 	b.ReportAllocs()
 	for b.Loop() {
-		f := ryn.AudioFramePooled(pool, data, "audio/pcm")
+		f := niro.AudioFramePooled(pool, data, "audio/pcm")
 		pool.Put(f.Data)
 	}
 }
@@ -566,18 +566,18 @@ func BenchmarkPooledAudioFrame(b *testing.B) {
 func BenchmarkUsagePool(b *testing.B) {
 	b.ReportAllocs()
 	for b.Loop() {
-		u := ryn.GetUsage()
+		u := niro.GetUsage()
 		u.InputTokens = 100
-		ryn.PutUsage(u)
+		niro.PutUsage(u)
 	}
 }
 
 func BenchmarkResponseMetaPool(b *testing.B) {
 	b.ReportAllocs()
 	for b.Loop() {
-		m := ryn.GetResponseMeta()
+		m := niro.GetResponseMeta()
 		m.Model = "gpt-4o"
-		ryn.PutResponseMeta(m)
+		niro.PutResponseMeta(m)
 	}
 }
 
@@ -585,44 +585,44 @@ func BenchmarkResponseMetaPool(b *testing.B) {
 
 func BenchmarkCacheHit(b *testing.B) {
 	ctx := context.Background()
-	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
-		return ryn.StreamFromSlice([]ryn.Frame{ryn.TextFrame("cached")}), nil
+	mock := niro.ProviderFunc(func(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
+		return niro.StreamFromSlice([]niro.Frame{niro.TextFrame("cached")}), nil
 	})
 	c := middleware.NewCache(middleware.CacheOptions{MaxEntries: 10000})
 	provider := c.Wrap(mock)
-	req := &ryn.Request{Model: "bench", Messages: []ryn.Message{ryn.UserText("hello")}}
+	req := &niro.Request{Model: "bench", Messages: []niro.Message{niro.UserText("hello")}}
 
 	// Prime cache
 	s, _ := provider.Generate(ctx, req)
-	ryn.CollectText(ctx, s)
+	niro.CollectText(ctx, s)
 
 	b.ReportAllocs()
 	b.ResetTimer()
 	for b.Loop() {
 		s, _ := provider.Generate(ctx, req)
-		ryn.CollectText(ctx, s)
+		niro.CollectText(ctx, s)
 	}
 }
 
 func BenchmarkCacheHitParallel(b *testing.B) {
 	ctx := context.Background()
-	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
-		return ryn.StreamFromSlice([]ryn.Frame{ryn.TextFrame("cached")}), nil
+	mock := niro.ProviderFunc(func(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
+		return niro.StreamFromSlice([]niro.Frame{niro.TextFrame("cached")}), nil
 	})
 	c := middleware.NewCache(middleware.CacheOptions{MaxEntries: 10000})
 	provider := c.Wrap(mock)
-	req := &ryn.Request{Model: "bench", Messages: []ryn.Message{ryn.UserText("hello")}}
+	req := &niro.Request{Model: "bench", Messages: []niro.Message{niro.UserText("hello")}}
 
 	// Prime cache
 	s, _ := provider.Generate(ctx, req)
-	ryn.CollectText(ctx, s)
+	niro.CollectText(ctx, s)
 
 	b.ReportAllocs()
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
 			s, _ := provider.Generate(ctx, req)
-			ryn.CollectText(ctx, s)
+			niro.CollectText(ctx, s)
 		}
 	})
 }
@@ -631,7 +631,7 @@ func BenchmarkCacheHitParallel(b *testing.B) {
 
 func BenchmarkRegistryGet(b *testing.B) {
 	reg := registry.New()
-	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+	mock := niro.ProviderFunc(func(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
 		return nil, nil
 	})
 	reg.Register("openai", mock)
@@ -643,7 +643,7 @@ func BenchmarkRegistryGet(b *testing.B) {
 
 func BenchmarkRegistryGetParallel(b *testing.B) {
 	reg := registry.New()
-	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+	mock := niro.ProviderFunc(func(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
 		return nil, nil
 	})
 	reg.Register("openai", mock)
@@ -664,10 +664,10 @@ func BenchmarkGenerateStructured(b *testing.B) {
 		Age  int    `json:"age"`
 	}
 	schema := json.RawMessage(`{"type":"object","properties":{"name":{"type":"string"},"age":{"type":"integer"}},"required":["name","age"]}`)
-	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
-		return ryn.StreamFromSlice([]ryn.Frame{ryn.TextFrame(`{"name":"alice","age":30}`)}), nil
+	mock := niro.ProviderFunc(func(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
+		return niro.StreamFromSlice([]niro.Frame{niro.TextFrame(`{"name":"alice","age":30}`)}), nil
 	})
-	req := &ryn.Request{Messages: []ryn.Message{ryn.UserText("hi")}}
+	req := &niro.Request{Messages: []niro.Message{niro.UserText("hi")}}
 
 	b.ReportAllocs()
 	for b.Loop() {
@@ -682,16 +682,16 @@ func BenchmarkStreamStructured(b *testing.B) {
 		Age  int    `json:"age"`
 	}
 	schema := json.RawMessage(`{"type":"object","properties":{"name":{"type":"string"},"age":{"type":"integer"}},"required":["name","age"]}`)
-	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
-		s, e := ryn.NewStream(0)
+	mock := niro.ProviderFunc(func(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
+		s, e := niro.NewStream(0)
 		go func() {
 			defer e.Close()
-			_ = e.Emit(ctx, ryn.TextFrame(`{"name":"al`))
-			_ = e.Emit(ctx, ryn.TextFrame(`ice","age":30}`))
+			_ = e.Emit(ctx, niro.TextFrame(`{"name":"al`))
+			_ = e.Emit(ctx, niro.TextFrame(`ice","age":30}`))
 		}()
 		return s, nil
 	})
-	req := &ryn.Request{Messages: []ryn.Message{ryn.UserText("hi")}}
+	req := &niro.Request{Messages: []niro.Message{niro.UserText("hi")}}
 
 	b.ReportAllocs()
 	for b.Loop() {

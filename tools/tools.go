@@ -82,19 +82,19 @@ func NewToolLoopWithOptions(executor ToolExecutor, opts ToolStreamOptions) *Tool
 }
 
 // GenerateWithTools executes tool loops and preserves streaming output.
-func (tl *ToolLoop) GenerateWithTools(ctx context.Context, provider ryn.Provider, req *ryn.Request) (*ryn.Stream, error) {
+func (tl *ToolLoop) GenerateWithTools(ctx context.Context, provider niro.Provider, req *niro.Request) (*niro.Stream, error) {
 	if tl == nil || tl.executor == nil {
-		return nil, ryn.NewError(ryn.ErrCodeInvalidRequest, "tool executor is required")
+		return nil, niro.NewError(niro.ErrCodeInvalidRequest, "tool executor is required")
 	}
 	if req == nil {
-		return nil, ryn.NewError(ryn.ErrCodeInvalidRequest, "request is nil")
+		return nil, niro.NewError(niro.ErrCodeInvalidRequest, "request is nil")
 	}
 
 	buf := tl.opts.StreamBuffer
 	if buf <= 0 {
 		buf = 16
 	}
-	out, em := ryn.NewStream(buf)
+	out, em := niro.NewStream(buf)
 	go func() {
 		defer em.Close()
 		if err := tl.run(ctx, provider, req, em); err != nil {
@@ -104,11 +104,11 @@ func (tl *ToolLoop) GenerateWithTools(ctx context.Context, provider ryn.Provider
 	return out, nil
 }
 
-func (tl *ToolLoop) run(ctx context.Context, provider ryn.Provider, req *ryn.Request, out *ryn.Emitter) error {
+func (tl *ToolLoop) run(ctx context.Context, provider niro.Provider, req *niro.Request, out *niro.Emitter) error {
 	cur := *req
-	messages := append([]ryn.Message(nil), req.Messages...)
+	messages := append([]niro.Message(nil), req.Messages...)
 
-	var lastResp *ryn.ResponseMeta
+	var lastResp *niro.ResponseMeta
 	for round := 0; round < tl.opts.MaxRounds; round++ {
 		cur.Messages = messages
 
@@ -117,8 +117,8 @@ func (tl *ToolLoop) run(ctx context.Context, provider ryn.Provider, req *ryn.Req
 		// ToolChoiceRequired and func:name choices only make sense for round 0.
 		if round > 0 {
 			tc := cur.ToolChoice
-			if tc == ryn.ToolChoiceRequired || (len(tc) > 5 && tc[:5] == "func:") {
-				cur.ToolChoice = ryn.ToolChoiceAuto
+			if tc == niro.ToolChoiceRequired || (len(tc) > 5 && tc[:5] == "func:") {
+				cur.ToolChoice = niro.ToolChoiceAuto
 			}
 		}
 
@@ -128,7 +128,7 @@ func (tl *ToolLoop) run(ctx context.Context, provider ryn.Provider, req *ryn.Req
 		}
 
 		assistantText := make([]byte, 0, 512)
-		toolCalls := make([]ryn.ToolCall, 0, 2)
+		toolCalls := make([]niro.ToolCall, 0, 2)
 
 		// Parallel streaming dispatch: fire a goroutine for each tool call the
 		// moment its KindToolCall frame arrives — before the stream finishes.
@@ -139,20 +139,20 @@ func (tl *ToolLoop) run(ctx context.Context, provider ryn.Provider, req *ryn.Req
 		// goroutines fire early. Anthropic emits all tool calls after the last
 		// text token (SDK accumulator limitation), so the overlap is smaller
 		// but the goroutines still start before the stream channel closes.
-		var resultChans []chan ryn.ToolResult
+		var resultChans []chan niro.ToolResult
 
 		for stream.Next(ctx) {
 			f := stream.Frame()
-			if f.Kind == ryn.KindText {
+			if f.Kind == niro.KindText {
 				assistantText = append(assistantText, f.Text...)
 			}
-			if f.Kind == ryn.KindToolCall && f.Tool != nil {
+			if f.Kind == niro.KindToolCall && f.Tool != nil {
 				call := *f.Tool
 				toolCalls = append(toolCalls, call)
 				if tl.opts.Parallel {
-					ch := make(chan ryn.ToolResult, 1)
+					ch := make(chan niro.ToolResult, 1)
 					resultChans = append(resultChans, ch)
-					go func(c ryn.ToolCall) { ch <- tl.execOne(ctx, c) }(call)
+					go func(c niro.ToolCall) { ch <- tl.execOne(ctx, c) }(call)
 				}
 			}
 			if err := out.Emit(ctx, f); err != nil {
@@ -170,7 +170,7 @@ func (tl *ToolLoop) run(ctx context.Context, provider ryn.Provider, req *ryn.Req
 		// forwarded to out.Emit, so we must re-emit them explicitly here.
 		if u := stream.Usage(); u.InputTokens > 0 || u.OutputTokens > 0 || u.TotalTokens > 0 {
 			uCopy := u
-			if err := out.Emit(ctx, ryn.Frame{Kind: ryn.KindUsage, Usage: &uCopy}); err != nil {
+			if err := out.Emit(ctx, niro.Frame{Kind: niro.KindUsage, Usage: &uCopy}); err != nil {
 				return err
 			}
 		}
@@ -190,9 +190,9 @@ func (tl *ToolLoop) run(ctx context.Context, provider ryn.Provider, req *ryn.Req
 		// Collect tool results. Parallel mode drains the pre-fired channels;
 		// a ctx.Done() case here lets us abort immediately if the caller
 		// hangs up (e.g. barge-in on a voice call) without waiting for tools.
-		var results []ryn.ToolResult
+		var results []niro.ToolResult
 		if tl.opts.Parallel && len(resultChans) > 0 {
-			results = make([]ryn.ToolResult, len(resultChans))
+			results = make([]niro.ToolResult, len(resultChans))
 			for i, ch := range resultChans {
 				select {
 				case r := <-ch:
@@ -209,12 +209,12 @@ func (tl *ToolLoop) run(ctx context.Context, provider ryn.Provider, req *ryn.Req
 		// Anthropic requires every result for a single assistant turn to appear
 		// in one user-turn message. OpenAI and Bedrock providers split
 		// multi-part messages during encoding so they are unaffected.
-		toolMsgParts := make([]ryn.Part, 0, len(results))
+		toolMsgParts := make([]niro.Part, 0, len(results))
 		for i := range results {
 			tr := results[i]
-			toolMsgParts = append(toolMsgParts, ryn.Part{
-				Kind: ryn.KindToolResult,
-				Result: &ryn.ToolResult{
+			toolMsgParts = append(toolMsgParts, niro.Part{
+				Kind: niro.KindToolResult,
+				Result: &niro.ToolResult{
 					CallID:  tr.CallID,
 					Content: tr.Content,
 					IsError: tr.IsError,
@@ -222,38 +222,38 @@ func (tl *ToolLoop) run(ctx context.Context, provider ryn.Provider, req *ryn.Req
 			})
 			if tl.opts.EmitToolResults {
 				res := tr
-				if err := out.Emit(ctx, ryn.Frame{Kind: ryn.KindToolResult, Result: &res}); err != nil {
+				if err := out.Emit(ctx, niro.Frame{Kind: niro.KindToolResult, Result: &res}); err != nil {
 					return err
 				}
 			}
 		}
-		messages = append(messages, ryn.Message{Role: ryn.RoleTool, Parts: toolMsgParts})
+		messages = append(messages, niro.Message{Role: niro.RoleTool, Parts: toolMsgParts})
 	}
 
-	return ryn.NewErrorf(ryn.ErrCodeStreamError, "tool loop exceeded max rounds (%d)", tl.opts.MaxRounds)
+	return niro.NewErrorf(niro.ErrCodeStreamError, "tool loop exceeded max rounds (%d)", tl.opts.MaxRounds)
 }
 
-func assistantFromRound(text string, calls []ryn.ToolCall) ryn.Message {
-	parts := make([]ryn.Part, 0, 1+len(calls))
+func assistantFromRound(text string, calls []niro.ToolCall) niro.Message {
+	parts := make([]niro.Part, 0, 1+len(calls))
 	if text != "" {
-		parts = append(parts, ryn.Part{Kind: ryn.KindText, Text: text})
+		parts = append(parts, niro.Part{Kind: niro.KindText, Text: text})
 	}
 	for i := range calls {
 		call := calls[i]
-		parts = append(parts, ryn.Part{Kind: ryn.KindToolCall, Tool: &call})
+		parts = append(parts, niro.Part{Kind: niro.KindToolCall, Tool: &call})
 	}
-	return ryn.Message{Role: ryn.RoleAssistant, Parts: parts}
+	return niro.Message{Role: niro.RoleAssistant, Parts: parts}
 }
 
 // executeTools runs calls serially (the parallel path fires goroutines in run()).
 // It bails early on context cancellation so a cancelled caller (e.g. voice
 // barge-in) doesn't burn resources on tools that will be discarded.
-func (tl *ToolLoop) executeTools(ctx context.Context, calls []ryn.ToolCall) []ryn.ToolResult {
-	results := make([]ryn.ToolResult, len(calls))
+func (tl *ToolLoop) executeTools(ctx context.Context, calls []niro.ToolCall) []niro.ToolResult {
+	results := make([]niro.ToolResult, len(calls))
 	for i := range calls {
 		if err := ctx.Err(); err != nil {
 			for j := i; j < len(calls); j++ {
-				results[j] = ryn.ToolResult{
+				results[j] = niro.ToolResult{
 					CallID:  calls[j].ID,
 					Content: err.Error(),
 					IsError: true,
@@ -266,20 +266,20 @@ func (tl *ToolLoop) executeTools(ctx context.Context, calls []ryn.ToolCall) []ry
 	return results
 }
 
-func (tl *ToolLoop) execOne(ctx context.Context, call ryn.ToolCall) ryn.ToolResult {
+func (tl *ToolLoop) execOne(ctx context.Context, call niro.ToolCall) niro.ToolResult {
 	// HITL: approval gate runs outside the tool timeout so the human has the
 	// full outer context deadline to respond, not the tool execution window.
 	if tl.opts.Approver != nil {
 		decision, err := tl.opts.Approver.Approve(ctx, call)
 		if err != nil {
-			return ryn.ToolResult{CallID: call.ID, Content: "approval error: " + err.Error(), IsError: true}
+			return niro.ToolResult{CallID: call.ID, Content: "approval error: " + err.Error(), IsError: true}
 		}
 		if !decision.Approved {
 			reason := decision.Reason
 			if reason == "" {
 				reason = "tool call was not approved"
 			}
-			return ryn.ToolResult{CallID: call.ID, Content: reason, IsError: true}
+			return niro.ToolResult{CallID: call.ID, Content: reason, IsError: true}
 		}
 	}
 
@@ -292,19 +292,19 @@ func (tl *ToolLoop) execOne(ctx context.Context, call ryn.ToolCall) ryn.ToolResu
 
 	content, err := tl.executor.Execute(execCtx, call.Name, call.Args)
 	if err != nil {
-		return ryn.ToolResult{CallID: call.ID, Content: err.Error(), IsError: true}
+		return niro.ToolResult{CallID: call.ID, Content: err.Error(), IsError: true}
 	}
-	return ryn.ToolResult{CallID: call.ID, Content: content}
+	return niro.ToolResult{CallID: call.ID, Content: content}
 }
 
 // StreamWithToolHandling wraps a Provider and executes tool calls automatically.
 type StreamWithToolHandling struct {
-	provider ryn.Provider
+	provider niro.Provider
 	loop     *ToolLoop
 }
 
 // NewStreamWithToolHandling creates a provider that automatically executes tools.
-func NewStreamWithToolHandling(p ryn.Provider, executor ToolExecutor, maxRounds int) *StreamWithToolHandling {
+func NewStreamWithToolHandling(p niro.Provider, executor ToolExecutor, maxRounds int) *StreamWithToolHandling {
 	return &StreamWithToolHandling{
 		provider: p,
 		loop:     NewToolLoop(executor, maxRounds),
@@ -312,14 +312,14 @@ func NewStreamWithToolHandling(p ryn.Provider, executor ToolExecutor, maxRounds 
 }
 
 // NewStreamWithToolHandlingOptions creates a provider wrapper with full options.
-func NewStreamWithToolHandlingOptions(p ryn.Provider, executor ToolExecutor, opts ToolStreamOptions) *StreamWithToolHandling {
+func NewStreamWithToolHandlingOptions(p niro.Provider, executor ToolExecutor, opts ToolStreamOptions) *StreamWithToolHandling {
 	return &StreamWithToolHandling{
 		provider: p,
 		loop:     NewToolLoopWithOptions(executor, opts),
 	}
 }
 
-// Generate implements ryn.Provider and preserves streaming while handling tools.
-func (swth *StreamWithToolHandling) Generate(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+// Generate implements niro.Provider and preserves streaming while handling tools.
+func (swth *StreamWithToolHandling) Generate(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
 	return swth.loop.GenerateWithTools(ctx, swth.provider, req)
 }

@@ -16,19 +16,19 @@ import (
 // Registry is goroutine-safe.
 type Registry struct {
 	mu        sync.RWMutex
-	providers map[string]ryn.Provider
+	providers map[string]niro.Provider
 }
 
 // New creates an empty provider registry.
 func New() *Registry {
 	return &Registry{
-		providers: make(map[string]ryn.Provider),
+		providers: make(map[string]niro.Provider),
 	}
 }
 
 // Register adds a named provider to the registry.
 // Overwrites any existing provider with the same name.
-func (r *Registry) Register(name string, p ryn.Provider) {
+func (r *Registry) Register(name string, p niro.Provider) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.providers[name] = p
@@ -36,18 +36,18 @@ func (r *Registry) Register(name string, p ryn.Provider) {
 
 // Get retrieves a provider by name.
 // Returns an error if the name is not registered.
-func (r *Registry) Get(name string) (ryn.Provider, error) {
+func (r *Registry) Get(name string) (niro.Provider, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	p, ok := r.providers[name]
 	if !ok {
-		return nil, fmt.Errorf("ryn: provider %q not registered", name)
+		return nil, fmt.Errorf("niro: provider %q not registered", name)
 	}
 	return p, nil
 }
 
 // MustGet retrieves a provider by name or panics.
-func (r *Registry) MustGet(name string) ryn.Provider {
+func (r *Registry) MustGet(name string) niro.Provider {
 	p, err := r.Get(name)
 	if err != nil {
 		panic(err)
@@ -71,10 +71,10 @@ func (r *Registry) Remove(name string) {
 }
 
 // All returns a snapshot of all registered providers.
-func (r *Registry) All() map[string]ryn.Provider {
+func (r *Registry) All() map[string]niro.Provider {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	snap := make(map[string]ryn.Provider, len(r.providers))
+	snap := make(map[string]niro.Provider, len(r.providers))
 	for k, v := range r.providers {
 		snap[k] = v
 	}
@@ -100,7 +100,7 @@ func (r *Registry) Len() int {
 }
 
 // Generate is a convenience that looks up a provider by name and calls Generate.
-func (r *Registry) Generate(ctx context.Context, name string, req *ryn.Request) (*ryn.Stream, error) {
+func (r *Registry) Generate(ctx context.Context, name string, req *niro.Request) (*niro.Stream, error) {
 	p, err := r.Get(name)
 	if err != nil {
 		return nil, err

@@ -23,8 +23,8 @@ import (
 // ── helpers ─────────────────────────────────────────────────────────────────
 
 // collect drains a stream into frames and returns them with any error.
-func collect(ctx context.Context, s *ryn.Stream) ([]ryn.Frame, error) {
-	var out []ryn.Frame
+func collect(ctx context.Context, s *niro.Stream) ([]niro.Frame, error) {
+	var out []niro.Frame
 	for s.Next(ctx) {
 		f := s.Frame()
 		// Copy Data to survive pool recycling
@@ -108,8 +108,8 @@ func TestOptions(t *testing.T) {
 }
 
 func TestInterfaceCompliance(t *testing.T) {
-	var _ ryn.TTSProvider = (*Provider)(nil)
-	var _ ryn.STTProvider = (*Provider)(nil)
+	var _ niro.TTSProvider = (*Provider)(nil)
+	var _ niro.STTProvider = (*Provider)(nil)
 }
 
 // ── TTS tests ───────────────────────────────────────────────────────────────
@@ -124,7 +124,7 @@ func TestSynthesizeNilRequest(t *testing.T) {
 
 func TestSynthesizeEmptyText(t *testing.T) {
 	p := New("k")
-	_, err := p.Synthesize(context.Background(), &ryn.TTSRequest{Text: "  "})
+	_, err := p.Synthesize(context.Background(), &niro.TTSRequest{Text: "  "})
 	if err == nil || !strings.Contains(err.Error(), "empty text") {
 		t.Fatalf("expected empty text error, got %v", err)
 	}
@@ -168,7 +168,7 @@ func TestSynthesizeStreamsAudio(t *testing.T) {
 
 	p := newTestProvider(srv)
 	ctx := context.Background()
-	stream, err := p.Synthesize(ctx, &ryn.TTSRequest{Text: "hello world"})
+	stream, err := p.Synthesize(ctx, &niro.TTSRequest{Text: "hello world"})
 	if err != nil {
 		t.Fatalf("Synthesize: %v", err)
 	}
@@ -183,11 +183,11 @@ func TestSynthesizeStreamsAudio(t *testing.T) {
 
 	var total int
 	for _, f := range frames {
-		if f.Kind != ryn.KindAudio {
+		if f.Kind != niro.KindAudio {
 			t.Errorf("expected KindAudio, got %v", f.Kind)
 		}
-		if f.Mime != ryn.AudioOGGOpus {
-			t.Errorf("mime = %q, want %q", f.Mime, ryn.AudioOGGOpus)
+		if f.Mime != niro.AudioOGGOpus {
+			t.Errorf("mime = %q, want %q", f.Mime, niro.AudioOGGOpus)
 		}
 		total += len(f.Data)
 	}
@@ -211,12 +211,12 @@ func TestSynthesizeUsesRequestFields(t *testing.T) {
 
 	p := newTestProvider(srv)
 	ctx := context.Background()
-	stream, err := p.Synthesize(ctx, &ryn.TTSRequest{
+	stream, err := p.Synthesize(ctx, &niro.TTSRequest{
 		Text:         "Hallo Welt",
 		Voice:        "Bella",
 		Model:        "turbo_v2",
 		Language:     "de",
-		OutputFormat: ryn.AudioMP3,
+		OutputFormat: niro.AudioMP3,
 		Speed:        1.3,
 	})
 	if err != nil {
@@ -249,7 +249,7 @@ func TestSynthesizeAPIError(t *testing.T) {
 	defer srv.Close()
 
 	p := newTestProvider(srv)
-	_, err := p.Synthesize(context.Background(), &ryn.TTSRequest{Text: "hello"})
+	_, err := p.Synthesize(context.Background(), &niro.TTSRequest{Text: "hello"})
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -270,7 +270,7 @@ func TestSynthesizeContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // Cancel immediately
 
-	_, err := p.Synthesize(ctx, &ryn.TTSRequest{Text: "hello"})
+	_, err := p.Synthesize(ctx, &niro.TTSRequest{Text: "hello"})
 	if err == nil {
 		t.Fatal("expected error on canceled context")
 	}
@@ -290,7 +290,7 @@ func TestSynthesizeRequestHook(t *testing.T) {
 		r.Header.Set("X-Custom", "from-hook")
 	}))
 
-	stream, err := p.Synthesize(context.Background(), &ryn.TTSRequest{Text: "hi"})
+	stream, err := p.Synthesize(context.Background(), &niro.TTSRequest{Text: "hi"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -312,7 +312,7 @@ func TestSynthesizeExtraHook(t *testing.T) {
 	defer srv.Close()
 
 	p := newTestProvider(srv)
-	stream, err := p.Synthesize(context.Background(), &ryn.TTSRequest{
+	stream, err := p.Synthesize(context.Background(), &niro.TTSRequest{
 		Text: "hi",
 		Extra: RequestHook(func(r *http.Request) {
 			r.Header.Set("X-Extra", "from-extra")
@@ -340,7 +340,7 @@ func TestTranscribeNilRequest(t *testing.T) {
 
 func TestTranscribeBatchEmptyAudio(t *testing.T) {
 	p := New("k")
-	_, err := p.Transcribe(context.Background(), &ryn.STTRequest{})
+	_, err := p.Transcribe(context.Background(), &niro.STTRequest{})
 	if err == nil || !strings.Contains(err.Error(), "empty audio") {
 		t.Fatalf("expected empty audio error, got %v", err)
 	}
@@ -387,9 +387,9 @@ func TestTranscribeBatch(t *testing.T) {
 
 	p := newTestProvider(srv)
 	ctx := context.Background()
-	stream, err := p.Transcribe(ctx, &ryn.STTRequest{
+	stream, err := p.Transcribe(ctx, &niro.STTRequest{
 		Audio:       make([]byte, 100),
-		InputFormat: ryn.AudioWAV,
+		InputFormat: niro.AudioWAV,
 		Language:    "en",
 	})
 	if err != nil {
@@ -403,7 +403,7 @@ func TestTranscribeBatch(t *testing.T) {
 	if len(frames) != 1 {
 		t.Fatalf("expected 1 frame, got %d", len(frames))
 	}
-	if frames[0].Kind != ryn.KindText {
+	if frames[0].Kind != niro.KindText {
 		t.Errorf("kind = %v, want KindText", frames[0].Kind)
 	}
 	if frames[0].Text != "Hello world" {
@@ -420,9 +420,9 @@ func TestTranscribeBatchEmptyResponse(t *testing.T) {
 
 	p := newTestProvider(srv)
 	ctx := context.Background()
-	stream, err := p.Transcribe(ctx, &ryn.STTRequest{
+	stream, err := p.Transcribe(ctx, &niro.STTRequest{
 		Audio:       []byte{1, 2, 3},
-		InputFormat: ryn.AudioWAV,
+		InputFormat: niro.AudioWAV,
 	})
 	if err != nil {
 		t.Fatalf("Transcribe: %v", err)
@@ -445,9 +445,9 @@ func TestTranscribeBatchAPIError(t *testing.T) {
 	defer srv.Close()
 
 	p := newTestProvider(srv)
-	_, err := p.Transcribe(context.Background(), &ryn.STTRequest{
+	_, err := p.Transcribe(context.Background(), &niro.STTRequest{
 		Audio:       []byte{1},
-		InputFormat: ryn.AudioWAV,
+		InputFormat: niro.AudioWAV,
 	})
 	if err == nil || !strings.Contains(err.Error(), "500") {
 		t.Fatalf("expected 500 error, got %v", err)
@@ -468,9 +468,9 @@ func TestTranscribeBatchRequestHook(t *testing.T) {
 		r.Header.Set("X-Trace", "abc")
 	}))
 
-	stream, err := p.Transcribe(context.Background(), &ryn.STTRequest{
+	stream, err := p.Transcribe(context.Background(), &niro.STTRequest{
 		Audio:       []byte{1},
-		InputFormat: ryn.AudioWAV,
+		InputFormat: niro.AudioWAV,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -534,11 +534,11 @@ func TestTranscribeStreamBasic(t *testing.T) {
 	defer srv.Close()
 
 	// Create audio input stream with 3 frames
-	audioStream, audioEmitter := ryn.NewStream(8)
+	audioStream, audioEmitter := niro.NewStream(8)
 	go func() {
 		ctx := context.Background()
 		for i := 0; i < 3; i++ {
-			audioEmitter.Emit(ctx, ryn.AudioFrame([]byte{byte(i), byte(i)}, ryn.AudioPCM16k))
+			audioEmitter.Emit(ctx, niro.AudioFrame([]byte{byte(i), byte(i)}, niro.AudioPCM16k))
 		}
 		audioEmitter.Close()
 	}()
@@ -549,9 +549,9 @@ func TestTranscribeStreamBasic(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	stream, err := p.Transcribe(ctx, &ryn.STTRequest{
+	stream, err := p.Transcribe(ctx, &niro.STTRequest{
 		AudioStream: audioStream,
-		InputFormat: ryn.AudioPCM16k,
+		InputFormat: niro.AudioPCM16k,
 		Language:    "en",
 	})
 	if err != nil {
@@ -563,13 +563,17 @@ func TestTranscribeStreamBasic(t *testing.T) {
 		t.Fatalf("stream error: %v", err)
 	}
 
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for received.Load() < 3 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
 	if received.Load() != 3 {
 		t.Errorf("server received %d audio messages, want 3", received.Load())
 	}
 
 	// We may get the transcript if the server sent it before close
 	for _, f := range frames {
-		if f.Kind != ryn.KindText {
+		if f.Kind != niro.KindText {
 			t.Errorf("kind = %v, want KindText", f.Kind)
 		}
 	}
@@ -608,10 +612,10 @@ func TestTranscribeStreamInterimResults(t *testing.T) {
 	})
 	defer srv.Close()
 
-	audioStream, audioEmitter := ryn.NewStream(8)
+	audioStream, audioEmitter := niro.NewStream(8)
 	go func() {
 		ctx := context.Background()
-		audioEmitter.Emit(ctx, ryn.AudioFrame([]byte{1}, ryn.AudioPCM16k))
+		audioEmitter.Emit(ctx, niro.AudioFrame([]byte{1}, niro.AudioPCM16k))
 		time.Sleep(100 * time.Millisecond)
 		audioEmitter.Close()
 	}()
@@ -622,9 +626,9 @@ func TestTranscribeStreamInterimResults(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	stream, err := p.Transcribe(ctx, &ryn.STTRequest{
+	stream, err := p.Transcribe(ctx, &niro.STTRequest{
 		AudioStream:    audioStream,
-		InputFormat:    ryn.AudioPCM16k,
+		InputFormat:    niro.AudioPCM16k,
 		InterimResults: true,
 	})
 	if err != nil {
@@ -688,10 +692,10 @@ func TestTranscribeStreamNoInterim(t *testing.T) {
 	})
 	defer srv.Close()
 
-	audioStream, audioEmitter := ryn.NewStream(8)
+	audioStream, audioEmitter := niro.NewStream(8)
 	go func() {
 		ctx := context.Background()
-		audioEmitter.Emit(ctx, ryn.AudioFrame([]byte{1}, ryn.AudioPCM16k))
+		audioEmitter.Emit(ctx, niro.AudioFrame([]byte{1}, niro.AudioPCM16k))
 		time.Sleep(100 * time.Millisecond)
 		audioEmitter.Close()
 	}()
@@ -702,9 +706,9 @@ func TestTranscribeStreamNoInterim(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	stream, err := p.Transcribe(ctx, &ryn.STTRequest{
+	stream, err := p.Transcribe(ctx, &niro.STTRequest{
 		AudioStream:    audioStream,
-		InputFormat:    ryn.AudioPCM16k,
+		InputFormat:    niro.AudioPCM16k,
 		InterimResults: false, // Only finals
 	})
 	if err != nil {
@@ -741,7 +745,7 @@ func TestTranscribeStreamQueryParams(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	audioStream, audioEmitter := ryn.NewStream(1)
+	audioStream, audioEmitter := niro.NewStream(1)
 	audioEmitter.Close()
 
 	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
@@ -750,9 +754,9 @@ func TestTranscribeStreamQueryParams(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	stream, err := p.Transcribe(ctx, &ryn.STTRequest{
+	stream, err := p.Transcribe(ctx, &niro.STTRequest{
 		AudioStream:    audioStream,
-		InputFormat:    ryn.AudioPCM16k,
+		InputFormat:    niro.AudioPCM16k,
 		Model:          "scribe_v2",
 		Language:       "fr",
 		InterimResults: true,
@@ -793,10 +797,10 @@ func TestTranscribeStreamAudioEncoding(t *testing.T) {
 	defer srv.Close()
 
 	audioData := []byte{0x01, 0x02, 0x03, 0x04, 0x05}
-	audioStream, audioEmitter := ryn.NewStream(8)
+	audioStream, audioEmitter := niro.NewStream(8)
 	go func() {
 		ctx := context.Background()
-		audioEmitter.Emit(ctx, ryn.AudioFrame(audioData, ryn.AudioPCM16k))
+		audioEmitter.Emit(ctx, niro.AudioFrame(audioData, niro.AudioPCM16k))
 		time.Sleep(50 * time.Millisecond)
 		audioEmitter.Close()
 	}()
@@ -807,9 +811,9 @@ func TestTranscribeStreamAudioEncoding(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
-	stream, err := p.Transcribe(ctx, &ryn.STTRequest{
+	stream, err := p.Transcribe(ctx, &niro.STTRequest{
 		AudioStream: audioStream,
-		InputFormat: ryn.AudioPCM16k,
+		InputFormat: niro.AudioPCM16k,
 	})
 	if err != nil {
 		t.Fatalf("Transcribe: %v", err)
@@ -848,11 +852,11 @@ func TestMimeFromFormat(t *testing.T) {
 		format string
 		want   string
 	}{
-		{"ogg_opus", ryn.AudioOGGOpus},
-		{"mp3_44100_128", ryn.AudioMP3},
-		{"pcm_16000", ryn.AudioPCM24k}, // pcm -> AudioPCM24k (default pcm)
+		{"ogg_opus", niro.AudioOGGOpus},
+		{"mp3_44100_128", niro.AudioMP3},
+		{"pcm_16000", niro.AudioPCM24k}, // pcm -> AudioPCM24k (default pcm)
 		{"ulaw_8000", "audio/basic"},
-		{"", ryn.AudioOGGOpus}, // default
+		{"", niro.AudioOGGOpus}, // default
 	}
 	for _, tt := range tests {
 		got := mimeFromFormat(tt.format)
@@ -867,14 +871,14 @@ func TestOutputFormatFromMIME(t *testing.T) {
 		mime string
 		want string
 	}{
-		{ryn.AudioOGGOpus, "ogg_opus"},
-		{ryn.AudioMP3, "mp3_44100_128"},
-		{ryn.AudioAAC, "aac_44100"},
-		{ryn.AudioPCM16k, "pcm_16000"},
-		{ryn.AudioPCM24k, "pcm_24000"},
-		{ryn.AudioPCM44k, "pcm_44100"},
-		{ryn.AudioFLAC, "flac"},
-		{ryn.AudioWAV, "wav"},
+		{niro.AudioOGGOpus, "ogg_opus"},
+		{niro.AudioMP3, "mp3_44100_128"},
+		{niro.AudioAAC, "aac_44100"},
+		{niro.AudioPCM16k, "pcm_16000"},
+		{niro.AudioPCM24k, "pcm_24000"},
+		{niro.AudioPCM44k, "pcm_44100"},
+		{niro.AudioFLAC, "flac"},
+		{niro.AudioWAV, "wav"},
 		{"", ""},
 		{"unknown/type", ""},
 	}
@@ -891,10 +895,10 @@ func TestExtFromMIME(t *testing.T) {
 		mime string
 		want string
 	}{
-		{ryn.AudioOGGOpus, ".ogg"},
-		{ryn.AudioMP3, ".mp3"},
-		{ryn.AudioWAV, ".wav"},
-		{ryn.AudioFLAC, ".flac"},
+		{niro.AudioOGGOpus, ".ogg"},
+		{niro.AudioMP3, ".mp3"},
+		{niro.AudioWAV, ".wav"},
+		{niro.AudioFLAC, ".flac"},
 		{"audio/pcm", ".raw"},
 		{"something/else", ".bin"},
 	}
@@ -938,7 +942,7 @@ func TestSynthesizeConcurrent(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			stream, err := p.Synthesize(ctx, &ryn.TTSRequest{Text: "concurrent"})
+			stream, err := p.Synthesize(ctx, &niro.TTSRequest{Text: "concurrent"})
 			if err != nil {
 				t.Errorf("Synthesize: %v", err)
 				return
@@ -974,7 +978,7 @@ func TestTranscribeStreamWSAPIKey(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	audioStream, audioEmitter := ryn.NewStream(1)
+	audioStream, audioEmitter := niro.NewStream(1)
 	audioEmitter.Close()
 
 	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
@@ -983,9 +987,9 @@ func TestTranscribeStreamWSAPIKey(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	stream, err := p.Transcribe(ctx, &ryn.STTRequest{
+	stream, err := p.Transcribe(ctx, &niro.STTRequest{
 		AudioStream: audioStream,
-		InputFormat: ryn.AudioPCM16k,
+		InputFormat: niro.AudioPCM16k,
 	})
 	if err != nil {
 		t.Fatalf("Transcribe: %v", err)

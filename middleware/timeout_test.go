@@ -22,14 +22,14 @@ func TestTimeoutProviderSuccess(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 
-	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
-		return ryn.StreamFromSlice([]ryn.Frame{ryn.TextFrame("hello")}), nil
+	mock := niro.ProviderFunc(func(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
+		return niro.StreamFromSlice([]niro.Frame{niro.TextFrame("hello")}), nil
 	})
 
 	provider := middleware.NewTimeoutProvider(mock, 5*time.Second)
-	stream, err := provider.Generate(ctx, &ryn.Request{Messages: []ryn.Message{ryn.UserText("test")}})
+	stream, err := provider.Generate(ctx, &niro.Request{Messages: []niro.Message{niro.UserText("test")}})
 	assertNoError(t, err)
-	text, err := ryn.CollectText(ctx, stream)
+	text, err := niro.CollectText(ctx, stream)
 	assertNoError(t, err)
 	assertEqual(t, text, "hello")
 }
@@ -38,15 +38,15 @@ func TestTimeoutProviderDefaultOnZero(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 
-	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
-		return ryn.StreamFromSlice([]ryn.Frame{ryn.TextFrame("ok")}), nil
+	mock := niro.ProviderFunc(func(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
+		return niro.StreamFromSlice([]niro.Frame{niro.TextFrame("ok")}), nil
 	})
 
 	// Zero timeout → uses default (5 minutes), should still work for fast providers
 	provider := middleware.NewTimeoutProvider(mock, 0)
-	stream, err := provider.Generate(ctx, &ryn.Request{Messages: []ryn.Message{ryn.UserText("test")}})
+	stream, err := provider.Generate(ctx, &niro.Request{Messages: []niro.Message{niro.UserText("test")}})
 	assertNoError(t, err)
-	text, _ := ryn.CollectText(ctx, stream)
+	text, _ := niro.CollectText(ctx, stream)
 	assertEqual(t, text, "ok")
 }
 
@@ -55,8 +55,8 @@ func TestTimeoutProviderEnforces(t *testing.T) {
 	ctx := context.Background()
 
 	// Provider that blocks until its context is cancelled.
-	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
-		out, em := ryn.NewStream(4)
+	mock := niro.ProviderFunc(func(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
+		out, em := niro.NewStream(4)
 		go func() {
 			defer em.Close()
 			<-ctx.Done() // unblocks when timeout fires
@@ -69,7 +69,7 @@ func TestTimeoutProviderEnforces(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		stream, err := provider.Generate(ctx, &ryn.Request{Messages: []ryn.Message{ryn.UserText("test")}})
+		stream, err := provider.Generate(ctx, &niro.Request{Messages: []niro.Message{niro.UserText("test")}})
 		if err != nil {
 			return
 		}
@@ -89,15 +89,15 @@ func TestComposedBasic(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 
-	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
-		return ryn.StreamFromSlice([]ryn.Frame{ryn.TextFrame("composed")}), nil
+	mock := niro.ProviderFunc(func(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
+		return niro.StreamFromSlice([]niro.Frame{niro.TextFrame("composed")}), nil
 	})
 
 	// Composed with timeout only, no retry
 	provider := middleware.Composed(mock, 30*time.Second, nil)
-	stream, err := provider.Generate(ctx, &ryn.Request{Messages: []ryn.Message{ryn.UserText("test")}})
+	stream, err := provider.Generate(ctx, &niro.Request{Messages: []niro.Message{niro.UserText("test")}})
 	assertNoError(t, err)
-	text, _ := ryn.CollectText(ctx, stream)
+	text, _ := niro.CollectText(ctx, stream)
 	assertEqual(t, text, "composed")
 }
 
@@ -106,12 +106,12 @@ func TestComposedWithRetryConfig(t *testing.T) {
 	ctx := context.Background()
 
 	attempts := 0
-	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+	mock := niro.ProviderFunc(func(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
 		attempts++
 		if attempts < 2 {
-			return nil, ryn.NewError(ryn.ErrCodeRateLimited, "rate limited")
+			return nil, niro.NewError(niro.ErrCodeRateLimited, "rate limited")
 		}
-		return ryn.StreamFromSlice([]ryn.Frame{ryn.TextFrame("ok")}), nil
+		return niro.StreamFromSlice([]niro.Frame{niro.TextFrame("ok")}), nil
 	})
 
 	retryConfig := middleware.DefaultRetryConfig()
@@ -119,9 +119,9 @@ func TestComposedWithRetryConfig(t *testing.T) {
 	retryConfig.Backoff = middleware.ConstantBackoff{Duration: time.Millisecond}
 
 	provider := middleware.Composed(mock, 30*time.Second, &retryConfig)
-	stream, err := provider.Generate(ctx, &ryn.Request{Messages: []ryn.Message{ryn.UserText("test")}})
+	stream, err := provider.Generate(ctx, &niro.Request{Messages: []niro.Message{niro.UserText("test")}})
 	assertNoError(t, err)
-	text, _ := ryn.CollectText(ctx, stream)
+	text, _ := niro.CollectText(ctx, stream)
 	assertEqual(t, text, "ok")
 	assertTrue(t, attempts >= 2)
 }
@@ -143,12 +143,12 @@ func TestTimeoutProviderProviderError(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 
-	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+	mock := niro.ProviderFunc(func(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
 		return nil, fmt.Errorf("provider down")
 	})
 
 	provider := middleware.NewTimeoutProvider(mock, 5*time.Second)
-	_, err := provider.Generate(ctx, &ryn.Request{Messages: []ryn.Message{ryn.UserText("test")}})
+	_, err := provider.Generate(ctx, &niro.Request{Messages: []niro.Message{niro.UserText("test")}})
 	assertErrorContains(t, err, "provider down")
 }
 
@@ -159,20 +159,20 @@ func TestTimeoutProviderEmitCancelledConsumer(t *testing.T) {
 	// context is cancelled while Emit is blocking (output buffer full).
 	// Strategy: fast producer fills the output buffer (size 32), then the
 	// timeout fires while Emit is blocking on a full channel.
-	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+	mock := niro.ProviderFunc(func(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
 		// emit 64 frames immediately via a buffered stream
-		frames := make([]ryn.Frame, 64)
+		frames := make([]niro.Frame, 64)
 		for i := range frames {
-			frames[i] = ryn.TextFrame(fmt.Sprintf("f%d", i))
+			frames[i] = niro.TextFrame(fmt.Sprintf("f%d", i))
 		}
-		return ryn.StreamFromSlice(frames), nil
+		return niro.StreamFromSlice(frames), nil
 	})
 
 	// Very short timeout fires while the 32-slot output buffer is saturated
 	// and no consumer is draining — Emit(tctx, ...) blocks then tctx fires.
 	provider := middleware.NewTimeoutProvider(mock, 1*time.Millisecond)
 	// Don't drain the stream — let the 32-buffer fill so Emit blocks.
-	stream, err := provider.Generate(context.Background(), &ryn.Request{Messages: []ryn.Message{ryn.UserText("hi")}})
+	stream, err := provider.Generate(context.Background(), &niro.Request{Messages: []niro.Message{niro.UserText("hi")}})
 	assertNoError(t, err)
 
 	// Wait just long enough for the timeout to fire, then drain.
@@ -186,23 +186,23 @@ func TestTimeoutProviderForwardsResponseAndUsage(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 
-	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
-		out, em := ryn.NewStream(8)
+	mock := niro.ProviderFunc(func(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
+		out, em := niro.NewStream(8)
 		go func() {
 			defer em.Close()
-			_ = em.Emit(ctx, ryn.TextFrame("hello"))
-			em.SetResponse(&ryn.ResponseMeta{Model: "gpt-test", FinishReason: "stop"})
-			u := ryn.Usage{InputTokens: 7, OutputTokens: 3, TotalTokens: 10}
-			_ = em.Emit(ctx, ryn.UsageFrame(&u))
+			_ = em.Emit(ctx, niro.TextFrame("hello"))
+			em.SetResponse(&niro.ResponseMeta{Model: "gpt-test", FinishReason: "stop"})
+			u := niro.Usage{InputTokens: 7, OutputTokens: 3, TotalTokens: 10}
+			_ = em.Emit(ctx, niro.UsageFrame(&u))
 		}()
 		return out, nil
 	})
 
 	provider := middleware.NewTimeoutProvider(mock, 5*time.Second)
-	stream, err := provider.Generate(ctx, &ryn.Request{Messages: []ryn.Message{ryn.UserText("hi")}})
+	stream, err := provider.Generate(ctx, &niro.Request{Messages: []niro.Message{niro.UserText("hi")}})
 	assertNoError(t, err)
 
-	text, err := ryn.CollectText(ctx, stream)
+	text, err := niro.CollectText(ctx, stream)
 	assertNoError(t, err)
 	assertEqual(t, text, "hello")
 

@@ -60,7 +60,7 @@ func (o *Orchestrator) RunDefinition(ctx context.Context, sessionID string, def 
 			if o.Toolset == nil {
 				return "", fmt.Errorf("step %d tool: no toolset available", i)
 			}
-			call := ryn.ToolCall{Name: s.ToolName, Args: s.ToolArgs}
+			call := niro.ToolCall{Name: s.ToolName, Args: s.ToolArgs}
 			res, execErr := o.Toolset.ExecuteCall(ctx, call)
 			if execErr != nil {
 				return "", fmt.Errorf("step %d tool exec: %w", i, execErr)

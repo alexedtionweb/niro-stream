@@ -54,13 +54,13 @@ func main() {
 	multiTurn(ctx, p)
 }
 
-func basicStreaming(ctx context.Context, p ryn.Provider) {
-	stream, err := p.Generate(ctx, &ryn.Request{
+func basicStreaming(ctx context.Context, p niro.Provider) {
+	stream, err := p.Generate(ctx, &niro.Request{
 		SystemPrompt: "You are a helpful assistant. Be concise.",
-		Messages: []ryn.Message{
-			ryn.UserText("Explain how large language models generate text, in two sentences."),
+		Messages: []niro.Message{
+			niro.UserText("Explain how large language models generate text, in two sentences."),
 		},
-		Options: ryn.Options{MaxTokens: 200, Temperature: ryn.Temp(0.6)},
+		Options: niro.Options{MaxTokens: 200, Temperature: niro.Temp(0.6)},
 	})
 	if err != nil {
 		slog.Error("generate failed", "err", err)
@@ -68,7 +68,7 @@ func basicStreaming(ctx context.Context, p ryn.Provider) {
 	}
 
 	for stream.Next(ctx) {
-		if f := stream.Frame(); f.Kind == ryn.KindText {
+		if f := stream.Frame(); f.Kind == niro.KindText {
 			fmt.Print(f.Text)
 		}
 	}
@@ -90,10 +90,10 @@ type Recipe struct {
 // recipeSchema is the JSON Schema for Recipe.
 var recipeSchema = json.RawMessage(`{"type":"object","properties":{"name":{"type":"string"},"ingredients":{"type":"array","items":{"type":"string"}},"steps":{"type":"array","items":{"type":"string"}},"prep_minutes":{"type":"integer"}},"required":["name","ingredients","steps","prep_minutes"]}`)
 
-func structuredOutput(ctx context.Context, p ryn.Provider) {
-	req := structured.WithSchema(&ryn.Request{
-		Messages: []ryn.Message{ryn.UserText("Give me a simple pasta recipe.")},
-		Options:  ryn.Options{MaxTokens: 512},
+func structuredOutput(ctx context.Context, p niro.Provider) {
+	req := structured.WithSchema(&niro.Request{
+		Messages: []niro.Message{niro.UserText("Give me a simple pasta recipe.")},
+		Options:  niro.Options{MaxTokens: 512},
 	}, recipeSchema)
 
 	recipe, _, _, err := structured.GenerateStructured[Recipe](ctx, p, req, recipeSchema)
@@ -106,9 +106,9 @@ func structuredOutput(ctx context.Context, p ryn.Provider) {
 	fmt.Println(string(b))
 }
 
-func multiTurn(ctx context.Context, p ryn.Provider) {
-	conversation := []ryn.Message{
-		ryn.UserText("What is the capital of France?"),
+func multiTurn(ctx context.Context, p niro.Provider) {
+	conversation := []niro.Message{
+		niro.UserText("What is the capital of France?"),
 	}
 
 	followUps := []string{
@@ -117,10 +117,10 @@ func multiTurn(ctx context.Context, p ryn.Provider) {
 	}
 
 	for i := 0; i <= len(followUps); i++ {
-		stream, err := p.Generate(ctx, &ryn.Request{
+		stream, err := p.Generate(ctx, &niro.Request{
 			SystemPrompt: "You are a knowledgeable travel guide. Keep answers to one or two sentences.",
 			Messages:     conversation,
-			Options:      ryn.Options{MaxTokens: 128},
+			Options:      niro.Options{MaxTokens: 128},
 		})
 		if err != nil {
 			slog.Error("turn failed", "turn", i, "err", err)
@@ -129,21 +129,21 @@ func multiTurn(ctx context.Context, p ryn.Provider) {
 
 		var reply strings.Builder
 		for stream.Next(ctx) {
-			if f := stream.Frame(); f.Kind == ryn.KindText {
+			if f := stream.Frame(); f.Kind == niro.KindText {
 				fmt.Print(f.Text)
 				reply.WriteString(f.Text)
 			}
 		}
 		fmt.Println()
 
-		conversation = append(conversation, ryn.AssistantText(reply.String()))
+		conversation = append(conversation, niro.AssistantText(reply.String()))
 		if i < len(followUps) {
-			conversation = append(conversation, ryn.UserText(followUps[i]))
+			conversation = append(conversation, niro.UserText(followUps[i]))
 		}
 	}
 }
 
-func printUsage(s *ryn.Stream) {
+func printUsage(s *niro.Stream) {
 	u := s.Usage()
 	if u.TotalTokens > 0 {
 		slog.Info("usage", "in", u.InputTokens, "out", u.OutputTokens, "total", u.TotalTokens)
@@ -151,7 +151,7 @@ func printUsage(s *ryn.Stream) {
 }
 
 // mustProvider returns a Provider for the selected PROVIDER.
-func mustProvider(ctx context.Context) ryn.Provider {
+func mustProvider(ctx context.Context) niro.Provider {
 	switch strings.ToLower(os.Getenv("PROVIDER")) {
 	case "", "openai":
 		return openai.New(os.Getenv("OPENAI_API_KEY"))

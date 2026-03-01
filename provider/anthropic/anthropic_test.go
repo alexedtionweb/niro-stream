@@ -189,13 +189,13 @@ func newProvider(t *testing.T, handler func(*http.Request) (int, string, string)
 }
 
 // collectText drains a stream and returns the concatenated text + any error.
-func collectText(t *testing.T, s *ryn.Stream) (string, error) {
+func collectText(t *testing.T, s *niro.Stream) (string, error) {
 	t.Helper()
-	return ryn.CollectText(context.Background(), s)
+	return niro.CollectText(context.Background(), s)
 }
 
 // captureRequest decodes the JSON body sent to the mock server.
-func captureRequest(t *testing.T, req *ryn.Request, opts ...Option) map[string]any {
+func captureRequest(t *testing.T, req *niro.Request, opts ...Option) map[string]any {
 	t.Helper()
 	var captured map[string]any
 	p := newProvider(t, func(r *http.Request) (int, string, string) {
@@ -220,8 +220,8 @@ func TestNew_DefaultModel(t *testing.T) {
 		gotModel, _ = body["model"].(string)
 		return 200, sseTextStream("id1", "claude-sonnet-4-5", "hi"), ""
 	})
-	stream, err := p.Generate(context.Background(), &ryn.Request{
-		Messages: []ryn.Message{ryn.UserText("ping")},
+	stream, err := p.Generate(context.Background(), &niro.Request{
+		Messages: []niro.Message{niro.UserText("ping")},
 	})
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
@@ -246,8 +246,8 @@ func TestNew_CustomModel(t *testing.T) {
 		gotModel, _ = body["model"].(string)
 		return 200, sseTextStream("id1", "claude-3-5-haiku-latest", "ok"), ""
 	}, WithModel("claude-3-5-haiku-latest"))
-	stream, err := p.Generate(context.Background(), &ryn.Request{
-		Messages: []ryn.Message{ryn.UserText("hi")},
+	stream, err := p.Generate(context.Background(), &niro.Request{
+		Messages: []niro.Message{niro.UserText("hi")},
 	})
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
@@ -266,9 +266,9 @@ func TestNew_RequestModelOverridesDefault(t *testing.T) {
 		gotModel, _ = body["model"].(string)
 		return 200, sseTextStream("id1", "claude-3-opus-latest", "ok"), ""
 	}, WithModel("claude-sonnet-4-5"))
-	stream, err := p.Generate(context.Background(), &ryn.Request{
+	stream, err := p.Generate(context.Background(), &niro.Request{
 		Model:    "claude-3-opus-latest",
-		Messages: []ryn.Message{ryn.UserText("hi")},
+		Messages: []niro.Message{niro.UserText("hi")},
 	})
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
@@ -297,8 +297,8 @@ func TestWithRequestOption(t *testing.T) {
 		gotHeader = r.Header.Get("X-Custom")
 		return 200, sseTextStream("id1", "claude-sonnet-4-5", "ok"), ""
 	}, WithRequestOption(option.WithHeader("X-Custom", "test-value")))
-	stream, err := p.Generate(context.Background(), &ryn.Request{
-		Messages: []ryn.Message{ryn.UserText("hi")},
+	stream, err := p.Generate(context.Background(), &niro.Request{
+		Messages: []niro.Message{niro.UserText("hi")},
 	})
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
@@ -327,8 +327,8 @@ func TestWithRequestHook_ProviderLevel(t *testing.T) {
 			UserID: ant.String("u-001"),
 		}
 	}))
-	stream, err := p.Generate(context.Background(), &ryn.Request{
-		Messages: []ryn.Message{ryn.UserText("hi")},
+	stream, err := p.Generate(context.Background(), &niro.Request{
+		Messages: []niro.Message{niro.UserText("hi")},
 	})
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
@@ -350,8 +350,8 @@ func TestWithRequestHook_MultipleHooks(t *testing.T) {
 		WithRequestHook(func(p *ant.MessageNewParams) { calls = append(calls, "first") }),
 		WithRequestHook(func(p *ant.MessageNewParams) { calls = append(calls, "second") }),
 	)
-	stream, err := p.Generate(context.Background(), &ryn.Request{
-		Messages: []ryn.Message{ryn.UserText("hi")},
+	stream, err := p.Generate(context.Background(), &niro.Request{
+		Messages: []niro.Message{niro.UserText("hi")},
 	})
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
@@ -372,8 +372,8 @@ func TestGenerate_PerRequestHook(t *testing.T) {
 		}
 		return 200, sseTextStream("id1", "claude-sonnet-4-5", "ok"), ""
 	})
-	stream, err := p.Generate(context.Background(), &ryn.Request{
-		Messages: []ryn.Message{ryn.UserText("hi")},
+	stream, err := p.Generate(context.Background(), &niro.Request{
+		Messages: []niro.Message{niro.UserText("hi")},
 		Extra: RequestHook(func(params *ant.MessageNewParams) {
 			params.Metadata = ant.MetadataParam{
 				UserID: ant.String("per-req-user"),
@@ -428,8 +428,8 @@ func TestGenerate_TextStream(t *testing.T) {
 	p := newProvider(t, func(r *http.Request) (int, string, string) {
 		return 200, body, ""
 	})
-	stream, err := p.Generate(context.Background(), &ryn.Request{
-		Messages: []ryn.Message{ryn.UserText("hi")},
+	stream, err := p.Generate(context.Background(), &niro.Request{
+		Messages: []niro.Message{niro.UserText("hi")},
 	})
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
@@ -452,8 +452,8 @@ func TestGenerate_PingEventIgnored(t *testing.T) {
 	p := newProvider(t, func(r *http.Request) (int, string, string) {
 		return 200, body, ""
 	})
-	stream, err := p.Generate(context.Background(), &ryn.Request{
-		Messages: []ryn.Message{ryn.UserText("ping")},
+	stream, err := p.Generate(context.Background(), &niro.Request{
+		Messages: []niro.Message{niro.UserText("ping")},
 	})
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
@@ -471,8 +471,8 @@ func TestGenerate_UsageAccumulated(t *testing.T) {
 	p := newProvider(t, func(r *http.Request) (int, string, string) {
 		return 200, sseTextStream("id1", "claude-sonnet-4-5", "hi"), ""
 	})
-	stream, err := p.Generate(context.Background(), &ryn.Request{
-		Messages: []ryn.Message{ryn.UserText("hi")},
+	stream, err := p.Generate(context.Background(), &niro.Request{
+		Messages: []niro.Message{niro.UserText("hi")},
 	})
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
@@ -499,8 +499,8 @@ func TestGenerate_ResponseMeta(t *testing.T) {
 	p := newProvider(t, func(r *http.Request) (int, string, string) {
 		return 200, sseTextStream("msg-abc", "claude-sonnet-4-5", "hi"), ""
 	})
-	stream, err := p.Generate(context.Background(), &ryn.Request{
-		Messages: []ryn.Message{ryn.UserText("hi")},
+	stream, err := p.Generate(context.Background(), &niro.Request{
+		Messages: []niro.Message{niro.UserText("hi")},
 	})
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
@@ -531,9 +531,9 @@ func TestGenerate_ToolCall(t *testing.T) {
 	p := newProvider(t, func(r *http.Request) (int, string, string) {
 		return 200, sseToolStream("id1", "claude-sonnet-4-5", "call-1", "get_weather", `{"city":"Paris"}`), ""
 	})
-	stream, err := p.Generate(context.Background(), &ryn.Request{
-		Messages: []ryn.Message{ryn.UserText("weather?")},
-		Tools: []ryn.Tool{{
+	stream, err := p.Generate(context.Background(), &niro.Request{
+		Messages: []niro.Message{niro.UserText("weather?")},
+		Tools: []niro.Tool{{
 			Name:        "get_weather",
 			Description: "Gets the weather",
 			Parameters:  json.RawMessage(`{"type":"object","properties":{"city":{"type":"string"}},"required":["city"]}`),
@@ -542,13 +542,13 @@ func TestGenerate_ToolCall(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
 	}
-	frames, err := ryn.Collect(context.Background(), stream)
+	frames, err := niro.Collect(context.Background(), stream)
 	if err != nil {
 		t.Fatalf("stream err: %v", err)
 	}
-	var toolFrames []ryn.Frame
+	var toolFrames []niro.Frame
 	for _, f := range frames {
-		if f.Kind == ryn.KindToolCall {
+		if f.Kind == niro.KindToolCall {
 			toolFrames = append(toolFrames, f)
 		}
 	}
@@ -571,8 +571,8 @@ func TestGenerate_ToolCallFinishReason(t *testing.T) {
 	p := newProvider(t, func(r *http.Request) (int, string, string) {
 		return 200, sseToolStream("id1", "claude-sonnet-4-5", "call-x", "fn", `{}`), ""
 	})
-	stream, err := p.Generate(context.Background(), &ryn.Request{
-		Messages: []ryn.Message{ryn.UserText("use tool")},
+	stream, err := p.Generate(context.Background(), &niro.Request{
+		Messages: []niro.Message{niro.UserText("use tool")},
 	})
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
@@ -600,8 +600,8 @@ func TestGenerate_ContextCancelled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // pre-cancel
 
-	stream, err := p.Generate(ctx, &ryn.Request{
-		Messages: []ryn.Message{ryn.UserText("hi")},
+	stream, err := p.Generate(ctx, &niro.Request{
+		Messages: []niro.Message{niro.UserText("hi")},
 	})
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
@@ -622,8 +622,8 @@ func TestGenerate_ContextDeadline(t *testing.T) {
 	defer cancel()
 	time.Sleep(1 * time.Millisecond)
 
-	stream, err := p.Generate(ctx, &ryn.Request{
-		Messages: []ryn.Message{ryn.UserText("hi")},
+	stream, err := p.Generate(ctx, &niro.Request{
+		Messages: []niro.Message{niro.UserText("hi")},
 	})
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
@@ -643,8 +643,8 @@ func TestGenerate_StreamError_400(t *testing.T) {
 	p := newProvider(t, func(r *http.Request) (int, string, string) {
 		return 400, errBody("invalid_request_error", "bad request"), "application/json"
 	})
-	stream, err := p.Generate(context.Background(), &ryn.Request{
-		Messages: []ryn.Message{ryn.UserText("hi")},
+	stream, err := p.Generate(context.Background(), &niro.Request{
+		Messages: []niro.Message{niro.UserText("hi")},
 	})
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
@@ -655,8 +655,8 @@ func TestGenerate_StreamError_400(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected stream error, got nil")
 	}
-	if !strings.Contains(err.Error(), "ryn/anthropic: stream:") {
-		t.Errorf("error should contain 'ryn/anthropic: stream:', got: %v", err)
+	if !strings.Contains(err.Error(), "niro/anthropic: stream:") {
+		t.Errorf("error should contain 'niro/anthropic: stream:', got: %v", err)
 	}
 }
 
@@ -664,8 +664,8 @@ func TestGenerate_StreamError_401(t *testing.T) {
 	p := newProvider(t, func(r *http.Request) (int, string, string) {
 		return 401, errBody("authentication_error", "invalid api key"), "application/json"
 	})
-	stream, err := p.Generate(context.Background(), &ryn.Request{
-		Messages: []ryn.Message{ryn.UserText("hi")},
+	stream, err := p.Generate(context.Background(), &niro.Request{
+		Messages: []niro.Message{niro.UserText("hi")},
 	})
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
@@ -689,8 +689,8 @@ func TestGenerate_StreamError_429(t *testing.T) {
 	p := newProvider(t, func(r *http.Request) (int, string, string) {
 		return 429, errBody("rate_limit_error", "rate limit exceeded"), "application/json"
 	})
-	stream, err := p.Generate(context.Background(), &ryn.Request{
-		Messages: []ryn.Message{ryn.UserText("hi")},
+	stream, err := p.Generate(context.Background(), &niro.Request{
+		Messages: []niro.Message{niro.UserText("hi")},
 	})
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
@@ -711,8 +711,8 @@ func TestGenerate_StreamError_500(t *testing.T) {
 	p := newProvider(t, func(r *http.Request) (int, string, string) {
 		return 500, errBody("api_error", "internal server error"), "application/json"
 	})
-	stream, err := p.Generate(context.Background(), &ryn.Request{
-		Messages: []ryn.Message{ryn.UserText("hi")},
+	stream, err := p.Generate(context.Background(), &niro.Request{
+		Messages: []niro.Message{niro.UserText("hi")},
 	})
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
@@ -727,8 +727,8 @@ func TestGenerate_StreamError_500(t *testing.T) {
 // ─── buildParams: Options ────────────────────────────────────────────────────
 
 func TestBuildParams_DefaultMaxTokens(t *testing.T) {
-	body := captureRequest(t, &ryn.Request{
-		Messages: []ryn.Message{ryn.UserText("hi")},
+	body := captureRequest(t, &niro.Request{
+		Messages: []niro.Message{niro.UserText("hi")},
 	})
 	mt, _ := body["max_tokens"].(float64)
 	if mt != 4096 {
@@ -737,9 +737,9 @@ func TestBuildParams_DefaultMaxTokens(t *testing.T) {
 }
 
 func TestBuildParams_ExplicitMaxTokens(t *testing.T) {
-	body := captureRequest(t, &ryn.Request{
-		Messages: []ryn.Message{ryn.UserText("hi")},
-		Options:  ryn.Options{MaxTokens: 512},
+	body := captureRequest(t, &niro.Request{
+		Messages: []niro.Message{niro.UserText("hi")},
+		Options:  niro.Options{MaxTokens: 512},
 	})
 	mt, _ := body["max_tokens"].(float64)
 	if mt != 512 {
@@ -748,9 +748,9 @@ func TestBuildParams_ExplicitMaxTokens(t *testing.T) {
 }
 
 func TestBuildParams_Temperature(t *testing.T) {
-	body := captureRequest(t, &ryn.Request{
-		Messages: []ryn.Message{ryn.UserText("hi")},
-		Options:  ryn.Options{Temperature: ryn.Temp(0.8)},
+	body := captureRequest(t, &niro.Request{
+		Messages: []niro.Message{niro.UserText("hi")},
+		Options:  niro.Options{Temperature: niro.Temp(0.8)},
 	})
 	temp, _ := body["temperature"].(float64)
 	if temp != 0.8 {
@@ -759,9 +759,9 @@ func TestBuildParams_Temperature(t *testing.T) {
 }
 
 func TestBuildParams_TopP(t *testing.T) {
-	body := captureRequest(t, &ryn.Request{
-		Messages: []ryn.Message{ryn.UserText("hi")},
-		Options:  ryn.Options{TopP: ryn.TopPVal(0.95)},
+	body := captureRequest(t, &niro.Request{
+		Messages: []niro.Message{niro.UserText("hi")},
+		Options:  niro.Options{TopP: niro.TopPVal(0.95)},
 	})
 	topP, _ := body["top_p"].(float64)
 	if topP != 0.95 {
@@ -770,9 +770,9 @@ func TestBuildParams_TopP(t *testing.T) {
 }
 
 func TestBuildParams_TopK(t *testing.T) {
-	body := captureRequest(t, &ryn.Request{
-		Messages: []ryn.Message{ryn.UserText("hi")},
-		Options:  ryn.Options{TopK: ryn.TopKVal(40)},
+	body := captureRequest(t, &niro.Request{
+		Messages: []niro.Message{niro.UserText("hi")},
+		Options:  niro.Options{TopK: niro.TopKVal(40)},
 	})
 	topK, _ := body["top_k"].(float64)
 	if topK != 40 {
@@ -781,9 +781,9 @@ func TestBuildParams_TopK(t *testing.T) {
 }
 
 func TestBuildParams_StopSequences(t *testing.T) {
-	body := captureRequest(t, &ryn.Request{
-		Messages: []ryn.Message{ryn.UserText("hi")},
-		Options:  ryn.Options{Stop: []string{"END", "STOP"}},
+	body := captureRequest(t, &niro.Request{
+		Messages: []niro.Message{niro.UserText("hi")},
+		Options:  niro.Options{Stop: []string{"END", "STOP"}},
 	})
 	stop, ok := body["stop_sequences"].([]any)
 	if !ok || len(stop) != 2 {
@@ -797,9 +797,9 @@ func TestBuildParams_StopSequences(t *testing.T) {
 // ─── buildParams: SystemPrompt ────────────────────────────────────────────────
 
 func TestBuildParams_SystemPrompt(t *testing.T) {
-	body := captureRequest(t, &ryn.Request{
+	body := captureRequest(t, &niro.Request{
 		SystemPrompt: "You are helpful",
-		Messages:     []ryn.Message{ryn.UserText("hi")},
+		Messages:     []niro.Message{niro.UserText("hi")},
 	})
 	system, ok := body["system"].([]any)
 	if !ok || len(system) == 0 {
@@ -812,11 +812,11 @@ func TestBuildParams_SystemPrompt(t *testing.T) {
 }
 
 func TestBuildParams_SystemMessage_InMessages(t *testing.T) {
-	// A ryn.RoleSystem message in Messages should go to params.System, not Messages
-	body := captureRequest(t, &ryn.Request{
-		Messages: []ryn.Message{
-			ryn.SystemText("inline system"),
-			ryn.UserText("hi"),
+	// A niro.RoleSystem message in Messages should go to params.System, not Messages
+	body := captureRequest(t, &niro.Request{
+		Messages: []niro.Message{
+			niro.SystemText("inline system"),
+			niro.UserText("hi"),
 		},
 	})
 	system, ok := body["system"].([]any)
@@ -836,11 +836,11 @@ func TestBuildParams_SystemMessage_InMessages(t *testing.T) {
 
 func TestBuildParams_SystemPrompt_AndSystemMessage_Combined(t *testing.T) {
 	// SystemPrompt + inline system message in Messages — both should appear in system
-	body := captureRequest(t, &ryn.Request{
+	body := captureRequest(t, &niro.Request{
 		SystemPrompt: "Base instructions",
-		Messages: []ryn.Message{
-			ryn.SystemText("extra instructions"),
-			ryn.UserText("hi"),
+		Messages: []niro.Message{
+			niro.SystemText("extra instructions"),
+			niro.UserText("hi"),
 		},
 	})
 	system, ok := body["system"].([]any)
@@ -856,9 +856,9 @@ func TestBuildParams_SystemPrompt_AndSystemMessage_Combined(t *testing.T) {
 // ─── buildParams: Tools ───────────────────────────────────────────────────────
 
 func TestBuildParams_Tools(t *testing.T) {
-	body := captureRequest(t, &ryn.Request{
-		Messages: []ryn.Message{ryn.UserText("hi")},
-		Tools: []ryn.Tool{{
+	body := captureRequest(t, &niro.Request{
+		Messages: []niro.Message{niro.UserText("hi")},
+		Tools: []niro.Tool{{
 			Name:        "search",
 			Description: "web search",
 			Parameters:  json.RawMessage(`{"type":"object","properties":{"q":{"type":"string"}},"required":["q"]}`),
@@ -886,9 +886,9 @@ func TestBuildParams_Tools(t *testing.T) {
 }
 
 func TestBuildParams_Tools_Required(t *testing.T) {
-	body := captureRequest(t, &ryn.Request{
-		Messages: []ryn.Message{ryn.UserText("hi")},
-		Tools: []ryn.Tool{{
+	body := captureRequest(t, &niro.Request{
+		Messages: []niro.Message{niro.UserText("hi")},
+		Tools: []niro.Tool{{
 			Name:        "fn",
 			Description: "d",
 			Parameters:  json.RawMessage(`{"type":"object","properties":{},"required":["x","y"]}`),
@@ -904,9 +904,9 @@ func TestBuildParams_Tools_Required(t *testing.T) {
 }
 
 func TestBuildParams_Tools_NoParameters(t *testing.T) {
-	body := captureRequest(t, &ryn.Request{
-		Messages: []ryn.Message{ryn.UserText("hi")},
-		Tools:    []ryn.Tool{{Name: "noop", Description: "does nothing"}},
+	body := captureRequest(t, &niro.Request{
+		Messages: []niro.Message{niro.UserText("hi")},
+		Tools:    []niro.Tool{{Name: "noop", Description: "does nothing"}},
 	})
 	tools, ok := body["tools"].([]any)
 	if !ok || len(tools) != 1 {
@@ -916,7 +916,7 @@ func TestBuildParams_Tools_NoParameters(t *testing.T) {
 
 // ─── convertMessage: messages ─────────────────────────────────────────────────
 
-func captureMessages(t *testing.T, req *ryn.Request) []map[string]any {
+func captureMessages(t *testing.T, req *niro.Request) []map[string]any {
 	t.Helper()
 	body := captureRequest(t, req)
 	var result []map[string]any
@@ -931,8 +931,8 @@ func captureMessages(t *testing.T, req *ryn.Request) []map[string]any {
 }
 
 func TestConvertMessage_UserText(t *testing.T) {
-	msgs := captureMessages(t, &ryn.Request{
-		Messages: []ryn.Message{ryn.UserText("hello")},
+	msgs := captureMessages(t, &niro.Request{
+		Messages: []niro.Message{niro.UserText("hello")},
 	})
 	if len(msgs) != 1 {
 		t.Fatalf("expected 1 message, got %d", len(msgs))
@@ -954,11 +954,11 @@ func TestConvertMessage_UserText(t *testing.T) {
 }
 
 func TestConvertMessage_UserImage_Data(t *testing.T) {
-	msgs := captureMessages(t, &ryn.Request{
-		Messages: []ryn.Message{
-			ryn.Multi(ryn.RoleUser,
-				ryn.Part{Kind: ryn.KindText, Text: "what is this?"},
-				ryn.Part{Kind: ryn.KindImage, Data: []byte{0xFF, 0xD8, 0xFF}, Mime: "image/jpeg"},
+	msgs := captureMessages(t, &niro.Request{
+		Messages: []niro.Message{
+			niro.Multi(niro.RoleUser,
+				niro.Part{Kind: niro.KindText, Text: "what is this?"},
+				niro.Part{Kind: niro.KindImage, Data: []byte{0xFF, 0xD8, 0xFF}, Mime: "image/jpeg"},
 			),
 		},
 	})
@@ -990,11 +990,11 @@ func TestConvertMessage_UserImage_Data(t *testing.T) {
 
 func TestConvertMessage_UserImage_NoData_Skipped(t *testing.T) {
 	// Image part with no data AND no URL — should be skipped (Anthropic needs base64)
-	msgs := captureMessages(t, &ryn.Request{
-		Messages: []ryn.Message{
-			ryn.Multi(ryn.RoleUser,
-				ryn.Part{Kind: ryn.KindText, Text: "look"},
-				ryn.Part{Kind: ryn.KindImage}, // no data, no URL
+	msgs := captureMessages(t, &niro.Request{
+		Messages: []niro.Message{
+			niro.Multi(niro.RoleUser,
+				niro.Part{Kind: niro.KindText, Text: "look"},
+				niro.Part{Kind: niro.KindImage}, // no data, no URL
 			),
 		},
 	})
@@ -1006,10 +1006,10 @@ func TestConvertMessage_UserImage_NoData_Skipped(t *testing.T) {
 }
 
 func TestConvertMessage_AssistantText(t *testing.T) {
-	msgs := captureMessages(t, &ryn.Request{
-		Messages: []ryn.Message{
-			ryn.UserText("hi"),
-			ryn.AssistantText("hello back"),
+	msgs := captureMessages(t, &niro.Request{
+		Messages: []niro.Message{
+			niro.UserText("hi"),
+			niro.AssistantText("hello back"),
 		},
 	})
 	if len(msgs) != 2 {
@@ -1021,13 +1021,13 @@ func TestConvertMessage_AssistantText(t *testing.T) {
 }
 
 func TestConvertMessage_AssistantWithToolCall(t *testing.T) {
-	msgs := captureMessages(t, &ryn.Request{
-		Messages: []ryn.Message{
-			ryn.UserText("what's the weather?"),
+	msgs := captureMessages(t, &niro.Request{
+		Messages: []niro.Message{
+			niro.UserText("what's the weather?"),
 			{
-				Role: ryn.RoleAssistant,
-				Parts: []ryn.Part{
-					ryn.ToolCallPart(&ryn.ToolCall{
+				Role: niro.RoleAssistant,
+				Parts: []niro.Part{
+					niro.ToolCallPart(&niro.ToolCall{
 						ID:   "call-abc",
 						Name: "get_weather",
 						Args: json.RawMessage(`{"city":"London"}`),
@@ -1060,14 +1060,14 @@ func TestConvertMessage_AssistantWithToolCall(t *testing.T) {
 }
 
 func TestConvertMessage_AssistantTextAndToolCall(t *testing.T) {
-	msgs := captureMessages(t, &ryn.Request{
-		Messages: []ryn.Message{
-			ryn.UserText("hi"),
+	msgs := captureMessages(t, &niro.Request{
+		Messages: []niro.Message{
+			niro.UserText("hi"),
 			{
-				Role: ryn.RoleAssistant,
-				Parts: []ryn.Part{
-					{Kind: ryn.KindText, Text: "I'll check"},
-					ryn.ToolCallPart(&ryn.ToolCall{ID: "tc1", Name: "fn", Args: json.RawMessage(`{}`)}),
+				Role: niro.RoleAssistant,
+				Parts: []niro.Part{
+					{Kind: niro.KindText, Text: "I'll check"},
+					niro.ToolCallPart(&niro.ToolCall{ID: "tc1", Name: "fn", Args: json.RawMessage(`{}`)}),
 				},
 			},
 		},
@@ -1080,11 +1080,11 @@ func TestConvertMessage_AssistantTextAndToolCall(t *testing.T) {
 }
 
 func TestConvertMessage_ToolResult(t *testing.T) {
-	msgs := captureMessages(t, &ryn.Request{
-		Messages: []ryn.Message{
-			ryn.UserText("weather?"),
-			ryn.AssistantText("let me check"),
-			ryn.ToolMessage("call-abc", "Sunny, 25°C"),
+	msgs := captureMessages(t, &niro.Request{
+		Messages: []niro.Message{
+			niro.UserText("weather?"),
+			niro.AssistantText("let me check"),
+			niro.ToolMessage("call-abc", "Sunny, 25°C"),
 		},
 	})
 	if len(msgs) != 3 {
@@ -1118,11 +1118,11 @@ func TestConvertMessage_ToolResult(t *testing.T) {
 }
 
 func TestConvertMessage_ToolResult_IsError(t *testing.T) {
-	msgs := captureMessages(t, &ryn.Request{
-		Messages: []ryn.Message{
-			ryn.UserText("call tool"),
-			ryn.AssistantText("ok"),
-			ryn.ToolErrorMessage("call-err", "tool failed"),
+	msgs := captureMessages(t, &niro.Request{
+		Messages: []niro.Message{
+			niro.UserText("call tool"),
+			niro.AssistantText("ok"),
+			niro.ToolErrorMessage("call-err", "tool failed"),
 		},
 	})
 	toolMsg := msgs[2]
@@ -1137,9 +1137,9 @@ func TestConvertMessage_ToolResult_IsError(t *testing.T) {
 }
 
 func TestConvertMessage_UnknownRole_TreatedAsUser(t *testing.T) {
-	msgs := captureMessages(t, &ryn.Request{
-		Messages: []ryn.Message{
-			{Role: "unknown", Parts: []ryn.Part{{Kind: ryn.KindText, Text: "fallback"}}},
+	msgs := captureMessages(t, &niro.Request{
+		Messages: []niro.Message{
+			{Role: "unknown", Parts: []niro.Part{{Kind: niro.KindText, Text: "fallback"}}},
 		},
 	})
 	if len(msgs) != 1 {
@@ -1193,8 +1193,8 @@ func TestGenerate_CacheTokensInUsage(t *testing.T) {
 	p := newProvider(t, func(r *http.Request) (int, string, string) {
 		return 200, b.String(), ""
 	})
-	stream, err := p.Generate(context.Background(), &ryn.Request{
-		Messages: []ryn.Message{ryn.UserText("hi")},
+	stream, err := p.Generate(context.Background(), &niro.Request{
+		Messages: []niro.Message{niro.UserText("hi")},
 	})
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
@@ -1244,13 +1244,13 @@ func TestGenerate_EmptyContentStream(t *testing.T) {
 	p := newProvider(t, func(r *http.Request) (int, string, string) {
 		return 200, b.String(), ""
 	})
-	stream, err := p.Generate(context.Background(), &ryn.Request{
-		Messages: []ryn.Message{ryn.UserText("hi")},
+	stream, err := p.Generate(context.Background(), &niro.Request{
+		Messages: []niro.Message{niro.UserText("hi")},
 	})
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
 	}
-	frames, err := ryn.Collect(context.Background(), stream)
+	frames, err := niro.Collect(context.Background(), stream)
 	if err != nil {
 		t.Fatalf("stream err: %v", err)
 	}

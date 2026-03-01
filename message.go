@@ -1,4 +1,4 @@
-package ryn
+package niro
 
 // Role identifies the sender of a message in a conversation.
 type Role string

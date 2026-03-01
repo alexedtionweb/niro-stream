@@ -90,11 +90,11 @@ func main() {
 	// NewToolLoop manages the multi-round tool-call loop automatically.
 	// MaxRounds=5 prevents runaway loops if a model keeps calling tools.
 	loop := tools.NewToolLoop(ts, 5)
-	stream, err := loop.GenerateWithTools(ctx, llm, &ryn.Request{
-		Messages: []ryn.Message{ryn.UserText("What's the weather in Tokyo and Paris right now? Also tell me the current UTC time.")},
+	stream, err := loop.GenerateWithTools(ctx, llm, &niro.Request{
+		Messages: []niro.Message{niro.UserText("What's the weather in Tokyo and Paris right now? Also tell me the current UTC time.")},
 
 		Tools:   ts.Tools(),
-		Options: ryn.Options{MaxTokens: 512},
+		Options: niro.Options{MaxTokens: 512},
 	})
 	if err != nil {
 		slog.Error("generate failed", "err", err)
@@ -102,7 +102,7 @@ func main() {
 	}
 
 	for stream.Next(ctx) {
-		if f := stream.Frame(); f.Kind == ryn.KindText {
+		if f := stream.Frame(); f.Kind == niro.KindText {
 			fmt.Print(f.Text)
 		}
 	}
@@ -136,7 +136,7 @@ func fetchWeather(args weatherArgs) map[string]any {
 }
 
 // mustProvider returns a Provider for the selected PROVIDER.
-func mustProvider(ctx context.Context) ryn.Provider {
+func mustProvider(ctx context.Context) niro.Provider {
 	switch strings.ToLower(os.Getenv("PROVIDER")) {
 	case "", "openai":
 		return openai.New(os.Getenv("OPENAI_API_KEY"))

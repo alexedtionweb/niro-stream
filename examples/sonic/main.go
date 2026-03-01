@@ -1,5 +1,5 @@
 // Command sonic demonstrates real-time speech-to-speech using Amazon Nova Sonic
-// via the ryn.RealtimeProvider interface.
+// via the niro.RealtimeProvider interface.
 //
 // The demo uses silence frames as synthetic audio input (no microphone required)
 // and prints received text transcripts to stdout. Raw PCM audio output is
@@ -21,7 +21,7 @@
 //	LOG_LEVEL   set to "debug" for verbose output
 //
 // To stream real microphone audio, replace the silence loop in audioTurn with
-// your PCM capture code. Chunks must be 16 kHz 16-bit mono PCM (ryn.AudioPCM16k).
+// your PCM capture code. Chunks must be 16 kHz 16-bit mono PCM (niro.AudioPCM16k).
 package main
 
 import (
@@ -94,8 +94,8 @@ func main() {
 
 // ── Demo 1: text turn ─────────────────────────────────────────────────────────
 
-func textTurn(ctx context.Context, p ryn.RealtimeProvider) error {
-	sess, err := p.Session(ctx, ryn.RealtimeConfig{
+func textTurn(ctx context.Context, p niro.RealtimeProvider) error {
+	sess, err := p.Session(ctx, niro.RealtimeConfig{
 		SystemPrompt: "You are a helpful voice assistant. Keep replies to one sentence.",
 		Voice:        "",
 	})
@@ -113,10 +113,10 @@ func textTurn(ctx context.Context, p ryn.RealtimeProvider) error {
 	}()
 
 	// Send a text message then signal end-of-turn.
-	if err := sess.Send(ctx, ryn.TextFrame("Hello! What time is it?")); err != nil {
+	if err := sess.Send(ctx, niro.TextFrame("Hello! What time is it?")); err != nil {
 		return fmt.Errorf("send text: %w", err)
 	}
-	if err := sess.Send(ctx, ryn.ControlFrame(ryn.SignalEOT)); err != nil {
+	if err := sess.Send(ctx, niro.ControlFrame(niro.SignalEOT)); err != nil {
 		return fmt.Errorf("send eot: %w", err)
 	}
 
@@ -134,12 +134,12 @@ func silencePCM(durationMs int) []byte {
 	return make([]byte, samples*2)
 }
 
-func audioTurn(ctx context.Context, p ryn.RealtimeProvider, chunkMs int) error {
-	sess, err := p.Session(ctx, ryn.RealtimeConfig{
+func audioTurn(ctx context.Context, p niro.RealtimeProvider, chunkMs int) error {
+	sess, err := p.Session(ctx, niro.RealtimeConfig{
 		SystemPrompt: "You are a helpful voice assistant. Keep replies to one sentence.",
-		InputFormat:  ryn.AudioPCM16k, // 16 kHz PCM16 mono
-		OutputFormat: ryn.AudioPCM24k, // 24 kHz PCM16 mono
-		VAD:          &ryn.VADConfig{Threshold: 0.5, SilenceDurationMs: 300},
+		InputFormat:  niro.AudioPCM16k, // 16 kHz PCM16 mono
+		OutputFormat: niro.AudioPCM24k, // 24 kHz PCM16 mono
+		VAD:          &niro.VADConfig{Threshold: 0.5, SilenceDurationMs: 300},
 	})
 	if err != nil {
 		return fmt.Errorf("open session: %w", err)
@@ -158,12 +158,12 @@ func audioTurn(ctx context.Context, p ryn.RealtimeProvider, chunkMs int) error {
 	chunk := silencePCM(chunkMs)
 	nChunks := 500 / chunkMs
 	for i := 0; i < nChunks; i++ {
-		if err := sess.Send(ctx, ryn.AudioFrame(chunk, ryn.AudioPCM16k)); err != nil {
+		if err := sess.Send(ctx, niro.AudioFrame(chunk, niro.AudioPCM16k)); err != nil {
 			return fmt.Errorf("send audio chunk %d: %w", i, err)
 		}
 		time.Sleep(time.Duration(chunkMs) * time.Millisecond)
 	}
-	if err := sess.Send(ctx, ryn.ControlFrame(ryn.SignalEOT)); err != nil {
+	if err := sess.Send(ctx, niro.ControlFrame(niro.SignalEOT)); err != nil {
 		return fmt.Errorf("send eot: %w", err)
 	}
 
@@ -173,16 +173,16 @@ func audioTurn(ctx context.Context, p ryn.RealtimeProvider, chunkMs int) error {
 
 // ── Demo 3: tool calling ──────────────────────────────────────────────────────
 
-func toolTurn(ctx context.Context, p ryn.RealtimeProvider) error {
-	weatherTool := ryn.Tool{
+func toolTurn(ctx context.Context, p niro.RealtimeProvider) error {
+	weatherTool := niro.Tool{
 		Name:        "get_weather",
 		Description: "Get the current weather for a city.",
 		Parameters:  json.RawMessage(`{"type":"object","properties":{"city":{"type":"string"}},"required":["city"]}`),
 	}
 
-	sess, err := p.Session(ctx, ryn.RealtimeConfig{
+	sess, err := p.Session(ctx, niro.RealtimeConfig{
 		SystemPrompt: "You are a helpful voice assistant.",
-		Tools:        []ryn.Tool{weatherTool},
+		Tools:        []niro.Tool{weatherTool},
 	})
 	if err != nil {
 		return fmt.Errorf("open session: %w", err)
@@ -198,22 +198,22 @@ func toolTurn(ctx context.Context, p ryn.RealtimeProvider) error {
 		for stream.Next(ctx) {
 			f := stream.Frame()
 			switch f.Kind {
-			case ryn.KindText:
+			case niro.KindText:
 				fmt.Print(f.Text)
-			case ryn.KindAudio:
+			case niro.KindAudio:
 				// discard audio output in this demo
-			case ryn.KindToolCall:
+			case niro.KindToolCall:
 				fmt.Printf("\n[tool call] %s(%s)\n", f.Tool.Name, string(f.Tool.Args))
 				// Execute the tool and send the result back.
 				result := executeWeather(f.Tool)
-				if sendErr := sess.Send(ctx, ryn.Frame{
-					Kind:   ryn.KindToolResult,
+				if sendErr := sess.Send(ctx, niro.Frame{
+					Kind:   niro.KindToolResult,
 					Result: result,
 				}); sendErr != nil {
 					slog.Error("send tool result", "err", sendErr)
 				}
-			case ryn.KindControl:
-				if f.Signal == ryn.SignalEOT {
+			case niro.KindControl:
+				if f.Signal == niro.SignalEOT {
 					fmt.Println()
 					return
 				}
@@ -224,10 +224,10 @@ func toolTurn(ctx context.Context, p ryn.RealtimeProvider) error {
 		}
 	}()
 
-	if err := sess.Send(ctx, ryn.TextFrame("What is the weather in Seattle?")); err != nil {
+	if err := sess.Send(ctx, niro.TextFrame("What is the weather in Seattle?")); err != nil {
 		return fmt.Errorf("send text: %w", err)
 	}
-	if err := sess.Send(ctx, ryn.ControlFrame(ryn.SignalEOT)); err != nil {
+	if err := sess.Send(ctx, niro.ControlFrame(niro.SignalEOT)); err != nil {
 		return fmt.Errorf("send eot: %w", err)
 	}
 
@@ -235,15 +235,15 @@ func toolTurn(ctx context.Context, p ryn.RealtimeProvider) error {
 	return sess.Err()
 }
 
-func executeWeather(call *ryn.ToolCall) *ryn.ToolResult {
+func executeWeather(call *niro.ToolCall) *niro.ToolResult {
 	var args struct {
 		City string `json:"city"`
 	}
 	if err := json.Unmarshal(call.Args, &args); err != nil {
-		return &ryn.ToolResult{CallID: call.ID, IsError: true, Content: err.Error()}
+		return &niro.ToolResult{CallID: call.ID, IsError: true, Content: err.Error()}
 	}
 	// Stub: return synthetic data.
-	return &ryn.ToolResult{
+	return &niro.ToolResult{
 		CallID:  call.ID,
 		Content: fmt.Sprintf(`{"city":%q,"temp_c":12,"condition":"cloudy"}`, args.City),
 	}
@@ -253,24 +253,24 @@ func executeWeather(call *ryn.ToolCall) *ryn.ToolResult {
 
 // printRecv reads from a Stream and prints text/audio/control frames until
 // EOT or the stream closes.
-func printRecv(ctx context.Context, stream *ryn.Stream) {
+func printRecv(ctx context.Context, stream *niro.Stream) {
 	for stream.Next(ctx) {
 		f := stream.Frame()
 		switch f.Kind {
-		case ryn.KindText:
+		case niro.KindText:
 			fmt.Print(f.Text)
-		case ryn.KindAudio:
+		case niro.KindAudio:
 			// In production: write f.Data (24 kHz PCM16 mono) to your speaker/codec.
 			slog.Debug("audio frame", "bytes", len(f.Data))
-		case ryn.KindControl:
+		case niro.KindControl:
 			switch f.Signal {
-			case ryn.SignalEOT:
+			case niro.SignalEOT:
 				fmt.Println()
 				return
-			case ryn.SignalFlush:
+			case niro.SignalFlush:
 				fmt.Println("\n[barge-in detected]")
 			}
-		case ryn.KindUsage:
+		case niro.KindUsage:
 			if u := f.Usage; u != nil {
 				slog.Info("usage", "in", u.InputTokens, "out", u.OutputTokens)
 			}

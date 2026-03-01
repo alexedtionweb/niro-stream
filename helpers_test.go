@@ -1,4 +1,4 @@
-package ryn_test
+package niro_test
 
 import (
 	"fmt"
@@ -43,7 +43,7 @@ func assertNotNil(t *testing.T, v any) {
 		t.Error("expected non-nil")
 		return
 	}
-	// Handle typed nils (e.g. (*ryn.Error)(nil) wrapped in any)
+	// Handle typed nils (e.g. (*niro.Error)(nil) wrapped in any)
 	rv := reflect.ValueOf(v)
 	if rv.Kind() == reflect.Ptr && rv.IsNil() {
 		t.Error("expected non-nil")
@@ -55,7 +55,7 @@ func assertNil(t *testing.T, v any) {
 	if v == nil {
 		return
 	}
-	// Handle typed nils (e.g. (*ryn.Error)(nil) wrapped in any)
+	// Handle typed nils (e.g. (*niro.Error)(nil) wrapped in any)
 	rv := reflect.ValueOf(v)
 	if rv.Kind() == reflect.Ptr && rv.IsNil() {
 		return

@@ -15,7 +15,7 @@ func TestCostCalculation(t *testing.T) {
 		OutputCostPer1M: 15.00,
 	}
 
-	usage := ryn.Usage{
+	usage := niro.Usage{
 		InputTokens:  1000000,
 		OutputTokens: 1000000,
 		TotalTokens:  2000000,
@@ -81,7 +81,7 @@ func TestPricingRegistryCalculateCost(t *testing.T) {
 		OutputCostPer1M: 15.00,
 	})
 
-	usage := ryn.Usage{InputTokens: 1_000_000, OutputTokens: 1_000_000}
+	usage := niro.Usage{InputTokens: 1_000_000, OutputTokens: 1_000_000}
 	c := reg.CalculateCost("openai", "gpt-4o", usage)
 	assertEqual(t, c.InputCost, 5.0)
 	assertEqual(t, c.OutputCost, 15.0)
@@ -95,7 +95,7 @@ func TestPricingRegistryCalculateCost(t *testing.T) {
 func TestNilModelPricingCalculateCost(t *testing.T) {
 	t.Parallel()
 	var p *cost.ModelPricing
-	c := p.CalculateCost(ryn.Usage{InputTokens: 100, OutputTokens: 100})
+	c := p.CalculateCost(niro.Usage{InputTokens: 100, OutputTokens: 100})
 	assertEqual(t, c.TotalCost, 0.0)
 	assertEqual(t, c.Currency, "")
 }
@@ -143,7 +143,7 @@ func TestPackageLevelCalculateCost(t *testing.T) {
 	// Initialize so we have pricing data
 	cost.InitializePricingRegistry(cost.GetPricingRegistry())
 
-	usage := ryn.Usage{InputTokens: 1_000_000, OutputTokens: 1_000_000}
+	usage := niro.Usage{InputTokens: 1_000_000, OutputTokens: 1_000_000}
 	c := cost.CalculateCost("openai", "gpt-4o", usage)
 	assertEqual(t, c.InputCost, 5.0)
 	assertEqual(t, c.Currency, "USD")
@@ -162,7 +162,7 @@ func TestModelPricingWithCacheFields(t *testing.T) {
 		CacheReadCostPer1M:  0.30,
 		CacheWriteCostPer1M: 3.75,
 	}
-	usage := ryn.Usage{InputTokens: 500_000, OutputTokens: 500_000}
+	usage := niro.Usage{InputTokens: 500_000, OutputTokens: 500_000}
 	c := pricing.CalculateCost(usage)
 	assertEqual(t, c.InputCost, 1.5)
 	assertEqual(t, c.OutputCost, 7.5)

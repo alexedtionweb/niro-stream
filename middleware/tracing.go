@@ -64,17 +64,17 @@ type traceContextKey struct{}
 
 // TracingProvider wraps a Provider and injects tracing information.
 type TracingProvider struct {
-	provider ryn.Provider
+	provider niro.Provider
 }
 
 // NewTracingProvider creates a Provider that automatically generates
 // and propagates trace IDs.
-func NewTracingProvider(p ryn.Provider) *TracingProvider {
+func NewTracingProvider(p niro.Provider) *TracingProvider {
 	return &TracingProvider{provider: p}
 }
 
 // Generate implements Provider with automatic trace context injection.
-func (tp *TracingProvider) Generate(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+func (tp *TracingProvider) Generate(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
 	// GetTraceContext always returns a non-empty RequestID (auto-generated
 	// when absent). Always store it back so the downstream provider sees it.
 	trace := GetTraceContext(ctx)

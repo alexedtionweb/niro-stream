@@ -1,4 +1,4 @@
-package ryn_test
+package niro_test
 
 import (
 	"context"
@@ -12,14 +12,14 @@ func TestStreamBasic(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 
-	s, e := ryn.NewStream(4)
+	s, e := niro.NewStream(4)
 	go func() {
 		defer e.Close()
-		e.Emit(ctx, ryn.TextFrame("Hello"))
-		e.Emit(ctx, ryn.TextFrame(" World"))
+		e.Emit(ctx, niro.TextFrame("Hello"))
+		e.Emit(ctx, niro.TextFrame(" World"))
 	}()
 
-	text, err := ryn.CollectText(ctx, s)
+	text, err := niro.CollectText(ctx, s)
 	assertNoError(t, err)
 	assertEqual(t, text, "Hello World")
 }
@@ -28,16 +28,16 @@ func TestStreamUsageAutoAccumulation(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 
-	s, e := ryn.NewStream(8)
+	s, e := niro.NewStream(8)
 	go func() {
 		defer e.Close()
-		e.Emit(ctx, ryn.TextFrame("a"))
-		e.Emit(ctx, ryn.UsageFrame(&ryn.Usage{InputTokens: 10, OutputTokens: 1, TotalTokens: 11}))
-		e.Emit(ctx, ryn.TextFrame("b"))
-		e.Emit(ctx, ryn.UsageFrame(&ryn.Usage{InputTokens: 0, OutputTokens: 1, TotalTokens: 1}))
+		e.Emit(ctx, niro.TextFrame("a"))
+		e.Emit(ctx, niro.UsageFrame(&niro.Usage{InputTokens: 10, OutputTokens: 1, TotalTokens: 11}))
+		e.Emit(ctx, niro.TextFrame("b"))
+		e.Emit(ctx, niro.UsageFrame(&niro.Usage{InputTokens: 0, OutputTokens: 1, TotalTokens: 1}))
 	}()
 
-	var frames []ryn.Frame
+	var frames []niro.Frame
 	for s.Next(ctx) {
 		frames = append(frames, s.Frame())
 	}
@@ -58,9 +58,9 @@ func TestStreamError(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 
-	s, e := ryn.NewStream(4)
+	s, e := niro.NewStream(4)
 	go func() {
-		e.Emit(ctx, ryn.TextFrame("a"))
+		e.Emit(ctx, niro.TextFrame("a"))
 		e.Error(errTest)
 	}()
 
@@ -77,11 +77,11 @@ func TestStreamContextCancel(t *testing.T) {
 	t.Parallel()
 	ctx, cancel := context.WithCancel(context.Background())
 
-	s, e := ryn.NewStream(0)
+	s, e := niro.NewStream(0)
 	go func() {
 		defer e.Close()
 		for i := 0; i < 100; i++ {
-			if err := e.Emit(ctx, ryn.TextFrame("x")); err != nil {
+			if err := e.Emit(ctx, niro.TextFrame("x")); err != nil {
 				return
 			}
 		}
@@ -100,12 +100,12 @@ func TestStreamFromSlice(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 
-	s := ryn.StreamFromSlice([]ryn.Frame{
-		ryn.TextFrame("a"),
-		ryn.TextFrame("b"),
+	s := niro.StreamFromSlice([]niro.Frame{
+		niro.TextFrame("a"),
+		niro.TextFrame("b"),
 	})
 
-	frames, err := ryn.Collect(ctx, s)
+	frames, err := niro.Collect(ctx, s)
 	assertNoError(t, err)
 	assertEqual(t, len(frames), 2)
 	assertEqual(t, frames[1].Text, "b")
@@ -115,9 +115,9 @@ func TestStreamResponse(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 
-	s, e := ryn.NewStream(4)
+	s, e := niro.NewStream(4)
 	go func() {
-		e.SetResponse(&ryn.ResponseMeta{
+		e.SetResponse(&niro.ResponseMeta{
 			Model:        "gpt-4o",
 			FinishReason: "stop",
 			ID:           "resp_123",
@@ -125,7 +125,7 @@ func TestStreamResponse(t *testing.T) {
 		e.Close()
 	}()
 
-	_, err := ryn.Collect(ctx, s)
+	_, err := niro.Collect(ctx, s)
 	assertNoError(t, err)
 
 	resp := s.Response()
@@ -138,10 +138,10 @@ func TestEmitAfterClose(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 
-	_, e := ryn.NewStream(0)
+	_, e := niro.NewStream(0)
 	e.Close()
 
-	err := e.Emit(ctx, ryn.TextFrame("late"))
+	err := e.Emit(ctx, niro.TextFrame("late"))
 	assertErrorContains(t, err, "stream closed")
 }
 
@@ -149,16 +149,16 @@ func TestCollectText(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 
-	s, e := ryn.NewStream(8)
+	s, e := niro.NewStream(8)
 	go func() {
 		defer e.Close()
-		e.Emit(ctx, ryn.TextFrame("Hello"))
-		e.Emit(ctx, ryn.ControlFrame(ryn.SignalFlush))
-		e.Emit(ctx, ryn.TextFrame(" World"))
-		e.Emit(ctx, ryn.AudioFrame(nil, ""))
+		e.Emit(ctx, niro.TextFrame("Hello"))
+		e.Emit(ctx, niro.ControlFrame(niro.SignalFlush))
+		e.Emit(ctx, niro.TextFrame(" World"))
+		e.Emit(ctx, niro.AudioFrame(nil, ""))
 	}()
 
-	text, err := ryn.CollectText(ctx, s)
+	text, err := niro.CollectText(ctx, s)
 	assertNoError(t, err)
 	assertEqual(t, text, "Hello World")
 }
@@ -167,18 +167,18 @@ func TestStreamChan(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 
-	s, e := ryn.NewStream(4)
+	s, e := niro.NewStream(4)
 	go func() {
 		defer e.Close()
-		e.Emit(ctx, ryn.TextFrame("x"))
-		e.Emit(ctx, ryn.TextFrame("y"))
+		e.Emit(ctx, niro.TextFrame("x"))
+		e.Emit(ctx, niro.TextFrame("y"))
 	}()
 
 	ch := s.Chan()
 	assertNotNil(t, ch)
 
 	// Drain via the channel directly
-	var frames []ryn.Frame
+	var frames []niro.Frame
 	for f := range ch {
 		frames = append(frames, f)
 	}
@@ -189,18 +189,18 @@ func TestForward(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 
-	src := ryn.StreamFromSlice([]ryn.Frame{
-		ryn.TextFrame("x"),
-		ryn.TextFrame("y"),
+	src := niro.StreamFromSlice([]niro.Frame{
+		niro.TextFrame("x"),
+		niro.TextFrame("y"),
 	})
 
-	dst, dstEmitter := ryn.NewStream(4)
+	dst, dstEmitter := niro.NewStream(4)
 	go func() {
 		defer dstEmitter.Close()
-		ryn.Forward(ctx, src, dstEmitter)
+		niro.Forward(ctx, src, dstEmitter)
 	}()
 
-	frames, err := ryn.Collect(ctx, dst)
+	frames, err := niro.Collect(ctx, dst)
 	assertNoError(t, err)
 	assertEqual(t, len(frames), 2)
 }
@@ -210,24 +210,24 @@ func TestForwardSrcError(t *testing.T) {
 	ctx := context.Background()
 
 	// Source stream that emits a frame then errors.
-	src, srcEm := ryn.NewStream(4)
+	src, srcEm := niro.NewStream(4)
 	go func() {
 		defer srcEm.Close()
-		_ = srcEm.Emit(ctx, ryn.TextFrame("partial"))
+		_ = srcEm.Emit(ctx, niro.TextFrame("partial"))
 		srcEm.Error(fmt.Errorf("src broke"))
 	}()
 
-	dst, dstEm := ryn.NewStream(4)
+	dst, dstEm := niro.NewStream(4)
 	var forwardErr error
 	go func() {
 		defer dstEm.Close()
-		forwardErr = ryn.Forward(ctx, src, dstEm)
+		forwardErr = niro.Forward(ctx, src, dstEm)
 		if forwardErr != nil {
 			dstEm.Error(forwardErr)
 		}
 	}()
 
-	frames, err := ryn.Collect(ctx, dst)
+	frames, err := niro.Collect(ctx, dst)
 	// Either the error is returned by Collect or is in the stream.
 	_ = frames
 	if err == nil {
@@ -241,19 +241,19 @@ func TestForwardEmitError(t *testing.T) {
 	ctx := context.Background()
 
 	// Source has more frames than the dst buffer + dst will be closed early.
-	src, srcEm := ryn.NewStream(4)
+	src, srcEm := niro.NewStream(4)
 	go func() {
 		defer srcEm.Close()
 		for i := range 10 {
-			_ = srcEm.Emit(ctx, ryn.TextFrame(fmt.Sprintf("frame-%d", i)))
+			_ = srcEm.Emit(ctx, niro.TextFrame(fmt.Sprintf("frame-%d", i)))
 		}
 	}()
 
 	// Destination with a tiny buffer that we close immediately.
-	dst, dstEm := ryn.NewStream(1)
+	dst, dstEm := niro.NewStream(1)
 	dstEm.Close() // close before forwarding — Emit to it will fail
 
-	err := ryn.Forward(ctx, src, dstEm)
+	err := niro.Forward(ctx, src, dstEm)
 	// Forward should return an error because the emitter is already closed.
 	_ = dst
 	_ = err // may or may not error depending on timing; just ensure no panic

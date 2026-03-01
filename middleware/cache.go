@@ -35,7 +35,7 @@ type CacheOptions struct {
 
 	// KeyFn allows custom cache key generation.
 	// Defaults to sha256 of (model + messages + tools + response_format).
-	KeyFn func(*ryn.Request) [32]byte
+	KeyFn func(*niro.Request) [32]byte
 }
 
 type cacheShard struct {
@@ -47,9 +47,9 @@ type cacheShard struct {
 
 type cacheEntry struct {
 	key     [32]byte
-	frames  []ryn.Frame
-	resp    *ryn.ResponseMeta
-	usage   ryn.Usage
+	frames  []niro.Frame
+	resp    *niro.ResponseMeta
+	usage   niro.Usage
 	expires time.Time
 	prev    *cacheEntry
 	next    *cacheEntry
@@ -127,13 +127,13 @@ func NewCache(opts CacheOptions) *Cache {
 }
 
 // Wrap returns a caching Provider that serves cached responses when available.
-func (c *Cache) Wrap(p ryn.Provider) ryn.Provider {
-	return ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+func (c *Cache) Wrap(p niro.Provider) niro.Provider {
+	return niro.ProviderFunc(func(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
 		key := c.opts.KeyFn(req)
 
 		if frames, resp, usage, ok := c.get(key); ok {
 			c.hits.Add(1)
-			out, em := ryn.NewStream(len(frames) + 2)
+			out, em := niro.NewStream(len(frames) + 2)
 			go func() {
 				defer em.Close()
 				for _, f := range frames {
@@ -146,7 +146,7 @@ func (c *Cache) Wrap(p ryn.Provider) ryn.Provider {
 				}
 				if usage.InputTokens > 0 || usage.OutputTokens > 0 || usage.TotalTokens > 0 {
 					u := usage
-					_ = em.Emit(ctx, ryn.UsageFrame(&u))
+					_ = em.Emit(ctx, niro.UsageFrame(&u))
 				}
 			}()
 			return out, nil
@@ -159,10 +159,10 @@ func (c *Cache) Wrap(p ryn.Provider) ryn.Provider {
 		}
 
 		// Intercept: collect frames, then serve from memory and store.
-		out, em := ryn.NewStream(32)
+		out, em := niro.NewStream(32)
 		go func() {
 			defer em.Close()
-			var collected []ryn.Frame
+			var collected []niro.Frame
 			for stream.Next(ctx) {
 				f := stream.Frame()
 				collected = append(collected, f)
@@ -184,7 +184,7 @@ func (c *Cache) Wrap(p ryn.Provider) ryn.Provider {
 			// output stream so cache-miss callers see token counts.
 			if usage.InputTokens > 0 || usage.OutputTokens > 0 || usage.TotalTokens > 0 {
 				u := usage
-				_ = em.Emit(ctx, ryn.UsageFrame(&u))
+				_ = em.Emit(ctx, niro.UsageFrame(&u))
 			}
 			c.put(key, collected, resp, usage)
 		}()
@@ -224,24 +224,24 @@ func (c *Cache) shard(key [32]byte) *cacheShard {
 	return c.shards[key[0]%cacheShards]
 }
 
-func (c *Cache) get(key [32]byte) ([]ryn.Frame, *ryn.ResponseMeta, ryn.Usage, bool) {
+func (c *Cache) get(key [32]byte) ([]niro.Frame, *niro.ResponseMeta, niro.Usage, bool) {
 	s := c.shard(key)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	e, ok := s.entries[key]
 	if !ok {
-		return nil, nil, ryn.Usage{}, false
+		return nil, nil, niro.Usage{}, false
 	}
 	if c.opts.TTL > 0 && !e.expires.IsZero() && time.Now().After(e.expires) {
 		s.list.remove(e)
 		delete(s.entries, key)
-		return nil, nil, ryn.Usage{}, false
+		return nil, nil, niro.Usage{}, false
 	}
 	s.list.moveToFront(e)
 	return e.frames, e.resp, e.usage, true
 }
 
-func (c *Cache) put(key [32]byte, frames []ryn.Frame, resp *ryn.ResponseMeta, usage ryn.Usage) {
+func (c *Cache) put(key [32]byte, frames []niro.Frame, resp *niro.ResponseMeta, usage niro.Usage) {
 	s := c.shard(key)
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -277,13 +277,13 @@ func (c *Cache) put(key [32]byte, frames []ryn.Frame, resp *ryn.ResponseMeta, us
 	}
 }
 
-func defaultCacheKey(req *ryn.Request) [32]byte {
+func defaultCacheKey(req *niro.Request) [32]byte {
 	h := sha256.New()
 	b, _ := json.Marshal(struct {
-		Model          string        `json:"m"`
-		Messages       []ryn.Message `json:"msgs"`
-		Tools          []ryn.Tool    `json:"tools,omitempty"`
-		ResponseFormat string        `json:"rf,omitempty"`
+		Model          string         `json:"m"`
+		Messages       []niro.Message `json:"msgs"`
+		Tools          []niro.Tool    `json:"tools,omitempty"`
+		ResponseFormat string         `json:"rf,omitempty"`
 	}{
 		Model:          req.Model,
 		Messages:       req.Messages,

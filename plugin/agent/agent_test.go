@@ -61,14 +61,14 @@ func assertTrue(t *testing.T, v bool) {
 
 // --- mock providers and helpers ---
 
-func echoProvider(reply string) ryn.Provider {
-	return ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
-		return ryn.StreamFromSlice([]ryn.Frame{ryn.TextFrame(reply)}), nil
+func echoProvider(reply string) niro.Provider {
+	return niro.ProviderFunc(func(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
+		return niro.StreamFromSlice([]niro.Frame{niro.TextFrame(reply)}), nil
 	})
 }
 
-func errorProvider(msg string) ryn.Provider {
-	return ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+func errorProvider(msg string) niro.Provider {
+	return niro.ProviderFunc(func(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
 		return nil, fmt.Errorf(msg)
 	})
 }
@@ -87,27 +87,27 @@ func (m *mockPeer) Ask(ctx context.Context, sessionID string, input string) (str
 
 // mockMemory implements agent.Memory with optional errors.
 type mockMemory struct {
-	history   []ryn.Message
+	history   []niro.Message
 	loadErr   error
 	saveErr   error
 	loadCalls int
 	saveCalls int
 }
 
-func (m *mockMemory) Load(ctx context.Context, sessionID string) ([]ryn.Message, error) {
+func (m *mockMemory) Load(ctx context.Context, sessionID string) ([]niro.Message, error) {
 	m.loadCalls++
 	if m.loadErr != nil {
 		return nil, m.loadErr
 	}
-	return append([]ryn.Message(nil), m.history...), nil
+	return append([]niro.Message(nil), m.history...), nil
 }
 
-func (m *mockMemory) Save(ctx context.Context, sessionID string, history []ryn.Message) error {
+func (m *mockMemory) Save(ctx context.Context, sessionID string, history []niro.Message) error {
 	m.saveCalls++
 	if m.saveErr != nil {
 		return m.saveErr
 	}
-	m.history = append([]ryn.Message(nil), history...)
+	m.history = append([]niro.Message(nil), history...)
 	return nil
 }
 
@@ -340,7 +340,7 @@ func TestInMemoryMemory(t *testing.T) {
 	assertEqual(t, len(history), 0)
 
 	// Save messages.
-	msgs := []ryn.Message{ryn.UserText("hello"), ryn.AssistantText("world")}
+	msgs := []niro.Message{niro.UserText("hello"), niro.AssistantText("world")}
 	err = mem.Save(ctx, "s1", msgs)
 	assertNoError(t, err)
 
@@ -716,8 +716,8 @@ func TestRuntimeRunWithStreamError(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 
-	streamErrProvider := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
-		out, em := ryn.NewStream(4)
+	streamErrProvider := niro.ProviderFunc(func(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
+		out, em := niro.NewStream(4)
 		go func() {
 			defer em.Close()
 			em.Error(fmt.Errorf("stream failed"))
@@ -778,7 +778,7 @@ func TestRuntimeRunStream(t *testing.T) {
 
 	var got strings.Builder
 	for stream.Next(ctx) {
-		if f := stream.Frame(); f.Kind == ryn.KindText {
+		if f := stream.Frame(); f.Kind == niro.KindText {
 			got.WriteString(f.Text)
 		}
 	}
@@ -845,8 +845,8 @@ func TestRuntimeRunStreamError(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 
-	streamErrProvider := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
-		out, em := ryn.NewStream(4)
+	streamErrProvider := niro.ProviderFunc(func(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
+		out, em := niro.NewStream(4)
 		go func() {
 			defer em.Close()
 			em.Error(fmt.Errorf("stream failed"))
@@ -874,9 +874,9 @@ func TestWithSystemPrompt(t *testing.T) {
 	ctx := context.Background()
 
 	var gotSystemPrompt string
-	spy := ryn.ProviderFunc(func(_ context.Context, req *ryn.Request) (*ryn.Stream, error) {
+	spy := niro.ProviderFunc(func(_ context.Context, req *niro.Request) (*niro.Stream, error) {
 		gotSystemPrompt = req.SystemPrompt
-		return ryn.StreamFromSlice([]ryn.Frame{ryn.TextFrame("ok")}), nil
+		return niro.StreamFromSlice([]niro.Frame{niro.TextFrame("ok")}), nil
 	})
 
 	rt, err := agent.New(spy, agent.WithSystemPrompt("You are a helpful agent."))
@@ -893,12 +893,12 @@ func TestWithOptions(t *testing.T) {
 	ctx := context.Background()
 
 	var gotTemp *float64
-	spy := ryn.ProviderFunc(func(_ context.Context, req *ryn.Request) (*ryn.Stream, error) {
+	spy := niro.ProviderFunc(func(_ context.Context, req *niro.Request) (*niro.Stream, error) {
 		gotTemp = req.Options.Temperature
-		return ryn.StreamFromSlice([]ryn.Frame{ryn.TextFrame("ok")}), nil
+		return niro.StreamFromSlice([]niro.Frame{niro.TextFrame("ok")}), nil
 	})
 
-	rt, err := agent.New(spy, agent.WithOptions(ryn.Options{Temperature: ryn.Temp(0.2)}))
+	rt, err := agent.New(spy, agent.WithOptions(niro.Options{Temperature: niro.Temp(0.2)}))
 	assertNoError(t, err)
 
 	_, err = rt.Run(ctx, "", "hello")
@@ -913,8 +913,8 @@ func TestWithMiddleware(t *testing.T) {
 	ctx := context.Background()
 
 	called := false
-	wrap := func(p ryn.Provider) ryn.Provider {
-		return ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+	wrap := func(p niro.Provider) niro.Provider {
+		return niro.ProviderFunc(func(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
 			called = true
 			return p.Generate(ctx, req)
 		})
@@ -952,9 +952,9 @@ func TestSystemPromptForwardedInRunStream(t *testing.T) {
 	ctx := context.Background()
 
 	var gotPrompt string
-	spy := ryn.ProviderFunc(func(_ context.Context, req *ryn.Request) (*ryn.Stream, error) {
+	spy := niro.ProviderFunc(func(_ context.Context, req *niro.Request) (*niro.Stream, error) {
 		gotPrompt = req.SystemPrompt
-		return ryn.StreamFromSlice([]ryn.Frame{ryn.TextFrame("streamed")}), nil
+		return niro.StreamFromSlice([]niro.Frame{niro.TextFrame("streamed")}), nil
 	})
 
 	rt, err := agent.New(spy, agent.WithSystemPrompt("Be helpful."))
@@ -972,13 +972,13 @@ func TestRunStreamForwardsUsage(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 
-	usageProvider := ryn.ProviderFunc(func(_ context.Context, _ *ryn.Request) (*ryn.Stream, error) {
-		out, em := ryn.NewStream(4)
+	usageProvider := niro.ProviderFunc(func(_ context.Context, _ *niro.Request) (*niro.Stream, error) {
+		out, em := niro.NewStream(4)
 		go func() {
 			defer em.Close()
-			_ = em.Emit(ctx, ryn.TextFrame("hello"))
-			u := ryn.Usage{InputTokens: 10, OutputTokens: 5, TotalTokens: 15}
-			_ = em.Emit(ctx, ryn.UsageFrame(&u))
+			_ = em.Emit(ctx, niro.TextFrame("hello"))
+			u := niro.Usage{InputTokens: 10, OutputTokens: 5, TotalTokens: 15}
+			_ = em.Emit(ctx, niro.UsageFrame(&u))
 		}()
 		return out, nil
 	})
@@ -1007,12 +1007,12 @@ func TestRetryComponent(t *testing.T) {
 	ctx := context.Background()
 
 	attempts := 0
-	flaky := ryn.ProviderFunc(func(_ context.Context, _ *ryn.Request) (*ryn.Stream, error) {
+	flaky := niro.ProviderFunc(func(_ context.Context, _ *niro.Request) (*niro.Stream, error) {
 		attempts++
 		if attempts < 3 {
 			return nil, fmt.Errorf("temporary error")
 		}
-		return ryn.StreamFromSlice([]ryn.Frame{ryn.TextFrame("ok after retry")}), nil
+		return niro.StreamFromSlice([]niro.Frame{niro.TextFrame("ok after retry")}), nil
 	})
 
 	cfg := middleware.DefaultRetryConfig()
@@ -1054,9 +1054,9 @@ func TestCacheComponent(t *testing.T) {
 	ctx := context.Background()
 
 	calls := 0
-	counting := ryn.ProviderFunc(func(_ context.Context, _ *ryn.Request) (*ryn.Stream, error) {
+	counting := niro.ProviderFunc(func(_ context.Context, _ *niro.Request) (*niro.Stream, error) {
 		calls++
-		return ryn.StreamFromSlice([]ryn.Frame{ryn.TextFrame("cached")}), nil
+		return niro.StreamFromSlice([]niro.Frame{niro.TextFrame("cached")}), nil
 	})
 
 	rt, err := agent.New(counting, agent.WithComponent(&agent.CacheComponent{
@@ -1125,8 +1125,8 @@ func TestMiddlewareComponent(t *testing.T) {
 	wrapped := false
 	rt, err := agent.New(echoProvider("mw"), agent.WithComponent(&agent.MiddlewareComponent{
 		Name_: "test.mw",
-		Fn: func(p ryn.Provider) ryn.Provider {
-			return ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+		Fn: func(p niro.Provider) niro.Provider {
+			return niro.ProviderFunc(func(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
 				wrapped = true
 				return p.Generate(ctx, req)
 			})
@@ -1142,7 +1142,7 @@ func TestMiddlewareComponent(t *testing.T) {
 
 func TestMiddlewareComponentDefaultName(t *testing.T) {
 	t.Parallel()
-	c := &agent.MiddlewareComponent{Fn: func(p ryn.Provider) ryn.Provider { return p }}
+	c := &agent.MiddlewareComponent{Fn: func(p niro.Provider) niro.Provider { return p }}
 	assertEqual(t, c.Name(), "agent.middleware")
 }
 
@@ -1160,7 +1160,7 @@ func TestMiddlewareComponentNilFn(t *testing.T) {
 
 func TestMiddlewareComponentNilRuntime(t *testing.T) {
 	t.Parallel()
-	c := &agent.MiddlewareComponent{Name_: "x", Fn: func(p ryn.Provider) ryn.Provider { return p }}
+	c := &agent.MiddlewareComponent{Name_: "x", Fn: func(p niro.Provider) niro.Provider { return p }}
 	err := c.Apply(nil)
 	assertErrorContains(t, err, "nil")
 }
@@ -1173,7 +1173,7 @@ func TestComponentLifecycle(t *testing.T) {
 		&agent.RetryComponent{},
 		&agent.CacheComponent{},
 		&agent.TimeoutComponent{},
-		&agent.MiddlewareComponent{Name_: "lc.mw", Fn: func(p ryn.Provider) ryn.Provider { return p }},
+		&agent.MiddlewareComponent{Name_: "lc.mw", Fn: func(p niro.Provider) niro.Provider { return p }},
 	} {
 		assertNoError(t, comp.Start(ctx))
 		assertNoError(t, comp.Close())
@@ -1189,16 +1189,16 @@ func TestOrchestratorInputChaining(t *testing.T) {
 	ctx := context.Background()
 
 	// Provider echoes whatever the user message text is (via messages).
-	echoInput := ryn.ProviderFunc(func(_ context.Context, req *ryn.Request) (*ryn.Stream, error) {
+	echoInput := niro.ProviderFunc(func(_ context.Context, req *niro.Request) (*niro.Stream, error) {
 		text := ""
 		for _, m := range req.Messages {
 			for _, p := range m.Parts {
-				if p.Kind == ryn.KindText {
+				if p.Kind == niro.KindText {
 					text = p.Text
 				}
 			}
 		}
-		return ryn.StreamFromSlice([]ryn.Frame{ryn.TextFrame("echo:" + text)}), nil
+		return niro.StreamFromSlice([]niro.Frame{niro.TextFrame("echo:" + text)}), nil
 	})
 
 	rt, _ := agent.New(echoInput)
@@ -1223,21 +1223,21 @@ func TestOrchestratorOutputVar(t *testing.T) {
 	ctx := context.Background()
 
 	callCount := 0
-	rt, _ := agent.New(ryn.ProviderFunc(func(_ context.Context, req *ryn.Request) (*ryn.Stream, error) {
+	rt, _ := agent.New(niro.ProviderFunc(func(_ context.Context, req *niro.Request) (*niro.Stream, error) {
 		callCount++
 		if callCount == 1 {
-			return ryn.StreamFromSlice([]ryn.Frame{ryn.TextFrame("step1out")}), nil
+			return niro.StreamFromSlice([]niro.Frame{niro.TextFrame("step1out")}), nil
 		}
 		// Second call echoes the input (which should contain the var).
 		text := ""
 		for _, m := range req.Messages {
 			for _, p := range m.Parts {
-				if p.Kind == ryn.KindText {
+				if p.Kind == niro.KindText {
 					text = p.Text
 				}
 			}
 		}
-		return ryn.StreamFromSlice([]ryn.Frame{ryn.TextFrame(text)}), nil
+		return niro.StreamFromSlice([]niro.Frame{niro.TextFrame(text)}), nil
 	}))
 
 	o := agent.NewOrchestrator(rt, nil)
@@ -1299,10 +1299,10 @@ func TestOrchestratorContextCancelledBetweenSteps(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	calls := 0
-	rt, _ := agent.New(ryn.ProviderFunc(func(_ context.Context, _ *ryn.Request) (*ryn.Stream, error) {
+	rt, _ := agent.New(niro.ProviderFunc(func(_ context.Context, _ *niro.Request) (*niro.Stream, error) {
 		calls++
 		cancel() // cancel after first step
-		return ryn.StreamFromSlice([]ryn.Frame{ryn.TextFrame("done")}), nil
+		return niro.StreamFromSlice([]niro.Frame{niro.TextFrame("done")}), nil
 	}))
 
 	o := agent.NewOrchestrator(rt, nil)
@@ -1325,15 +1325,15 @@ func TestStepInputPriorityOverMessages(t *testing.T) {
 	ctx := context.Background()
 
 	var gotInput string
-	spy := ryn.ProviderFunc(func(_ context.Context, req *ryn.Request) (*ryn.Stream, error) {
+	spy := niro.ProviderFunc(func(_ context.Context, req *niro.Request) (*niro.Stream, error) {
 		for _, m := range req.Messages {
 			for _, p := range m.Parts {
-				if p.Kind == ryn.KindText {
+				if p.Kind == niro.KindText {
 					gotInput = p.Text
 				}
 			}
 		}
-		return ryn.StreamFromSlice([]ryn.Frame{ryn.TextFrame("ok")}), nil
+		return niro.StreamFromSlice([]niro.Frame{niro.TextFrame("ok")}), nil
 	})
 
 	rt, _ := agent.New(spy)

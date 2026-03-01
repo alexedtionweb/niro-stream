@@ -22,8 +22,8 @@ import (
 // All streams are consumed. If any generation fails, the error
 // is propagated but remaining streams continue until done or
 // the context is canceled.
-func Fan(ctx context.Context, fns ...func(context.Context) (*ryn.Stream, error)) *ryn.Stream {
-	out, emitter := ryn.NewStream(32)
+func Fan(ctx context.Context, fns ...func(context.Context) (*niro.Stream, error)) *niro.Stream {
+	out, emitter := niro.NewStream(32)
 
 	var (
 		wg       sync.WaitGroup
@@ -79,13 +79,13 @@ func Fan(ctx context.Context, fns ...func(context.Context) (*ryn.Stream, error))
 //   - Speculative execution
 //
 // Returns the collected text from the winning stream and its usage.
-func Race(ctx context.Context, fns ...func(context.Context) (*ryn.Stream, error)) (string, ryn.Usage, error) {
+func Race(ctx context.Context, fns ...func(context.Context) (*niro.Stream, error)) (string, niro.Usage, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
 	type result struct {
 		text  string
-		usage ryn.Usage
+		usage niro.Usage
 		err   error
 	}
 
@@ -98,7 +98,7 @@ func Race(ctx context.Context, fns ...func(context.Context) (*ryn.Stream, error)
 				ch <- result{err: err}
 				return
 			}
-			text, err := ryn.CollectText(ctx, s)
+			text, err := niro.CollectText(ctx, s)
 			ch <- result{text: text, usage: s.Usage(), err: err}
 		}()
 	}
@@ -114,7 +114,7 @@ func Race(ctx context.Context, fns ...func(context.Context) (*ryn.Stream, error)
 		cancel() // stop others
 		return r.text, r.usage, nil
 	}
-	return "", ryn.Usage{}, lastErr
+	return "", niro.Usage{}, lastErr
 }
 
 // Sequence runs multiple generation functions sequentially,
@@ -124,9 +124,9 @@ func Race(ctx context.Context, fns ...func(context.Context) (*ryn.Stream, error)
 //
 // This is a building block for chained LLM calls where each
 // step transforms or refines the previous output.
-func Sequence(ctx context.Context, fns ...func(ctx context.Context, input string) (*ryn.Stream, error)) (*ryn.Stream, error) {
+func Sequence(ctx context.Context, fns ...func(ctx context.Context, input string) (*niro.Stream, error)) (*niro.Stream, error) {
 	if len(fns) == 0 {
-		return ryn.StreamFromSlice(nil), nil
+		return niro.StreamFromSlice(nil), nil
 	}
 
 	input := ""
@@ -142,7 +142,7 @@ func Sequence(ctx context.Context, fns ...func(ctx context.Context, input string
 		}
 
 		// Intermediate stages: collect to feed into next
-		text, err := ryn.CollectText(ctx, stream)
+		text, err := niro.CollectText(ctx, stream)
 		if err != nil {
 			return nil, err
 		}
@@ -150,5 +150,5 @@ func Sequence(ctx context.Context, fns ...func(ctx context.Context, input string
 	}
 
 	// unreachable
-	return ryn.StreamFromSlice(nil), nil
+	return niro.StreamFromSlice(nil), nil
 }

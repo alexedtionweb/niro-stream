@@ -20,12 +20,12 @@ plane (`ToolDefinition`) is already stable; what needs to change is the **execut
 ### Layer 1 — `ToolExecutor` interface (the new contract)
 
 Replace the bare `func(ctx, args) (any, error)` handler with a richer interface that
-receives the full `ryn.ToolCall` so remote systems can correlate, trace, and audit
+receives the full `niro.ToolCall` so remote systems can correlate, trace, and audit
 individual invocations by call ID:
 
 ```go
 type ToolExecutor interface {
-    Execute(ctx context.Context, call ryn.ToolCall) (ryn.ToolResult, error)
+    Execute(ctx context.Context, call niro.ToolCall) (niro.ToolResult, error)
 }
 ```
 
@@ -58,11 +58,11 @@ type ExecutorRouter interface {
 
 Three planned built-in implementations:
 
-| Router | Logic |
-|---|---|
-| `StaticRouter` | Explicit name → executor mapping |
+| Router            | Logic                                                    |
+| ----------------- | -------------------------------------------------------- |
+| `StaticRouter`    | Explicit name → executor mapping                         |
 | `DataClassRouter` | `Confidential` → PCI executor; others → general executor |
-| `TagRouter` | Route based on presence of a tag (e.g. `"pci-scoped"`) |
+| `TagRouter`       | Route based on presence of a tag (e.g. `"pci-scoped"`)   |
 
 ---
 
@@ -71,14 +71,14 @@ Three planned built-in implementations:
 A `.proto` definition gives language-agnostic, strongly-typed remote execution with
 structured observability. Key design decisions:
 
-- `call_id` maps directly to `ryn.ToolCall.ID` — the correlation key across all logs
+- `call_id` maps directly to `niro.ToolCall.ID` — the correlation key across all logs
 - `args_json` must never carry raw CHD (see Layer 5 — PCI)
 - `ExecuteStream` enables incremental stdout/stderr from code runners
 - `AuditRecord` is returned on every response, not just errors — required for PCI Req 10
 
 ```protobuf
 syntax = "proto3";
-package ryn.executor.v1;
+package niro.executor.v1;
 
 service ToolExecutorService {
     rpc Execute(ExecuteRequest)       returns (ExecuteResponse);
@@ -88,7 +88,7 @@ service ToolExecutorService {
 }
 
 message ExecuteRequest {
-    string call_id               = 1;  // ryn.ToolCall.ID
+    string call_id               = 1;  // niro.ToolCall.ID
     string tool_name             = 2;
     bytes  args_json             = 3;  // CHD must be tokenised before this is set
     string session_id            = 4;
@@ -125,7 +125,7 @@ MCP (Model Context Protocol) is JSON-RPC 2.0 over stdio, SSE, or WebSocket. An
 `MCPExecutor` provides pure protocol translation:
 
 - `tools/list` → `[]ToolDefinition` for discovery at startup
-- `tools/call` ← `ryn.ToolCall` at execution time
+- `tools/call` ← `niro.ToolCall` at execution time
 
 This makes the entire Node.js / Python / Rust MCP ecosystem available as tools with
 **zero Go code on the remote side**. Any process that speaks MCP becomes a tool server.
@@ -136,7 +136,7 @@ This makes the entire Node.js / Python / Rust MCP ecosystem available as tools w
 
 #### Root problem
 
-The LLM's context *is the threat surface*. If a user types their card number and the
+The LLM's context _is the threat surface_. If a user types their card number and the
 model generates `charge_card(pan="4111111111111111", ...)`, that PAN lives in `args_json`
 of an `ExecuteRequest`. The moment it crosses the network to a remote sandbox, that
 sandbox — and the transport — enter PCI scope. A general-purpose code sandbox that can
@@ -156,6 +156,7 @@ type DataScrubber interface {
 ```
 
 Implementation details:
+
 - Luhn algorithm detects valid PANs (13–19 digit strings anywhere in the JSON)
 - Format-preserving tokenisation: `4111111111111111` → `tok_411111xxxxxx1111`
   (first-6 / last-4 visible — useful for debugging without exposing the full PAN)
@@ -168,16 +169,16 @@ Implementation details:
 
 #### PCI-DSS requirement map
 
-| Req | Requirement | Control in this stack |
-|---|---|---|
-| **3.4** | Render PAN unreadable wherever stored/transmitted | `DataScrubber` wraps `ToolExecutor`; tokenise before transmission |
-| **4.2.1** | Strong cryptography in transit (TLS 1.2+) | `GRPCExecutor` enforces mTLS — no plaintext option exposed in API |
-| **6.2** | Input validation | Already enforced in `Toolset.ExecuteCall` via JSON Schema |
-| **7.2** | Least privilege access | `DataClassRouter` hard-routes `Confidential` tools to PCI executor only |
-| **8** | Authentication | Client certificates on all gRPC connections |
-| **10.2** | Audit trail per call | `ToolRuntimeHook.OnToolExecuteEnd` → append-only audit sink |
-| **10.3** | Tamper-evident logs | WORM / Merkle-chained log sink (hook implementation, not library) |
-| **12.3** | Risk-ranked asset inventory | `DataClass` + `Tags` metadata on each `ToolDefinition` |
+| Req       | Requirement                                       | Control in this stack                                                   |
+| --------- | ------------------------------------------------- | ----------------------------------------------------------------------- |
+| **3.4**   | Render PAN unreadable wherever stored/transmitted | `DataScrubber` wraps `ToolExecutor`; tokenise before transmission       |
+| **4.2.1** | Strong cryptography in transit (TLS 1.2+)         | `GRPCExecutor` enforces mTLS — no plaintext option exposed in API       |
+| **6.2**   | Input validation                                  | Already enforced in `Toolset.ExecuteCall` via JSON Schema               |
+| **7.2**   | Least privilege access                            | `DataClassRouter` hard-routes `Confidential` tools to PCI executor only |
+| **8**     | Authentication                                    | Client certificates on all gRPC connections                             |
+| **10.2**  | Audit trail per call                              | `ToolRuntimeHook.OnToolExecuteEnd` → append-only audit sink             |
+| **10.3**  | Tamper-evident logs                               | WORM / Merkle-chained log sink (hook implementation, not library)       |
+| **12.3**  | Risk-ranked asset inventory                       | `DataClass` + `Tags` metadata on each `ToolDefinition`                  |
 
 #### Code sandbox hard rules
 

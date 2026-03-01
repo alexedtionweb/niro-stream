@@ -65,7 +65,7 @@ func NewTerminalApprover() *TerminalApprover {
 	return &TerminalApprover{reader: bufio.NewReader(os.Stdin)}
 }
 
-func (ta *TerminalApprover) Approve(ctx context.Context, call ryn.ToolCall) (tools.ToolApproval, error) {
+func (ta *TerminalApprover) Approve(ctx context.Context, call niro.ToolCall) (tools.ToolApproval, error) {
 	// Pretty-print the args so the operator can read them.
 	var pretty strings.Builder
 	if len(call.Args) > 0 {
@@ -208,10 +208,10 @@ func main() {
 		// loop or provider wraps it.
 	})
 
-	stream, err := loop.GenerateWithTools(ctx, llm, &ryn.Request{
-		Messages: []ryn.Message{ryn.UserText(userMsg)},
+	stream, err := loop.GenerateWithTools(ctx, llm, &niro.Request{
+		Messages: []niro.Message{niro.UserText(userMsg)},
 		Tools:    ts.Tools(),
-		Options:  ryn.Options{MaxTokens: 512},
+		Options:  niro.Options{MaxTokens: 512},
 	})
 	if err != nil {
 		slog.Error("generate failed", "err", err)
@@ -220,7 +220,7 @@ func main() {
 
 	fmt.Print("\nAssistant: ")
 	for stream.Next(ctx) {
-		if f := stream.Frame(); f.Kind == ryn.KindText {
+		if f := stream.Frame(); f.Kind == niro.KindText {
 			fmt.Print(f.Text)
 		}
 	}
@@ -240,7 +240,7 @@ func main() {
 }
 
 // mustProvider returns a Provider for the selected PROVIDER.
-func mustProvider(ctx context.Context) ryn.Provider {
+func mustProvider(ctx context.Context) niro.Provider {
 	switch strings.ToLower(os.Getenv("PROVIDER")) {
 	case "", "openai":
 		return openai.New(os.Getenv("OPENAI_API_KEY"))

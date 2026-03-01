@@ -16,15 +16,15 @@ func TestFan(t *testing.T) {
 	ctx := context.Background()
 
 	stream := orchestrate.Fan(ctx,
-		func(ctx context.Context) (*ryn.Stream, error) {
-			return ryn.StreamFromSlice([]ryn.Frame{ryn.TextFrame("A")}), nil
+		func(ctx context.Context) (*niro.Stream, error) {
+			return niro.StreamFromSlice([]niro.Frame{niro.TextFrame("A")}), nil
 		},
-		func(ctx context.Context) (*ryn.Stream, error) {
-			return ryn.StreamFromSlice([]ryn.Frame{ryn.TextFrame("B")}), nil
+		func(ctx context.Context) (*niro.Stream, error) {
+			return niro.StreamFromSlice([]niro.Frame{niro.TextFrame("B")}), nil
 		},
 	)
 
-	frames, err := ryn.Collect(ctx, stream)
+	frames, err := niro.Collect(ctx, stream)
 	assertNoError(t, err)
 	assertEqual(t, len(frames), 2)
 
@@ -41,22 +41,22 @@ func TestRace(t *testing.T) {
 	ctx := context.Background()
 
 	text, usage, err := orchestrate.Race(ctx,
-		func(ctx context.Context) (*ryn.Stream, error) {
+		func(ctx context.Context) (*niro.Stream, error) {
 			time.Sleep(50 * time.Millisecond) // slow
-			s, e := ryn.NewStream(4)
+			s, e := niro.NewStream(4)
 			go func() {
 				defer e.Close()
-				e.Emit(ctx, ryn.TextFrame("slow"))
-				e.Emit(ctx, ryn.UsageFrame(&ryn.Usage{TotalTokens: 10}))
+				e.Emit(ctx, niro.TextFrame("slow"))
+				e.Emit(ctx, niro.UsageFrame(&niro.Usage{TotalTokens: 10}))
 			}()
 			return s, nil
 		},
-		func(ctx context.Context) (*ryn.Stream, error) {
-			s, e := ryn.NewStream(4) // fast
+		func(ctx context.Context) (*niro.Stream, error) {
+			s, e := niro.NewStream(4) // fast
 			go func() {
 				defer e.Close()
-				e.Emit(ctx, ryn.TextFrame("fast"))
-				e.Emit(ctx, ryn.UsageFrame(&ryn.Usage{TotalTokens: 5}))
+				e.Emit(ctx, niro.TextFrame("fast"))
+				e.Emit(ctx, niro.UsageFrame(&niro.Usage{TotalTokens: 5}))
 			}()
 			return s, nil
 		},
@@ -72,26 +72,26 @@ func TestSequence(t *testing.T) {
 	ctx := context.Background()
 
 	stream, err := orchestrate.Sequence(ctx,
-		func(ctx context.Context, input string) (*ryn.Stream, error) {
-			s, e := ryn.NewStream(2)
+		func(ctx context.Context, input string) (*niro.Stream, error) {
+			s, e := niro.NewStream(2)
 			go func() {
 				defer e.Close()
-				e.Emit(ctx, ryn.TextFrame("step1"))
+				e.Emit(ctx, niro.TextFrame("step1"))
 			}()
 			return s, nil
 		},
-		func(ctx context.Context, input string) (*ryn.Stream, error) {
-			s, e := ryn.NewStream(2)
+		func(ctx context.Context, input string) (*niro.Stream, error) {
+			s, e := niro.NewStream(2)
 			go func() {
 				defer e.Close()
-				e.Emit(ctx, ryn.TextFrame(input+"+step2"))
+				e.Emit(ctx, niro.TextFrame(input+"+step2"))
 			}()
 			return s, nil
 		},
 	)
 
 	assertNoError(t, err)
-	text, err := ryn.CollectText(ctx, stream)
+	text, err := niro.CollectText(ctx, stream)
 	assertNoError(t, err)
 	assertEqual(t, text, "step1+step2")
 }
@@ -103,7 +103,7 @@ func TestSequenceEmpty(t *testing.T) {
 	stream, err := orchestrate.Sequence(ctx)
 	assertNoError(t, err)
 
-	frames, err := ryn.Collect(ctx, stream)
+	frames, err := niro.Collect(ctx, stream)
 	assertNoError(t, err)
 	assertEqual(t, len(frames), 0)
 }
@@ -113,10 +113,10 @@ func TestFanWithError(t *testing.T) {
 	ctx := context.Background()
 
 	stream := orchestrate.Fan(ctx,
-		func(ctx context.Context) (*ryn.Stream, error) {
-			return ryn.StreamFromSlice([]ryn.Frame{ryn.TextFrame("ok")}), nil
+		func(ctx context.Context) (*niro.Stream, error) {
+			return niro.StreamFromSlice([]niro.Frame{niro.TextFrame("ok")}), nil
 		},
-		func(ctx context.Context) (*ryn.Stream, error) {
+		func(ctx context.Context) (*niro.Stream, error) {
 			return nil, fmt.Errorf("fn failed")
 		},
 	)
@@ -125,7 +125,7 @@ func TestFanWithError(t *testing.T) {
 	var textSeen bool
 	for stream.Next(ctx) {
 		f := stream.Frame()
-		if f.Kind == ryn.KindText {
+		if f.Kind == niro.KindText {
 			textSeen = true
 		}
 	}
@@ -139,8 +139,8 @@ func TestFanStreamError(t *testing.T) {
 	ctx := context.Background()
 
 	stream := orchestrate.Fan(ctx,
-		func(ctx context.Context) (*ryn.Stream, error) {
-			s, e := ryn.NewStream(4)
+		func(ctx context.Context) (*niro.Stream, error) {
+			s, e := niro.NewStream(4)
 			go func() {
 				defer e.Close()
 				e.Error(fmt.Errorf("stream internal error"))
@@ -159,7 +159,7 @@ func TestFanEmpty(t *testing.T) {
 	ctx := context.Background()
 
 	stream := orchestrate.Fan(ctx) // no functions
-	frames, err := ryn.Collect(ctx, stream)
+	frames, err := niro.Collect(ctx, stream)
 	assertNoError(t, err)
 	assertEqual(t, len(frames), 0)
 }
@@ -169,10 +169,10 @@ func TestRaceAllError(t *testing.T) {
 	ctx := context.Background()
 
 	_, _, err := orchestrate.Race(ctx,
-		func(ctx context.Context) (*ryn.Stream, error) {
+		func(ctx context.Context) (*niro.Stream, error) {
 			return nil, fmt.Errorf("fn1 failed")
 		},
-		func(ctx context.Context) (*ryn.Stream, error) {
+		func(ctx context.Context) (*niro.Stream, error) {
 			return nil, fmt.Errorf("fn2 failed")
 		},
 	)
@@ -184,8 +184,8 @@ func TestRaceStreamError(t *testing.T) {
 	ctx := context.Background()
 
 	_, _, err := orchestrate.Race(ctx,
-		func(ctx context.Context) (*ryn.Stream, error) {
-			s, e := ryn.NewStream(4)
+		func(ctx context.Context) (*niro.Stream, error) {
+			s, e := niro.NewStream(4)
 			go func() {
 				defer e.Close()
 				e.Error(fmt.Errorf("stream error"))
@@ -201,11 +201,11 @@ func TestSequenceStepError(t *testing.T) {
 	ctx := context.Background()
 
 	_, err := orchestrate.Sequence(ctx,
-		func(ctx context.Context, input string) (*ryn.Stream, error) {
+		func(ctx context.Context, input string) (*niro.Stream, error) {
 			return nil, fmt.Errorf("step failed")
 		},
-		func(ctx context.Context, input string) (*ryn.Stream, error) {
-			return ryn.StreamFromSlice(nil), nil
+		func(ctx context.Context, input string) (*niro.Stream, error) {
+			return niro.StreamFromSlice(nil), nil
 		},
 	)
 	assertTrue(t, err != nil)
@@ -216,16 +216,16 @@ func TestSequenceIntermediateStreamError(t *testing.T) {
 	ctx := context.Background()
 
 	_, err := orchestrate.Sequence(ctx,
-		func(ctx context.Context, input string) (*ryn.Stream, error) {
-			s, e := ryn.NewStream(4)
+		func(ctx context.Context, input string) (*niro.Stream, error) {
+			s, e := niro.NewStream(4)
 			go func() {
 				defer e.Close()
 				e.Error(fmt.Errorf("intermediate error"))
 			}()
 			return s, nil
 		},
-		func(ctx context.Context, input string) (*ryn.Stream, error) {
-			return ryn.StreamFromSlice(nil), nil
+		func(ctx context.Context, input string) (*niro.Stream, error) {
+			return niro.StreamFromSlice(nil), nil
 		},
 	)
 	assertTrue(t, err != nil)
@@ -236,12 +236,12 @@ func TestSequenceSingleStep(t *testing.T) {
 	ctx := context.Background()
 
 	stream, err := orchestrate.Sequence(ctx,
-		func(ctx context.Context, input string) (*ryn.Stream, error) {
-			return ryn.StreamFromSlice([]ryn.Frame{ryn.TextFrame("only")}), nil
+		func(ctx context.Context, input string) (*niro.Stream, error) {
+			return niro.StreamFromSlice([]niro.Frame{niro.TextFrame("only")}), nil
 		},
 	)
 	assertNoError(t, err)
-	text, err := ryn.CollectText(ctx, stream)
+	text, err := niro.CollectText(ctx, stream)
 	assertNoError(t, err)
 	assertEqual(t, text, "only")
 }

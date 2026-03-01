@@ -1,4 +1,4 @@
-package ryn
+package niro
 
 // Cost represents the calculated cost of a generation.
 type Cost struct {

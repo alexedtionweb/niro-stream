@@ -16,9 +16,9 @@
 //
 //	cfg, _ := config.LoadDefaultConfig(ctx)
 //	llm := bedrock.New(cfg)
-//	stream, err := llm.Generate(ctx, &ryn.Request{
+//	stream, err := llm.Generate(ctx, &niro.Request{
 //	    Model: "anthropic.claude-sonnet-4-5-20250514-v1:0",
-//	    Messages: []ryn.Message{ryn.UserText("Hello")},
+//	    Messages: []niro.Message{niro.UserText("Hello")},
 //	})
 package bedrock
 
@@ -38,7 +38,7 @@ import (
 
 // RequestHook allows modifying the raw ConverseStreamInput before the
 // request is sent. Use this to set SDK-specific parameters not exposed
-// by ryn.Request (guardrails, additional model fields, etc.).
+// by niro.Request (guardrails, additional model fields, etc.).
 //
 // Provider-level:
 //
@@ -48,7 +48,7 @@ import (
 //
 // Per-request (via Request.Extra):
 //
-//	stream, _ := llm.Generate(ctx, &ryn.Request{
+//	stream, _ := llm.Generate(ctx, &niro.Request{
 //	    Messages: msgs,
 //	    Extra: bedrock.RequestHook(func(in *bedrockruntime.ConverseStreamInput) { ... }),
 //	})
@@ -67,7 +67,7 @@ type Extras struct {
 	Hook RequestHook
 }
 
-// Provider implements ryn.Provider using AWS Bedrock ConverseStream.
+// Provider implements niro.Provider using AWS Bedrock ConverseStream.
 type Provider struct {
 	client *bedrockruntime.Client
 	model  string
@@ -77,7 +77,7 @@ type Provider struct {
 	inferenceProfile string
 }
 
-var _ ryn.Provider = (*Provider)(nil)
+var _ niro.Provider = (*Provider)(nil)
 
 // Option configures a Provider.
 type Option func(*providerConfig)
@@ -142,11 +142,11 @@ func NewFromClient(client *bedrockruntime.Client, model string, opts ...Option) 
 }
 
 // Client returns the underlying Bedrock SDK client.
-// Use for direct SDK access when the ryn abstraction is insufficient.
+// Use for direct SDK access when the niro abstraction is insufficient.
 func (p *Provider) Client() *bedrockruntime.Client { return p.client }
 
-// Generate implements ryn.Provider.
-func (p *Provider) Generate(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+// Generate implements niro.Provider.
+func (p *Provider) Generate(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
 	if err := req.Validate(); err != nil {
 		return nil, err
 	}
@@ -192,12 +192,12 @@ func (p *Provider) Generate(ctx context.Context, req *ryn.Request) (*ryn.Stream,
 		return nil, classifyError(err)
 	}
 
-	stream, emitter := ryn.NewStream(32)
+	stream, emitter := niro.NewStream(32)
 	go consume(ctx, resp, emitter, model)
 	return stream, nil
 }
 
-func consume(ctx context.Context, resp *bedrockruntime.ConverseStreamOutput, out *ryn.Emitter, model string) {
+func consume(ctx context.Context, resp *bedrockruntime.ConverseStreamOutput, out *niro.Emitter, model string) {
 	defer out.Close()
 
 	events := resp.GetStream()
@@ -210,14 +210,14 @@ func consume(ctx context.Context, resp *bedrockruntime.ConverseStreamOutput, out
 	)
 
 	// meta accumulates fields from multiple events before the final SetResponse.
-	meta := &ryn.ResponseMeta{Model: model}
+	meta := &niro.ResponseMeta{Model: model}
 
 	for event := range events.Events() {
 		switch ev := event.(type) {
 		case *types.ConverseStreamOutputMemberContentBlockDelta:
 			switch delta := ev.Value.Delta.(type) {
 			case *types.ContentBlockDeltaMemberText:
-				if err := out.Emit(ctx, ryn.TextFrame(delta.Value)); err != nil {
+				if err := out.Emit(ctx, niro.TextFrame(delta.Value)); err != nil {
 					return
 				}
 			case *types.ContentBlockDeltaMemberToolUse:
@@ -241,12 +241,12 @@ func consume(ctx context.Context, resp *bedrockruntime.ConverseStreamOutput, out
 				// calls (toolArgsBuf[:0]), so we must not alias it in RawMessage.
 				argsCopy := make([]byte, len(toolArgsBuf))
 				copy(argsCopy, toolArgsBuf)
-				tc := &ryn.ToolCall{
+				tc := &niro.ToolCall{
 					ID:   toolUseID,
 					Name: toolName,
 					Args: json.RawMessage(argsCopy),
 				}
-				if err := out.Emit(ctx, ryn.ToolCallFrame(tc)); err != nil {
+				if err := out.Emit(ctx, niro.ToolCallFrame(tc)); err != nil {
 					return
 				}
 				toolName = ""
@@ -256,12 +256,12 @@ func consume(ctx context.Context, resp *bedrockruntime.ConverseStreamOutput, out
 		case *types.ConverseStreamOutputMemberMetadata:
 			if ev.Value.Usage != nil {
 				u := ev.Value.Usage
-				usage := &ryn.Usage{
+				usage := &niro.Usage{
 					InputTokens:  int(aws.ToInt32(u.InputTokens)),
 					OutputTokens: int(aws.ToInt32(u.OutputTokens)),
 					TotalTokens:  int(aws.ToInt32(u.TotalTokens)),
 				}
-				_ = out.Emit(ctx, ryn.UsageFrame(usage))
+				_ = out.Emit(ctx, niro.UsageFrame(usage))
 				meta.Usage = *usage
 				if ev.Value.Metrics != nil && ev.Value.Metrics.LatencyMs != nil {
 					meta.ProviderMeta = map[string]any{
@@ -286,86 +286,86 @@ func consume(ctx context.Context, resp *bedrockruntime.ConverseStreamOutput, out
 	out.SetResponse(meta)
 }
 
-// classifyError maps AWS SDK errors to typed *ryn.Error values.
-func classifyError(err error) *ryn.Error {
+// classifyError maps AWS SDK errors to typed *niro.Error values.
+func classifyError(err error) *niro.Error {
 	if errors.Is(err, context.DeadlineExceeded) {
-		return ryn.WrapError(ryn.ErrCodeTimeout, "request timed out", err).WithProvider("bedrock")
+		return niro.WrapError(niro.ErrCodeTimeout, "request timed out", err).WithProvider("bedrock")
 	}
 	if errors.Is(err, context.Canceled) {
-		return ryn.WrapError(ryn.ErrCodeContextCancelled, "context cancelled", err).WithProvider("bedrock")
+		return niro.WrapError(niro.ErrCodeContextCancelled, "context cancelled", err).WithProvider("bedrock")
 	}
 
 	var throttle *types.ThrottlingException
 	if errors.As(err, &throttle) {
-		return ryn.WrapError(ryn.ErrCodeRateLimited, throttle.ErrorMessage(), err).
+		return niro.WrapError(niro.ErrCodeRateLimited, throttle.ErrorMessage(), err).
 			WithProvider("bedrock")
 	}
 	var quota *types.ServiceQuotaExceededException
 	if errors.As(err, &quota) {
-		return ryn.WrapError(ryn.ErrCodeRateLimited, quota.ErrorMessage(), err).
+		return niro.WrapError(niro.ErrCodeRateLimited, quota.ErrorMessage(), err).
 			WithProvider("bedrock")
 	}
 	var access *types.AccessDeniedException
 	if errors.As(err, &access) {
-		return ryn.WrapError(ryn.ErrCodeAuthenticationFailed, access.ErrorMessage(), err).WithProvider("bedrock")
+		return niro.WrapError(niro.ErrCodeAuthenticationFailed, access.ErrorMessage(), err).WithProvider("bedrock")
 	}
 	var notFound *types.ResourceNotFoundException
 	if errors.As(err, &notFound) {
-		return ryn.WrapError(ryn.ErrCodeModelNotFound, notFound.ErrorMessage(), err).WithProvider("bedrock")
+		return niro.WrapError(niro.ErrCodeModelNotFound, notFound.ErrorMessage(), err).WithProvider("bedrock")
 	}
 	var validation *types.ValidationException
 	if errors.As(err, &validation) {
-		return ryn.WrapError(ryn.ErrCodeInvalidRequest, validation.ErrorMessage(), err).WithProvider("bedrock")
+		return niro.WrapError(niro.ErrCodeInvalidRequest, validation.ErrorMessage(), err).WithProvider("bedrock")
 	}
 	var modelTimeout *types.ModelTimeoutException
 	if errors.As(err, &modelTimeout) {
-		return ryn.WrapError(ryn.ErrCodeTimeout, modelTimeout.ErrorMessage(), err).
+		return niro.WrapError(niro.ErrCodeTimeout, modelTimeout.ErrorMessage(), err).
 			WithProvider("bedrock")
 	}
 	var svcUnavail *types.ServiceUnavailableException
 	if errors.As(err, &svcUnavail) {
-		return ryn.WrapError(ryn.ErrCodeServiceUnavailable, svcUnavail.ErrorMessage(), err).
+		return niro.WrapError(niro.ErrCodeServiceUnavailable, svcUnavail.ErrorMessage(), err).
 			WithProvider("bedrock")
 	}
 	var internal *types.InternalServerException
 	if errors.As(err, &internal) {
-		return ryn.WrapError(ryn.ErrCodeProviderError, internal.ErrorMessage(), err).
+		return niro.WrapError(niro.ErrCodeProviderError, internal.ErrorMessage(), err).
 			WithProvider("bedrock")
 	}
 	var streamErr *types.ModelStreamErrorException
 	if errors.As(err, &streamErr) {
-		return ryn.WrapError(ryn.ErrCodeStreamError, streamErr.ErrorMessage(), err).WithProvider("bedrock")
+		return niro.WrapError(niro.ErrCodeStreamError, streamErr.ErrorMessage(), err).WithProvider("bedrock")
 	}
 
 	// Fallback: some error types (e.g. ServiceQuotaExceededException) are absent
 	// from the ConverseStream deserializer's switch and come back as a generic
-	// smithy error. Map the code string to the canonical ryn error code.
+	// smithy error. Map the code string to the canonical niro error code.
 	var generic *smithy.GenericAPIError
 	if errors.As(err, &generic) {
 		switch generic.Code {
 		case "ServiceQuotaExceededException":
-			return ryn.WrapError(ryn.ErrCodeRateLimited, generic.Message, err).WithProvider("bedrock")
+			return niro.WrapError(niro.ErrCodeRateLimited, generic.Message, err).WithProvider("bedrock")
 		case "AccessDeniedException":
-			return ryn.WrapError(ryn.ErrCodeAuthenticationFailed, generic.Message, err).WithProvider("bedrock")
+			return niro.WrapError(niro.ErrCodeAuthenticationFailed, generic.Message, err).WithProvider("bedrock")
 		case "ResourceNotFoundException":
-			return ryn.WrapError(ryn.ErrCodeModelNotFound, generic.Message, err).WithProvider("bedrock")
+			return niro.WrapError(niro.ErrCodeModelNotFound, generic.Message, err).WithProvider("bedrock")
 		case "ValidationException":
-			return ryn.WrapError(ryn.ErrCodeInvalidRequest, generic.Message, err).WithProvider("bedrock")
+			return niro.WrapError(niro.ErrCodeInvalidRequest, generic.Message, err).WithProvider("bedrock")
 		case "ModelTimeoutException":
-			return ryn.WrapError(ryn.ErrCodeTimeout, generic.Message, err).WithProvider("bedrock")
+			return niro.WrapError(niro.ErrCodeTimeout, generic.Message, err).WithProvider("bedrock")
 		case "ModelStreamErrorException":
-			return ryn.WrapError(ryn.ErrCodeStreamError, generic.Message, err).WithProvider("bedrock")
+			return niro.WrapError(niro.ErrCodeStreamError, generic.Message, err).WithProvider("bedrock")
 		case "ServiceUnavailableException":
-			return ryn.WrapError(ryn.ErrCodeServiceUnavailable, generic.Message, err).WithProvider("bedrock")
+			return niro.WrapError(niro.ErrCodeServiceUnavailable, generic.Message, err).WithProvider("bedrock")
 		case "InternalServerException":
-			return ryn.WrapError(ryn.ErrCodeProviderError, generic.Message, err).WithProvider("bedrock")
+			return niro.WrapError(niro.ErrCodeProviderError, generic.Message, err).WithProvider("bedrock")
 		}
 	}
 
-	return ryn.WrapError(ryn.ErrCodeProviderError, "bedrock error", err).WithProvider("bedrock")
+	return niro.WrapError(niro.ErrCodeProviderError, "bedrock error", err).WithProvider("bedrock")
 }
 
-// mapFinishReason converts a Bedrock StopReason to the ryn canonical string.
+// mapFinishReason converts a Bedrock StopReason to the niro canonical string.
 func mapFinishReason(r types.StopReason) string {
 	switch r {
 	case types.StopReasonEndTurn, types.StopReasonStopSequence:
@@ -381,7 +381,7 @@ func mapFinishReason(r types.StopReason) string {
 	}
 }
 
-func (p *Provider) buildInput(model string, req *ryn.Request) *bedrockruntime.ConverseStreamInput {
+func (p *Provider) buildInput(model string, req *niro.Request) *bedrockruntime.ConverseStreamInput {
 	input := &bedrockruntime.ConverseStreamInput{
 		ModelId: aws.String(model),
 	}
@@ -396,9 +396,9 @@ func (p *Provider) buildInput(model string, req *ryn.Request) *bedrockruntime.Co
 
 	// Messages (including system messages from the list)
 	for _, msg := range req.Messages {
-		if msg.Role == ryn.RoleSystem {
+		if msg.Role == niro.RoleSystem {
 			for _, p := range msg.Parts {
-				if p.Kind == ryn.KindText {
+				if p.Kind == niro.KindText {
 					systemBlocks = append(systemBlocks, &types.SystemContentBlockMemberText{
 						Value: p.Text,
 					})
@@ -456,7 +456,7 @@ func (p *Provider) buildInput(model string, req *ryn.Request) *bedrockruntime.Co
 				params = json.RawMessage(`{"type":"object","properties":{}}`)
 			}
 			var doc any
-			_ = ryn.JSONUnmarshal(params, &doc)
+			_ = niro.JSONUnmarshal(params, &doc)
 			spec.Value.InputSchema = &types.ToolInputSchemaMemberJson{
 				Value: document.NewLazyDocument(doc),
 			}
@@ -464,9 +464,9 @@ func (p *Provider) buildInput(model string, req *ryn.Request) *bedrockruntime.Co
 		}
 		toolCfg := &types.ToolConfiguration{Tools: toolSpecs}
 		switch req.ToolChoice {
-		case ryn.ToolChoiceRequired:
+		case niro.ToolChoiceRequired:
 			toolCfg.ToolChoice = &types.ToolChoiceMemberAny{Value: types.AnyToolChoice{}}
-		case ryn.ToolChoiceNone:
+		case niro.ToolChoiceNone:
 			// Bedrock has no "none" mode; omit ToolChoice to let the model decide.
 		default:
 			if s := string(req.ToolChoice); len(s) > 5 && s[:5] == "func:" {
@@ -483,9 +483,9 @@ func (p *Provider) buildInput(model string, req *ryn.Request) *bedrockruntime.Co
 	return input
 }
 
-func convertMessage(msg ryn.Message) types.Message {
+func convertMessage(msg niro.Message) types.Message {
 	role := types.ConversationRoleUser
-	if msg.Role == ryn.RoleAssistant {
+	if msg.Role == niro.RoleAssistant {
 		role = types.ConversationRoleAssistant
 	}
 
@@ -493,12 +493,12 @@ func convertMessage(msg ryn.Message) types.Message {
 
 	for _, p := range msg.Parts {
 		switch p.Kind {
-		case ryn.KindText:
+		case niro.KindText:
 			blocks = append(blocks, &types.ContentBlockMemberText{
 				Value: p.Text,
 			})
 
-		case ryn.KindImage:
+		case niro.KindImage:
 			if len(p.Data) > 0 {
 				format := imageFormat(p.Mime)
 				blocks = append(blocks, &types.ContentBlockMemberImage{
@@ -511,10 +511,10 @@ func convertMessage(msg ryn.Message) types.Message {
 				})
 			}
 
-		case ryn.KindToolCall:
+		case niro.KindToolCall:
 			if p.Tool != nil {
 				var input any
-				_ = ryn.JSONUnmarshal(p.Tool.Args, &input)
+				_ = niro.JSONUnmarshal(p.Tool.Args, &input)
 				blocks = append(blocks, &types.ContentBlockMemberToolUse{
 					Value: types.ToolUseBlock{
 						ToolUseId: aws.String(p.Tool.ID),
@@ -524,7 +524,7 @@ func convertMessage(msg ryn.Message) types.Message {
 				})
 			}
 
-		case ryn.KindToolResult:
+		case niro.KindToolResult:
 			if p.Result != nil {
 				status := types.ToolResultStatusSuccess
 				if p.Result.IsError {

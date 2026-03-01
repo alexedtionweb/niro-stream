@@ -1,4 +1,4 @@
-// Package ryn is a streaming-first LLM runtime for Go.
+// Package niro is a streaming-first LLM runtime for Go.
 //
 // Niro provides a minimal, composable architecture for building real-time
 // AI systems. It is designed for low-latency, multimodal streaming
@@ -17,10 +17,10 @@
 //
 //	provider := openai.New(os.Getenv("OPENAI_API_KEY"))
 //
-//	stream, err := provider.Generate(ctx, &ryn.Request{
+//	stream, err := provider.Generate(ctx, &niro.Request{
 //	    Model: "gpt-4o",
-//	    Messages: []ryn.Message{
-//	        ryn.UserText("Hello!"),
+//	    Messages: []niro.Message{
+//	        niro.UserText("Hello!"),
 //	    },
 //	})
 //	if err != nil {
@@ -38,4 +38,4 @@
 // Streaming-first, not streaming-compatible. Minimal abstractions, maximum
 // control. Zero magic. Composable pipelines. Backpressure-aware.
 // Low allocations. Go idiomatic. Production-first.
-package ryn
+package niro

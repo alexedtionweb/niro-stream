@@ -23,23 +23,23 @@ func TestToolLoopBasic(t *testing.T) {
 		return "", fmt.Errorf("unknown tool")
 	})
 
-	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
-		s, e := ryn.NewStream(0)
+	mock := niro.ProviderFunc(func(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
+		s, e := niro.NewStream(0)
 		go func() {
 			defer e.Close()
-			_ = e.Emit(ctx, ryn.TextFrame("No tools needed"))
+			_ = e.Emit(ctx, niro.TextFrame("No tools needed"))
 		}()
 		return s, nil
 	})
 
 	loop := tools.NewToolLoop(executor, 2)
-	stream, err := loop.GenerateWithTools(ctx, mock, &ryn.Request{
-		Messages: []ryn.Message{ryn.UserText("calculate")},
+	stream, err := loop.GenerateWithTools(ctx, mock, &niro.Request{
+		Messages: []niro.Message{niro.UserText("calculate")},
 	})
 
 	assertNoError(t, err)
 	assertTrue(t, stream != nil)
-	text, _ := ryn.CollectText(ctx, stream)
+	text, _ := niro.CollectText(ctx, stream)
 	assertTrue(t, len(text) > 0)
 }
 
@@ -55,24 +55,24 @@ func TestToolLoopFeedsResultsAndStreams(t *testing.T) {
 	})
 
 	call := 0
-	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+	mock := niro.ProviderFunc(func(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
 		call++
-		s, e := ryn.NewStream(8)
+		s, e := niro.NewStream(8)
 		go func() {
 			defer e.Close()
 			if call == 1 {
-				_ = e.Emit(ctx, ryn.TextFrame("thinking"))
-				_ = e.Emit(ctx, ryn.Frame{Kind: ryn.KindToolCall, Tool: &ryn.ToolCall{ID: "c1", Name: "add", Args: json.RawMessage(`{"a":2,"b":3}`)}})
+				_ = e.Emit(ctx, niro.TextFrame("thinking"))
+				_ = e.Emit(ctx, niro.Frame{Kind: niro.KindToolCall, Tool: &niro.ToolCall{ID: "c1", Name: "add", Args: json.RawMessage(`{"a":2,"b":3}`)}})
 				return
 			}
 
 			foundToolResult := false
 			for _, m := range req.Messages {
-				if m.Role != ryn.RoleTool {
+				if m.Role != niro.RoleTool {
 					continue
 				}
 				for _, p := range m.Parts {
-					if p.Kind == ryn.KindToolResult && p.Result != nil && p.Result.CallID == "c1" {
+					if p.Kind == niro.KindToolResult && p.Result != nil && p.Result.CallID == "c1" {
 						foundToolResult = true
 					}
 				}
@@ -82,7 +82,7 @@ func TestToolLoopFeedsResultsAndStreams(t *testing.T) {
 				return
 			}
 
-			_ = e.Emit(ctx, ryn.TextFrame("done"))
+			_ = e.Emit(ctx, niro.TextFrame("done"))
 		}()
 		return s, nil
 	})
@@ -95,17 +95,17 @@ func TestToolLoopFeedsResultsAndStreams(t *testing.T) {
 		StreamBuffer:    16,
 	})
 
-	stream, err := loop.GenerateWithTools(ctx, mock, &ryn.Request{Messages: []ryn.Message{ryn.UserText("calc")}})
+	stream, err := loop.GenerateWithTools(ctx, mock, &niro.Request{Messages: []niro.Message{niro.UserText("calc")}})
 	assertNoError(t, err)
 
 	var sawToolResult bool
 	var out strings.Builder
 	for stream.Next(ctx) {
 		f := stream.Frame()
-		if f.Kind == ryn.KindToolResult && f.Result != nil {
+		if f.Kind == niro.KindToolResult && f.Result != nil {
 			sawToolResult = true
 		}
-		if f.Kind == ryn.KindText {
+		if f.Kind == niro.KindText {
 			out.WriteString(f.Text)
 		}
 	}
@@ -125,7 +125,7 @@ func TestToolsetDefineValidateExecute(t *testing.T) {
 				A int `json:"a"`
 				B int `json:"b"`
 			}
-			if err := ryn.JSONUnmarshal(args, &in); err != nil {
+			if err := niro.JSONUnmarshal(args, &in); err != nil {
 				return nil, err
 			}
 			return map[string]int{"sum": in.A + in.B}, nil
@@ -133,7 +133,7 @@ func TestToolsetDefineValidateExecute(t *testing.T) {
 	assertNoError(t, err)
 	assertNoError(t, set.Register(def))
 
-	res, err := set.ExecuteCall(ctx, ryn.ToolCall{ID: "c1", Name: "sum", Args: json.RawMessage(`{"a":2,"b":3}`)})
+	res, err := set.ExecuteCall(ctx, niro.ToolCall{ID: "c1", Name: "sum", Args: json.RawMessage(`{"a":2,"b":3}`)})
 	assertNoError(t, err)
 	assertEqual(t, res.IsError, false)
 	assertTrue(t, strings.Contains(res.Content, "5"))
@@ -153,7 +153,7 @@ func TestToolsetValidationFailure(t *testing.T) {
 		},
 	})
 
-	_, err := set.ExecuteCall(ctx, ryn.ToolCall{ID: "c1", Name: "sum", Args: json.RawMessage(`{"a":2}`)})
+	_, err := set.ExecuteCall(ctx, niro.ToolCall{ID: "c1", Name: "sum", Args: json.RawMessage(`{"a":2}`)})
 	assertNotNil(t, err)
 	assertTrue(t, strings.Contains(err.Error(), "missing required field"))
 }
@@ -173,7 +173,7 @@ func TestToolsetHooks(t *testing.T) {
 		},
 	})
 
-	_, err := set.ExecuteCall(ctx, ryn.ToolCall{ID: "c1", Name: "echo", Args: json.RawMessage(`{"x":1}`)})
+	_, err := set.ExecuteCall(ctx, niro.ToolCall{ID: "c1", Name: "echo", Args: json.RawMessage(`{"x":1}`)})
 	assertNoError(t, err)
 	assertEqual(t, h.validateCalls, 1)
 	assertEqual(t, h.startCalls, 1)
@@ -260,7 +260,7 @@ func TestToolsetWithValidator(t *testing.T) {
 		},
 	})
 
-	_, err := set.ExecuteCall(ctx, ryn.ToolCall{ID: "c1", Name: "echo"})
+	_, err := set.ExecuteCall(ctx, niro.ToolCall{ID: "c1", Name: "echo"})
 	assertTrue(t, err != nil)
 	assertErrorContains(t, err, "always fails")
 }
@@ -295,7 +295,7 @@ func TestToolsetExecuteCallHandlerError(t *testing.T) {
 		},
 	})
 
-	res, err := set.ExecuteCall(ctx, ryn.ToolCall{ID: "c1", Name: "fail"})
+	res, err := set.ExecuteCall(ctx, niro.ToolCall{ID: "c1", Name: "fail"})
 	assertTrue(t, err != nil)
 	assertTrue(t, res.IsError)
 	assertErrorContains(t, err, "handler error")
@@ -314,7 +314,7 @@ func TestNormalizeToolOutputTypes(t *testing.T) {
 			return nil, nil
 		},
 	})
-	res, err := set.ExecuteCall(ctx, ryn.ToolCall{ID: "c1", Name: "nil_tool"})
+	res, err := set.ExecuteCall(ctx, niro.ToolCall{ID: "c1", Name: "nil_tool"})
 	assertNoError(t, err)
 	assertEqual(t, res.Content, "")
 
@@ -326,7 +326,7 @@ func TestNormalizeToolOutputTypes(t *testing.T) {
 			return []byte("hello bytes"), nil
 		},
 	})
-	res2, err := set.ExecuteCall(ctx, ryn.ToolCall{ID: "c2", Name: "bytes_tool"})
+	res2, err := set.ExecuteCall(ctx, niro.ToolCall{ID: "c2", Name: "bytes_tool"})
 	assertNoError(t, err)
 	assertEqual(t, res2.Content, "hello bytes")
 
@@ -338,7 +338,7 @@ func TestNormalizeToolOutputTypes(t *testing.T) {
 			return json.RawMessage(`{"k":"v"}`), nil
 		},
 	})
-	res3, err := set.ExecuteCall(ctx, ryn.ToolCall{ID: "c3", Name: "raw_tool"})
+	res3, err := set.ExecuteCall(ctx, niro.ToolCall{ID: "c3", Name: "raw_tool"})
 	assertNoError(t, err)
 	assertEqual(t, res3.Content, `{"k":"v"}`)
 
@@ -350,7 +350,7 @@ func TestNormalizeToolOutputTypes(t *testing.T) {
 			return map[string]int{"val": 42}, nil
 		},
 	})
-	res4, err := set.ExecuteCall(ctx, ryn.ToolCall{ID: "c4", Name: "struct_tool"})
+	res4, err := set.ExecuteCall(ctx, niro.ToolCall{ID: "c4", Name: "struct_tool"})
 	assertNoError(t, err)
 	assertTrue(t, strings.Contains(res4.Content, "42"))
 }
@@ -363,14 +363,14 @@ func TestNewStreamWithToolHandling(t *testing.T) {
 		return "result", nil
 	})
 
-	base := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
-		return ryn.StreamFromSlice([]ryn.Frame{ryn.TextFrame("done")}), nil
+	base := niro.ProviderFunc(func(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
+		return niro.StreamFromSlice([]niro.Frame{niro.TextFrame("done")}), nil
 	})
 
 	swth := tools.NewStreamWithToolHandling(base, executor, 3)
-	stream, err := swth.Generate(ctx, &ryn.Request{Messages: []ryn.Message{ryn.UserText("hi")}})
+	stream, err := swth.Generate(ctx, &niro.Request{Messages: []niro.Message{niro.UserText("hi")}})
 	assertNoError(t, err)
-	text, err := ryn.CollectText(ctx, stream)
+	text, err := niro.CollectText(ctx, stream)
 	assertNoError(t, err)
 	assertEqual(t, text, "done")
 }
@@ -383,8 +383,8 @@ func TestNewStreamWithToolHandlingOptions(t *testing.T) {
 		return "result", nil
 	})
 
-	base := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
-		return ryn.StreamFromSlice([]ryn.Frame{ryn.TextFrame("opts-done")}), nil
+	base := niro.ProviderFunc(func(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
+		return niro.StreamFromSlice([]niro.Frame{niro.TextFrame("opts-done")}), nil
 	})
 
 	swth := tools.NewStreamWithToolHandlingOptions(base, executor, tools.ToolStreamOptions{
@@ -392,9 +392,9 @@ func TestNewStreamWithToolHandlingOptions(t *testing.T) {
 		Parallel:     false,
 		StreamBuffer: 8,
 	})
-	stream, err := swth.Generate(ctx, &ryn.Request{Messages: []ryn.Message{ryn.UserText("hi")}})
+	stream, err := swth.Generate(ctx, &niro.Request{Messages: []niro.Message{niro.UserText("hi")}})
 	assertNoError(t, err)
-	text, err := ryn.CollectText(ctx, stream)
+	text, err := niro.CollectText(ctx, stream)
 	assertNoError(t, err)
 	assertEqual(t, text, "opts-done")
 }
@@ -408,18 +408,18 @@ func TestToolLoopMaxRoundsExceeded(t *testing.T) {
 	})
 
 	// Provider always returns a tool call, never terminates
-	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
-		s, e := ryn.NewStream(4)
+	mock := niro.ProviderFunc(func(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
+		s, e := niro.NewStream(4)
 		go func() {
 			defer e.Close()
-			_ = e.Emit(ctx, ryn.Frame{Kind: ryn.KindToolCall, Tool: &ryn.ToolCall{ID: "c1", Name: "loop"}})
+			_ = e.Emit(ctx, niro.Frame{Kind: niro.KindToolCall, Tool: &niro.ToolCall{ID: "c1", Name: "loop"}})
 		}()
 		return s, nil
 	})
 
 	loop := tools.NewToolLoop(executor, 2) // max 2 rounds
-	stream, err := loop.GenerateWithTools(ctx, mock, &ryn.Request{
-		Messages: []ryn.Message{ryn.UserText("loop forever")},
+	stream, err := loop.GenerateWithTools(ctx, mock, &niro.Request{
+		Messages: []niro.Message{niro.UserText("loop forever")},
 	})
 	assertNoError(t, err) // stream creation is fine
 
@@ -435,9 +435,9 @@ func TestToolLoopNilExecutor(t *testing.T) {
 	ctx := context.Background()
 
 	loop := tools.NewToolLoop(nil, 2)
-	_, err := loop.GenerateWithTools(ctx, ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+	_, err := loop.GenerateWithTools(ctx, niro.ProviderFunc(func(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
 		return nil, nil
-	}), &ryn.Request{Messages: []ryn.Message{ryn.UserText("hi")}})
+	}), &niro.Request{Messages: []niro.Message{niro.UserText("hi")}})
 	assertTrue(t, err != nil)
 }
 
@@ -449,13 +449,13 @@ func TestToolLoopProviderError(t *testing.T) {
 		return "res", nil
 	})
 
-	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+	mock := niro.ProviderFunc(func(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
 		return nil, fmt.Errorf("provider failed")
 	})
 
 	loop := tools.NewToolLoop(executor, 2)
-	stream, _ := loop.GenerateWithTools(ctx, mock, &ryn.Request{
-		Messages: []ryn.Message{ryn.UserText("hi")},
+	stream, _ := loop.GenerateWithTools(ctx, mock, &niro.Request{
+		Messages: []niro.Message{niro.UserText("hi")},
 	})
 	for stream.Next(ctx) {
 	}
@@ -468,12 +468,12 @@ func TestToolingProviderNilCases(t *testing.T) {
 
 	// nil provider
 	p := tools.NewToolingProvider(nil, nil, tools.DefaultToolStreamOptions())
-	_, err := p.Generate(ctx, &ryn.Request{Messages: []ryn.Message{ryn.UserText("hi")}})
+	_, err := p.Generate(ctx, &niro.Request{Messages: []niro.Message{niro.UserText("hi")}})
 	assertTrue(t, err != nil)
 
 	// nil request
-	base := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
-		return ryn.StreamFromSlice(nil), nil
+	base := niro.ProviderFunc(func(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
+		return niro.StreamFromSlice(nil), nil
 	})
 	p2 := tools.NewToolingProvider(base, nil, tools.DefaultToolStreamOptions())
 	_, err2 := p2.Generate(ctx, nil)
@@ -568,18 +568,18 @@ func TestToolLoopParallelMultipleCalls(t *testing.T) {
 	})
 
 	call := 0
-	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+	mock := niro.ProviderFunc(func(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
 		call++
-		s, e := ryn.NewStream(8)
+		s, e := niro.NewStream(8)
 		go func() {
 			defer e.Close()
 			if call == 1 {
 				// Emit two tool calls in one round
-				_ = e.Emit(ctx, ryn.Frame{Kind: ryn.KindToolCall, Tool: &ryn.ToolCall{ID: "c1", Name: "tool1"}})
-				_ = e.Emit(ctx, ryn.Frame{Kind: ryn.KindToolCall, Tool: &ryn.ToolCall{ID: "c2", Name: "tool2"}})
+				_ = e.Emit(ctx, niro.Frame{Kind: niro.KindToolCall, Tool: &niro.ToolCall{ID: "c1", Name: "tool1"}})
+				_ = e.Emit(ctx, niro.Frame{Kind: niro.KindToolCall, Tool: &niro.ToolCall{ID: "c2", Name: "tool2"}})
 				return
 			}
-			_ = e.Emit(ctx, ryn.TextFrame("parallel done"))
+			_ = e.Emit(ctx, niro.TextFrame("parallel done"))
 		}()
 		return s, nil
 	})
@@ -589,12 +589,12 @@ func TestToolLoopParallelMultipleCalls(t *testing.T) {
 		Parallel:     true,
 		StreamBuffer: 16,
 	})
-	stream, err := loop.GenerateWithTools(ctx, mock, &ryn.Request{
-		Messages: []ryn.Message{ryn.UserText("parallel tools")},
+	stream, err := loop.GenerateWithTools(ctx, mock, &niro.Request{
+		Messages: []niro.Message{niro.UserText("parallel tools")},
 	})
 	assertNoError(t, err)
 
-	text, err := ryn.CollectText(ctx, stream)
+	text, err := niro.CollectText(ctx, stream)
 	assertNoError(t, err)
 	assertEqual(t, text, "parallel done")
 }
@@ -603,13 +603,13 @@ func TestGenerateInputStreamErrors(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 
-	base := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
-		return ryn.StreamFromSlice(nil), nil
+	base := niro.ProviderFunc(func(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
+		return niro.StreamFromSlice(nil), nil
 	})
-	in := ryn.StreamFromSlice(nil)
+	in := niro.StreamFromSlice(nil)
 
 	// nil provider
-	_, err := tools.GenerateInputStream(ctx, nil, &ryn.Request{}, in, tools.DefaultInputStreamOptions())
+	_, err := tools.GenerateInputStream(ctx, nil, &niro.Request{}, in, tools.DefaultInputStreamOptions())
 	assertTrue(t, err != nil)
 
 	// nil request
@@ -617,7 +617,7 @@ func TestGenerateInputStreamErrors(t *testing.T) {
 	assertTrue(t, err != nil)
 
 	// nil input
-	_, err = tools.GenerateInputStream(ctx, base, &ryn.Request{}, nil, tools.DefaultInputStreamOptions())
+	_, err = tools.GenerateInputStream(ctx, base, &niro.Request{}, nil, tools.DefaultInputStreamOptions())
 	assertTrue(t, err != nil)
 }
 
@@ -625,19 +625,19 @@ func TestGenerateInputStreamCustomRole(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 
-	var gotRole ryn.Role
-	provider := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+	var gotRole niro.Role
+	provider := niro.ProviderFunc(func(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
 		if len(req.Messages) > 0 {
 			last := req.Messages[len(req.Messages)-1]
 			gotRole = last.Role
 		}
-		return ryn.StreamFromSlice([]ryn.Frame{ryn.TextFrame("ok")}), nil
+		return niro.StreamFromSlice([]niro.Frame{niro.TextFrame("ok")}), nil
 	})
 
-	in := ryn.StreamFromSlice([]ryn.Frame{ryn.TextFrame("input")})
-	_, err := tools.GenerateInputStream(ctx, provider, &ryn.Request{}, in, tools.InputStreamOptions{Role: ryn.RoleAssistant})
+	in := niro.StreamFromSlice([]niro.Frame{niro.TextFrame("input")})
+	_, err := tools.GenerateInputStream(ctx, provider, &niro.Request{}, in, tools.InputStreamOptions{Role: niro.RoleAssistant})
 	assertNoError(t, err)
-	assertEqual(t, gotRole, ryn.RoleAssistant)
+	assertEqual(t, gotRole, niro.RoleAssistant)
 }
 
 func TestToolsetApplyWithTools(t *testing.T) {
@@ -650,7 +650,7 @@ func TestToolsetApplyWithTools(t *testing.T) {
 		Handler:     func(ctx context.Context, args json.RawMessage) (any, error) { return nil, nil },
 	})
 
-	req := &ryn.Request{Messages: []ryn.Message{ryn.UserText("hi")}}
+	req := &niro.Request{Messages: []niro.Message{niro.UserText("hi")}}
 	applied := set.Apply(req)
 
 	// original is unchanged
@@ -674,7 +674,7 @@ func TestToolsetNormalizeOutputUnmarshalError(t *testing.T) {
 		},
 	})
 
-	res, err := set.ExecuteCall(ctx, ryn.ToolCall{ID: "c1", Name: "bad_output"})
+	res, err := set.ExecuteCall(ctx, niro.ToolCall{ID: "c1", Name: "bad_output"})
 	assertTrue(t, err != nil)
 	assertTrue(t, res.IsError)
 }
@@ -693,14 +693,14 @@ func TestToolingProviderGenerate(t *testing.T) {
 	})
 
 	callCount := 0
-	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+	mock := niro.ProviderFunc(func(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
 		callCount++
 		if callCount == 1 {
 			// First call: emit a tool call frame.
-			s, em := ryn.NewStream(4)
+			s, em := niro.NewStream(4)
 			go func() {
 				defer em.Close()
-				_ = em.Emit(ctx, ryn.Frame{Kind: ryn.KindToolCall, Tool: &ryn.ToolCall{
+				_ = em.Emit(ctx, niro.Frame{Kind: niro.KindToolCall, Tool: &niro.ToolCall{
 					ID:   "c1",
 					Name: "greet",
 					Args: json.RawMessage(`{}`),
@@ -709,14 +709,14 @@ func TestToolingProviderGenerate(t *testing.T) {
 			return s, nil
 		}
 		// Second call: return final text (no tool calls).
-		return ryn.StreamFromSlice([]ryn.Frame{ryn.TextFrame("done")}), nil
+		return niro.StreamFromSlice([]niro.Frame{niro.TextFrame("done")}), nil
 	})
 
 	p := tools.NewToolingProvider(mock, set, tools.DefaultToolStreamOptions())
-	stream, err := p.Generate(ctx, &ryn.Request{Messages: []ryn.Message{ryn.UserText("hi")}})
+	stream, err := p.Generate(ctx, &niro.Request{Messages: []niro.Message{niro.UserText("hi")}})
 	assertNoError(t, err)
 
-	text, err := ryn.CollectText(ctx, stream)
+	text, err := niro.CollectText(ctx, stream)
 	assertNoError(t, err)
 	assertEqual(t, text, "done")
 	assertEqual(t, callCount, 2)
@@ -738,14 +738,14 @@ func TestNewToolingProviderWithExplicitFalseBooleans(t *testing.T) {
 	})
 
 	callCount := 0
-	var toolResultsSeen []ryn.Frame
-	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+	var toolResultsSeen []niro.Frame
+	mock := niro.ProviderFunc(func(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
 		callCount++
 		if callCount == 1 {
-			s, em := ryn.NewStream(4)
+			s, em := niro.NewStream(4)
 			go func() {
 				defer em.Close()
-				_ = em.Emit(ctx, ryn.Frame{Kind: ryn.KindToolCall, Tool: &ryn.ToolCall{
+				_ = em.Emit(ctx, niro.Frame{Kind: niro.KindToolCall, Tool: &niro.ToolCall{
 					ID:   "c2",
 					Name: "echo",
 					Args: json.RawMessage(`{}`),
@@ -753,7 +753,7 @@ func TestNewToolingProviderWithExplicitFalseBooleans(t *testing.T) {
 			}()
 			return s, nil
 		}
-		return ryn.StreamFromSlice([]ryn.Frame{ryn.TextFrame("final")}), nil
+		return niro.StreamFromSlice([]niro.Frame{niro.TextFrame("final")}), nil
 	})
 
 	// Explicit opts with Parallel:false, EmitToolResults:false, non-zero rest.
@@ -765,12 +765,12 @@ func TestNewToolingProviderWithExplicitFalseBooleans(t *testing.T) {
 		StreamBuffer:    8,
 	}
 	p := tools.NewToolingProvider(mock, set, opts)
-	stream, err := p.Generate(ctx, &ryn.Request{Messages: []ryn.Message{ryn.UserText("hi")}})
+	stream, err := p.Generate(ctx, &niro.Request{Messages: []niro.Message{niro.UserText("hi")}})
 	assertNoError(t, err)
 
 	for stream.Next(ctx) {
 		f := stream.Frame()
-		if f.Kind == ryn.KindToolResult {
+		if f.Kind == niro.KindToolResult {
 			toolResultsSeen = append(toolResultsSeen, f)
 		}
 	}
@@ -806,13 +806,13 @@ func TestNewToolingProviderZeroOpts(t *testing.T) {
 	ctx := context.Background()
 
 	// Zero ToolStreamOptions → should default to DefaultToolStreamOptions.
-	base := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
-		return ryn.StreamFromSlice([]ryn.Frame{ryn.TextFrame("ok")}), nil
+	base := niro.ProviderFunc(func(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
+		return niro.StreamFromSlice([]niro.Frame{niro.TextFrame("ok")}), nil
 	})
 	p := tools.NewToolingProvider(base, nil, tools.ToolStreamOptions{}) // all zero
-	stream, err := p.Generate(ctx, &ryn.Request{Messages: []ryn.Message{ryn.UserText("hi")}})
+	stream, err := p.Generate(ctx, &niro.Request{Messages: []niro.Message{niro.UserText("hi")}})
 	assertNoError(t, err)
-	text, err := ryn.CollectText(ctx, stream)
+	text, err := niro.CollectText(ctx, stream)
 	assertNoError(t, err)
 	assertEqual(t, text, "ok")
 }
@@ -825,8 +825,8 @@ func TestGenerateWithToolsNilRequest(t *testing.T) {
 		return "ok", nil
 	})
 	loop := tools.NewToolLoop(executor, 2)
-	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
-		return ryn.StreamFromSlice(nil), nil
+	mock := niro.ProviderFunc(func(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
+		return niro.StreamFromSlice(nil), nil
 	})
 	_, err := loop.GenerateWithTools(ctx, mock, nil)
 	assertTrue(t, err != nil)
@@ -884,11 +884,11 @@ func TestToolLoopExecOneTimeout(t *testing.T) {
 		}
 	})
 
-	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
-		s, em := ryn.NewStream(4)
+	mock := niro.ProviderFunc(func(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
+		s, em := niro.NewStream(4)
 		go func() {
 			defer em.Close()
-			_ = em.Emit(ctx, ryn.Frame{Kind: ryn.KindToolCall, Tool: &ryn.ToolCall{
+			_ = em.Emit(ctx, niro.Frame{Kind: niro.KindToolCall, Tool: &niro.ToolCall{
 				ID:   "c-timeout",
 				Name: "slow",
 				Args: json.RawMessage(`{}`),
@@ -902,13 +902,13 @@ func TestToolLoopExecOneTimeout(t *testing.T) {
 		ToolTimeout:  10 * time.Millisecond, // very short timeout
 		StreamBuffer: 8,
 	})
-	stream, err := loop.GenerateWithTools(ctx, mock, &ryn.Request{Messages: []ryn.Message{ryn.UserText("hi")}})
+	stream, err := loop.GenerateWithTools(ctx, mock, &niro.Request{Messages: []niro.Message{niro.UserText("hi")}})
 	assertNoError(t, err)
 
 	for stream.Next(ctx) {
 		f := stream.Frame()
 		// We expect tool result frames with IsError=true because of timeout.
-		if f.Kind == ryn.KindToolResult && f.Result != nil {
+		if f.Kind == niro.KindToolResult && f.Result != nil {
 			// Timeout should produce an error result.
 			assertTrue(t, f.Result.IsError || !f.Result.IsError) // always passes, just consuming
 		}
@@ -965,13 +965,13 @@ func TestToolNameValidation(t *testing.T) {
 
 func TestToolValidateNameFormatPropagates(t *testing.T) {
 	t.Parallel()
-	// Verify that ryn.Tool.Validate also rejects bad names (same regex).
-	bad := ryn.Tool{Name: "bad-name", Description: "desc"}
+	// Verify that niro.Tool.Validate also rejects bad names (same regex).
+	bad := niro.Tool{Name: "bad-name", Description: "desc"}
 	err := bad.Validate()
 	assertTrue(t, err != nil)
 	assertErrorContains(t, err, "bad-name")
 
-	good := ryn.Tool{Name: "good_name", Description: "desc"}
+	good := niro.Tool{Name: "good_name", Description: "desc"}
 	assertNoError(t, good.Validate())
 }
 
@@ -987,23 +987,23 @@ func TestToolChoiceRequiredResetAfterFirstRound(t *testing.T) {
 		return "42", nil
 	})
 
-	var roundChoices []ryn.ToolChoice
+	var roundChoices []niro.ToolChoice
 	call := 0
-	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+	mock := niro.ProviderFunc(func(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
 		call++
 		roundChoices = append(roundChoices, req.ToolChoice)
-		s, em := ryn.NewStream(4)
+		s, em := niro.NewStream(4)
 		go func() {
 			defer em.Close()
 			if call == 1 {
 				// Round 0: emit a tool call so the loop continues.
-				_ = em.Emit(ctx, ryn.Frame{Kind: ryn.KindToolCall, Tool: &ryn.ToolCall{
+				_ = em.Emit(ctx, niro.Frame{Kind: niro.KindToolCall, Tool: &niro.ToolCall{
 					ID: "c1", Name: "calc", Args: json.RawMessage(`{}`),
 				}})
 				return
 			}
 			// Round 1+: emit text to finish.
-			_ = em.Emit(ctx, ryn.TextFrame("done"))
+			_ = em.Emit(ctx, niro.TextFrame("done"))
 		}()
 		return s, nil
 	})
@@ -1016,9 +1016,9 @@ func TestToolChoiceRequiredResetAfterFirstRound(t *testing.T) {
 	})
 
 	loop := tools.NewToolLoop(executor, 4)
-	req := &ryn.Request{
-		Messages:   []ryn.Message{ryn.UserText("calc")},
-		ToolChoice: ryn.ToolChoiceRequired,
+	req := &niro.Request{
+		Messages:   []niro.Message{niro.UserText("calc")},
+		ToolChoice: niro.ToolChoiceRequired,
 	}
 	stream, err := loop.GenerateWithTools(ctx, mock, req)
 	assertNoError(t, err)
@@ -1029,10 +1029,10 @@ func TestToolChoiceRequiredResetAfterFirstRound(t *testing.T) {
 	// Round 0 should use the original ToolChoice (required).
 	// Round 1+ should have been reset to auto.
 	assertTrue(t, len(roundChoices) >= 2)
-	assertEqual(t, roundChoices[0], ryn.ToolChoiceRequired)
+	assertEqual(t, roundChoices[0], niro.ToolChoiceRequired)
 	for i := 1; i < len(roundChoices); i++ {
 		tc := roundChoices[i]
-		isAutoOrEmpty := tc == ryn.ToolChoiceAuto || tc == ""
+		isAutoOrEmpty := tc == niro.ToolChoiceAuto || tc == ""
 		assertTrue(t, isAutoOrEmpty)
 	}
 }
@@ -1045,29 +1045,29 @@ func TestToolChoiceFuncResetAfterFirstRound(t *testing.T) {
 		return "ok", nil
 	})
 
-	var roundChoices []ryn.ToolChoice
+	var roundChoices []niro.ToolChoice
 	call := 0
-	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+	mock := niro.ProviderFunc(func(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
 		call++
 		roundChoices = append(roundChoices, req.ToolChoice)
-		s, em := ryn.NewStream(4)
+		s, em := niro.NewStream(4)
 		go func() {
 			defer em.Close()
 			if call == 1 {
-				_ = em.Emit(ctx, ryn.Frame{Kind: ryn.KindToolCall, Tool: &ryn.ToolCall{
+				_ = em.Emit(ctx, niro.Frame{Kind: niro.KindToolCall, Tool: &niro.ToolCall{
 					ID: "c1", Name: "lookup", Args: json.RawMessage(`{}`),
 				}})
 				return
 			}
-			_ = em.Emit(ctx, ryn.TextFrame("result"))
+			_ = em.Emit(ctx, niro.TextFrame("result"))
 		}()
 		return s, nil
 	})
 
 	loop := tools.NewToolLoop(executor, 3)
-	forcedChoice := ryn.ToolChoiceFunc("lookup")
-	req := &ryn.Request{
-		Messages:   []ryn.Message{ryn.UserText("lookup")},
+	forcedChoice := niro.ToolChoiceFunc("lookup")
+	req := &niro.Request{
+		Messages:   []niro.Message{niro.UserText("lookup")},
 		ToolChoice: forcedChoice,
 	}
 	stream, err := loop.GenerateWithTools(ctx, mock, req)
@@ -1079,7 +1079,7 @@ func TestToolChoiceFuncResetAfterFirstRound(t *testing.T) {
 	assertTrue(t, len(roundChoices) >= 2)
 	assertEqual(t, roundChoices[0], forcedChoice)
 	// Round 1 must not force the tool anymore.
-	assertEqual(t, roundChoices[1], ryn.ToolChoiceAuto)
+	assertEqual(t, roundChoices[1], niro.ToolChoiceAuto)
 }
 
 // ---------------------------------------------------------------------------
@@ -1095,26 +1095,26 @@ func TestParallelToolResultsGroupedInOneMessage(t *testing.T) {
 	})
 
 	call := 0
-	var secondReqMessages []ryn.Message
-	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+	var secondReqMessages []niro.Message
+	mock := niro.ProviderFunc(func(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
 		call++
 		if call == 1 {
 			// Return two parallel tool calls.
-			s, em := ryn.NewStream(8)
+			s, em := niro.NewStream(8)
 			go func() {
 				defer em.Close()
-				_ = em.Emit(ctx, ryn.Frame{Kind: ryn.KindToolCall, Tool: &ryn.ToolCall{
+				_ = em.Emit(ctx, niro.Frame{Kind: niro.KindToolCall, Tool: &niro.ToolCall{
 					ID: "id1", Name: "toolA", Args: json.RawMessage(`{}`),
 				}})
-				_ = em.Emit(ctx, ryn.Frame{Kind: ryn.KindToolCall, Tool: &ryn.ToolCall{
+				_ = em.Emit(ctx, niro.Frame{Kind: niro.KindToolCall, Tool: &niro.ToolCall{
 					ID: "id2", Name: "toolB", Args: json.RawMessage(`{}`),
 				}})
 			}()
 			return s, nil
 		}
 		// Capture the messages sent on round 2.
-		secondReqMessages = append([]ryn.Message(nil), req.Messages...)
-		return ryn.StreamFromSlice([]ryn.Frame{ryn.TextFrame("done")}), nil
+		secondReqMessages = append([]niro.Message(nil), req.Messages...)
+		return niro.StreamFromSlice([]niro.Frame{niro.TextFrame("done")}), nil
 	})
 
 	loop := tools.NewToolLoopWithOptions(executor, tools.ToolStreamOptions{
@@ -1123,8 +1123,8 @@ func TestParallelToolResultsGroupedInOneMessage(t *testing.T) {
 		EmitToolResults: true,
 		StreamBuffer:    16,
 	})
-	stream, err := loop.GenerateWithTools(ctx, mock, &ryn.Request{
-		Messages: []ryn.Message{ryn.UserText("run both")},
+	stream, err := loop.GenerateWithTools(ctx, mock, &niro.Request{
+		Messages: []niro.Message{niro.UserText("run both")},
 	})
 	assertNoError(t, err)
 	for stream.Next(ctx) {
@@ -1132,9 +1132,9 @@ func TestParallelToolResultsGroupedInOneMessage(t *testing.T) {
 	assertNoError(t, stream.Err())
 
 	// Find the single RoleTool message in the history.
-	var toolMessages []ryn.Message
+	var toolMessages []niro.Message
 	for _, m := range secondReqMessages {
-		if m.Role == ryn.RoleTool {
+		if m.Role == niro.RoleTool {
 			toolMessages = append(toolMessages, m)
 		}
 	}
@@ -1146,7 +1146,7 @@ func TestParallelToolResultsGroupedInOneMessage(t *testing.T) {
 	// Verify both call IDs are present.
 	var callIDs []string
 	for _, p := range toolMessages[0].Parts {
-		if p.Kind == ryn.KindToolResult && p.Result != nil {
+		if p.Kind == niro.KindToolResult && p.Result != nil {
 			callIDs = append(callIDs, p.Result.CallID)
 		}
 	}
@@ -1268,19 +1268,19 @@ func TestToolLoopApproverApproves(t *testing.T) {
 	})
 
 	call := 0
-	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+	mock := niro.ProviderFunc(func(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
 		call++
 		if call == 1 {
-			s, em := ryn.NewStream(4)
+			s, em := niro.NewStream(4)
 			go func() {
 				defer em.Close()
-				_ = em.Emit(ctx, ryn.Frame{Kind: ryn.KindToolCall, Tool: &ryn.ToolCall{
+				_ = em.Emit(ctx, niro.Frame{Kind: niro.KindToolCall, Tool: &niro.ToolCall{
 					ID: "c1", Name: "calc", Args: json.RawMessage(`{}`),
 				}})
 			}()
 			return s, nil
 		}
-		return ryn.StreamFromSlice([]ryn.Frame{ryn.TextFrame("done")}), nil
+		return niro.StreamFromSlice([]niro.Frame{niro.TextFrame("done")}), nil
 	})
 
 	loop := tools.NewToolLoopWithOptions(executor, tools.ToolStreamOptions{
@@ -1288,8 +1288,8 @@ func TestToolLoopApproverApproves(t *testing.T) {
 		StreamBuffer: 8,
 		Approver:     tools.ApproveAll(), // always approve
 	})
-	stream, err := loop.GenerateWithTools(ctx, mock, &ryn.Request{
-		Messages: []ryn.Message{ryn.UserText("calc")},
+	stream, err := loop.GenerateWithTools(ctx, mock, &niro.Request{
+		Messages: []niro.Message{niro.UserText("calc")},
 	})
 	assertNoError(t, err)
 	for stream.Next(ctx) {
@@ -1308,15 +1308,15 @@ func TestToolLoopApproverDenies(t *testing.T) {
 		return "42", nil
 	})
 
-	var deniedCall ryn.ToolCall
+	var deniedCall niro.ToolCall
 	call := 0
-	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+	mock := niro.ProviderFunc(func(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
 		call++
 		if call == 1 {
-			s, em := ryn.NewStream(4)
+			s, em := niro.NewStream(4)
 			go func() {
 				defer em.Close()
-				_ = em.Emit(ctx, ryn.Frame{Kind: ryn.KindToolCall, Tool: &ryn.ToolCall{
+				_ = em.Emit(ctx, niro.Frame{Kind: niro.KindToolCall, Tool: &niro.ToolCall{
 					ID: "c1", Name: "delete_file", Args: json.RawMessage(`{"path":"/etc"}`),
 				}})
 			}()
@@ -1326,14 +1326,14 @@ func TestToolLoopApproverDenies(t *testing.T) {
 		// Verify the tool result was fed back with IsError=true.
 		for _, m := range req.Messages {
 			for _, p := range m.Parts {
-				if p.Kind == ryn.KindToolResult && p.Result != nil {
+				if p.Kind == niro.KindToolResult && p.Result != nil {
 					if strings.Contains(p.Result.Content, "too dangerous") {
 						deniedCall.ID = p.Result.CallID
 					}
 				}
 			}
 		}
-		return ryn.StreamFromSlice([]ryn.Frame{ryn.TextFrame("I cannot delete that file.")}), nil
+		return niro.StreamFromSlice([]niro.Frame{niro.TextFrame("I cannot delete that file.")}), nil
 	})
 
 	loop := tools.NewToolLoopWithOptions(executor, tools.ToolStreamOptions{
@@ -1341,13 +1341,13 @@ func TestToolLoopApproverDenies(t *testing.T) {
 		StreamBuffer: 8,
 		Approver:     tools.DenyAll("too dangerous"),
 	})
-	stream, err := loop.GenerateWithTools(ctx, mock, &ryn.Request{
-		Messages: []ryn.Message{ryn.UserText("delete /etc")},
+	stream, err := loop.GenerateWithTools(ctx, mock, &niro.Request{
+		Messages: []niro.Message{niro.UserText("delete /etc")},
 	})
 	assertNoError(t, err)
 	var finalText strings.Builder
 	for stream.Next(ctx) {
-		if f := stream.Frame(); f.Kind == ryn.KindText {
+		if f := stream.Frame(); f.Kind == niro.KindText {
 			finalText.WriteString(f.Text)
 		}
 	}
@@ -1367,16 +1367,16 @@ func TestToolLoopApproverContextCanceled(t *testing.T) {
 	})
 
 	// Approver blocks until context is canceled.
-	blockingApprover := tools.ToolApproverFunc(func(ctx context.Context, call ryn.ToolCall) (tools.ToolApproval, error) {
+	blockingApprover := tools.ToolApproverFunc(func(ctx context.Context, call niro.ToolCall) (tools.ToolApproval, error) {
 		<-ctx.Done()
 		return tools.ToolApproval{}, ctx.Err()
 	})
 
-	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
-		s, em := ryn.NewStream(4)
+	mock := niro.ProviderFunc(func(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
+		s, em := niro.NewStream(4)
 		go func() {
 			defer em.Close()
-			_ = em.Emit(ctx, ryn.Frame{Kind: ryn.KindToolCall, Tool: &ryn.ToolCall{
+			_ = em.Emit(ctx, niro.Frame{Kind: niro.KindToolCall, Tool: &niro.ToolCall{
 				ID: "c1", Name: "myTool", Args: json.RawMessage(`{}`),
 			}})
 		}()
@@ -1388,8 +1388,8 @@ func TestToolLoopApproverContextCanceled(t *testing.T) {
 		StreamBuffer: 4,
 		Approver:     blockingApprover,
 	})
-	stream, err := loop.GenerateWithTools(ctx, mock, &ryn.Request{
-		Messages: []ryn.Message{ryn.UserText("go")},
+	stream, err := loop.GenerateWithTools(ctx, mock, &niro.Request{
+		Messages: []niro.Message{niro.UserText("go")},
 	})
 	assertNoError(t, err)
 
@@ -1407,11 +1407,11 @@ func TestToolApproverFunc(t *testing.T) {
 	ctx := context.Background()
 
 	called := false
-	approver := tools.ToolApproverFunc(func(ctx context.Context, call ryn.ToolCall) (tools.ToolApproval, error) {
+	approver := tools.ToolApproverFunc(func(ctx context.Context, call niro.ToolCall) (tools.ToolApproval, error) {
 		called = true
 		return tools.ToolApproval{Approved: true}, nil
 	})
-	decision, err := approver.Approve(ctx, ryn.ToolCall{Name: "myTool"})
+	decision, err := approver.Approve(ctx, niro.ToolCall{Name: "myTool"})
 	assertNoError(t, err)
 	assertTrue(t, decision.Approved)
 	assertTrue(t, called)
@@ -1422,7 +1422,7 @@ func TestApproveAll(t *testing.T) {
 	ctx := context.Background()
 
 	a := tools.ApproveAll()
-	decision, err := a.Approve(ctx, ryn.ToolCall{Name: "anything"})
+	decision, err := a.Approve(ctx, niro.ToolCall{Name: "anything"})
 	assertNoError(t, err)
 	assertTrue(t, decision.Approved)
 }
@@ -1432,14 +1432,14 @@ func TestDenyAll(t *testing.T) {
 	ctx := context.Background()
 
 	a := tools.DenyAll("blocked for maintenance")
-	decision, err := a.Approve(ctx, ryn.ToolCall{Name: "anything"})
+	decision, err := a.Approve(ctx, niro.ToolCall{Name: "anything"})
 	assertNoError(t, err)
 	assertTrue(t, !decision.Approved)
 	assertEqual(t, decision.Reason, "blocked for maintenance")
 
 	// Empty reason uses default.
 	a2 := tools.DenyAll("")
-	d2, _ := a2.Approve(ctx, ryn.ToolCall{Name: "x"})
+	d2, _ := a2.Approve(ctx, niro.ToolCall{Name: "x"})
 	assertTrue(t, !d2.Approved)
 	assertTrue(t, d2.Reason != "")
 }
@@ -1455,7 +1455,7 @@ func TestToolsetApproverDenied(t *testing.T) {
 		Handler:     func(ctx context.Context, args json.RawMessage) (any, error) { return "done", nil },
 	})
 
-	res, err := set.ExecuteCall(ctx, ryn.ToolCall{ID: "c1", Name: "riskyOp", Args: json.RawMessage(`{}`)})
+	res, err := set.ExecuteCall(ctx, niro.ToolCall{ID: "c1", Name: "riskyOp", Args: json.RawMessage(`{}`)})
 	assertTrue(t, err != nil)
 	assertTrue(t, tools.IsToolDenied(err))
 	assertTrue(t, res.IsError)
@@ -1473,7 +1473,7 @@ func TestToolsetApproverApproves(t *testing.T) {
 		Handler:     func(ctx context.Context, args json.RawMessage) (any, error) { return "result", nil },
 	})
 
-	res, err := set.ExecuteCall(ctx, ryn.ToolCall{ID: "c1", Name: "safeOp", Args: json.RawMessage(`{}`)})
+	res, err := set.ExecuteCall(ctx, niro.ToolCall{ID: "c1", Name: "safeOp", Args: json.RawMessage(`{}`)})
 	assertNoError(t, err)
 	assertTrue(t, !res.IsError)
 	assertEqual(t, res.Content, "result")
@@ -1501,24 +1501,24 @@ func TestToolLoopApproverApprovalError(t *testing.T) {
 		return "ok", nil
 	})
 
-	errApprover := tools.ToolApproverFunc(func(ctx context.Context, call ryn.ToolCall) (tools.ToolApproval, error) {
+	errApprover := tools.ToolApproverFunc(func(ctx context.Context, call niro.ToolCall) (tools.ToolApproval, error) {
 		return tools.ToolApproval{}, fmt.Errorf("approval service unavailable")
 	})
 
 	call := 0
-	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+	mock := niro.ProviderFunc(func(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
 		call++
 		if call == 1 {
-			s, em := ryn.NewStream(4)
+			s, em := niro.NewStream(4)
 			go func() {
 				defer em.Close()
-				_ = em.Emit(ctx, ryn.Frame{Kind: ryn.KindToolCall, Tool: &ryn.ToolCall{
+				_ = em.Emit(ctx, niro.Frame{Kind: niro.KindToolCall, Tool: &niro.ToolCall{
 					ID: "c1", Name: "myTool", Args: json.RawMessage(`{}`),
 				}})
 			}()
 			return s, nil
 		}
-		return ryn.StreamFromSlice([]ryn.Frame{ryn.TextFrame("error handled")}), nil
+		return niro.StreamFromSlice([]niro.Frame{niro.TextFrame("error handled")}), nil
 	})
 
 	loop := tools.NewToolLoopWithOptions(executor, tools.ToolStreamOptions{
@@ -1526,8 +1526,8 @@ func TestToolLoopApproverApprovalError(t *testing.T) {
 		StreamBuffer: 8,
 		Approver:     errApprover,
 	})
-	stream, err := loop.GenerateWithTools(ctx, mock, &ryn.Request{
-		Messages: []ryn.Message{ryn.UserText("go")},
+	stream, err := loop.GenerateWithTools(ctx, mock, &niro.Request{
+		Messages: []niro.Message{niro.UserText("go")},
 	})
 	assertNoError(t, err)
 	for stream.Next(ctx) {

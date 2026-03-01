@@ -14,8 +14,8 @@ func TestRegistryBasic(t *testing.T) {
 	t.Parallel()
 
 	reg := registry.New()
-	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
-		return ryn.StreamFromSlice([]ryn.Frame{ryn.TextFrame("hello")}), nil
+	mock := niro.ProviderFunc(func(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
+		return niro.StreamFromSlice([]niro.Frame{niro.TextFrame("hello")}), nil
 	})
 
 	reg.Register("test", mock)
@@ -50,7 +50,7 @@ func TestRegistryRemove(t *testing.T) {
 	t.Parallel()
 
 	reg := registry.New()
-	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+	mock := niro.ProviderFunc(func(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
 		return nil, nil
 	})
 
@@ -66,7 +66,7 @@ func TestRegistryAllAndNames(t *testing.T) {
 	reg := registry.New()
 	for _, name := range []string{"a", "b", "c"} {
 		n := name
-		reg.Register(n, ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+		reg.Register(n, niro.ProviderFunc(func(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
 			return nil, nil
 		}))
 	}
@@ -82,13 +82,13 @@ func TestRegistryGenerate(t *testing.T) {
 	ctx := context.Background()
 
 	reg := registry.New()
-	reg.Register("mock", ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
-		return ryn.StreamFromSlice([]ryn.Frame{ryn.TextFrame("from registry")}), nil
+	reg.Register("mock", niro.ProviderFunc(func(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
+		return niro.StreamFromSlice([]niro.Frame{niro.TextFrame("from registry")}), nil
 	}))
 
-	s, err := reg.Generate(ctx, "mock", &ryn.Request{Messages: []ryn.Message{ryn.UserText("hi")}})
+	s, err := reg.Generate(ctx, "mock", &niro.Request{Messages: []niro.Message{niro.UserText("hi")}})
 	assertNoError(t, err)
-	text, _ := ryn.CollectText(ctx, s)
+	text, _ := niro.CollectText(ctx, s)
 	assertEqual(t, text, "from registry")
 }
 
@@ -97,7 +97,7 @@ func TestRegistryGenerateNotFound(t *testing.T) {
 	ctx := context.Background()
 
 	reg := registry.New()
-	_, err := reg.Generate(ctx, "nope", &ryn.Request{})
+	_, err := reg.Generate(ctx, "nope", &niro.Request{})
 	assertErrorContains(t, err, "not registered")
 }
 
@@ -105,7 +105,7 @@ func TestRegistryMustGetSuccess(t *testing.T) {
 	t.Parallel()
 
 	reg := registry.New()
-	reg.Register("x", ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+	reg.Register("x", niro.ProviderFunc(func(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
 		return nil, nil
 	}))
 	p := reg.MustGet("x")
@@ -122,7 +122,7 @@ func TestRegistryConcurrent(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			name := fmt.Sprintf("p%d", i%10)
-			reg.Register(name, ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+			reg.Register(name, niro.ProviderFunc(func(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
 				return nil, nil
 			}))
 			reg.Has(name)

@@ -21,24 +21,24 @@ func TestGenerateStructured(t *testing.T) {
 
 	schema := json.RawMessage(`{"type":"object","properties":{"name":{"type":"string"},"age":{"type":"integer"}},"required":["name","age"]}`)
 
-	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+	mock := niro.ProviderFunc(func(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
 		if req.ResponseFormat != "json_schema" {
 			t.Errorf("expected ResponseFormat=json_schema, got %q", req.ResponseFormat)
 		}
 		if string(req.ResponseSchema) != string(schema) {
 			t.Errorf("schema mismatch")
 		}
-		s, e := ryn.NewStream(0)
+		s, e := niro.NewStream(0)
 		go func() {
 			defer e.Close()
-			_ = e.Emit(ctx, ryn.TextFrame(`{"name":"alice","age":30}`))
-			_ = e.Emit(ctx, ryn.UsageFrame(&ryn.Usage{InputTokens: 3, OutputTokens: 5, TotalTokens: 8}))
+			_ = e.Emit(ctx, niro.TextFrame(`{"name":"alice","age":30}`))
+			_ = e.Emit(ctx, niro.UsageFrame(&niro.Usage{InputTokens: 3, OutputTokens: 5, TotalTokens: 8}))
 		}()
 		return s, nil
 	})
 
-	res, _, usage, err := structured.GenerateStructured[result](ctx, mock, &ryn.Request{
-		Messages: []ryn.Message{ryn.UserText("hi")},
+	res, _, usage, err := structured.GenerateStructured[result](ctx, mock, &niro.Request{
+		Messages: []niro.Message{niro.UserText("hi")},
 	}, schema)
 	assertNoError(t, err)
 	assertEqual(t, res.Name, "alice")
@@ -57,17 +57,17 @@ func TestStreamStructuredPartialAndFinal(t *testing.T) {
 
 	schema := json.RawMessage(`{"type":"object","properties":{"name":{"type":"string"},"age":{"type":"integer"}},"required":["name","age"]}`)
 
-	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
-		s, e := ryn.NewStream(0)
+	mock := niro.ProviderFunc(func(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
+		s, e := niro.NewStream(0)
 		go func() {
 			defer e.Close()
-			_ = e.Emit(ctx, ryn.TextFrame(`{"name":"al`))
-			_ = e.Emit(ctx, ryn.TextFrame(`ice","age":30}`))
+			_ = e.Emit(ctx, niro.TextFrame(`{"name":"al`))
+			_ = e.Emit(ctx, niro.TextFrame(`ice","age":30}`))
 		}()
 		return s, nil
 	})
 
-	ss, err := structured.StreamStructured[result](ctx, mock, &ryn.Request{Messages: []ryn.Message{ryn.UserText("hi")}}, schema)
+	ss, err := structured.StreamStructured[result](ctx, mock, &niro.Request{Messages: []niro.Message{niro.UserText("hi")}}, schema)
 	assertNoError(t, err)
 
 	partialSeen := false
@@ -93,16 +93,16 @@ func TestGenerateStructuredNoText(t *testing.T) {
 	ctx := context.Background()
 
 	schema := json.RawMessage(`{"type":"object"}`)
-	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
-		s, e := ryn.NewStream(0)
+	mock := niro.ProviderFunc(func(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
+		s, e := niro.NewStream(0)
 		go func() {
 			defer e.Close()
-			_ = e.Emit(ctx, ryn.UsageFrame(&ryn.Usage{InputTokens: 1}))
+			_ = e.Emit(ctx, niro.UsageFrame(&niro.Usage{InputTokens: 1}))
 		}()
 		return s, nil
 	})
 
-	_, _, _, err := structured.GenerateStructured[map[string]any](ctx, mock, &ryn.Request{Messages: []ryn.Message{ryn.UserText("hi")}}, schema)
+	_, _, _, err := structured.GenerateStructured[map[string]any](ctx, mock, &niro.Request{Messages: []niro.Message{niro.UserText("hi")}}, schema)
 	assertErrorContains(t, err, "no structured output")
 }
 
@@ -121,20 +121,20 @@ func TestWithSchemaAny(t *testing.T) {
 		},
 	}
 
-	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+	mock := niro.ProviderFunc(func(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
 		if req.ResponseFormat != "json_schema" {
 			t.Errorf("expected json_schema ResponseFormat, got %q", req.ResponseFormat)
 		}
-		s, e := ryn.NewStream(0)
+		s, e := niro.NewStream(0)
 		go func() {
 			defer e.Close()
-			_ = e.Emit(ctx, ryn.TextFrame(`{"value":"hello"}`))
+			_ = e.Emit(ctx, niro.TextFrame(`{"value":"hello"}`))
 		}()
 		return s, nil
 	})
 
-	req, err := structured.WithSchemaAny(&ryn.Request{
-		Messages: []ryn.Message{ryn.UserText("hi")},
+	req, err := structured.WithSchemaAny(&niro.Request{
+		Messages: []niro.Message{niro.UserText("hi")},
 	}, schema)
 	assertNoError(t, err)
 
@@ -159,7 +159,7 @@ func TestWithSchemaAnyMarshalError(t *testing.T) {
 	t.Parallel()
 
 	// channel cannot be marshaled to JSON
-	_, err := structured.WithSchemaAny(&ryn.Request{}, make(chan int))
+	_, err := structured.WithSchemaAny(&niro.Request{}, make(chan int))
 	assertTrue(t, err != nil)
 }
 
@@ -172,19 +172,19 @@ func TestStreamStructuredUsageAndResponse(t *testing.T) {
 	}
 
 	schema := json.RawMessage(`{"type":"object","properties":{"x":{"type":"integer"}}}`)
-	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
-		s, e := ryn.NewStream(0)
+	mock := niro.ProviderFunc(func(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
+		s, e := niro.NewStream(0)
 		go func() {
 			defer e.Close()
-			_ = e.Emit(ctx, ryn.TextFrame(`{"x":42}`))
-			_ = e.Emit(ctx, ryn.UsageFrame(&ryn.Usage{InputTokens: 2, OutputTokens: 4, TotalTokens: 6}))
-			e.SetResponse(&ryn.ResponseMeta{Model: "test-model", FinishReason: "stop"})
+			_ = e.Emit(ctx, niro.TextFrame(`{"x":42}`))
+			_ = e.Emit(ctx, niro.UsageFrame(&niro.Usage{InputTokens: 2, OutputTokens: 4, TotalTokens: 6}))
+			e.SetResponse(&niro.ResponseMeta{Model: "test-model", FinishReason: "stop"})
 		}()
 		return s, nil
 	})
 
-	ss, err := structured.StreamStructured[result](ctx, mock, &ryn.Request{
-		Messages: []ryn.Message{ryn.UserText("hi")},
+	ss, err := structured.StreamStructured[result](ctx, mock, &niro.Request{
+		Messages: []niro.Message{niro.UserText("hi")},
 	}, schema)
 	assertNoError(t, err)
 
@@ -209,18 +209,18 @@ func TestStreamStructuredStreamError(t *testing.T) {
 	type result struct{ X int }
 	schema := json.RawMessage(`{"type":"object"}`)
 
-	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
-		s, e := ryn.NewStream(0)
+	mock := niro.ProviderFunc(func(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
+		s, e := niro.NewStream(0)
 		go func() {
 			defer e.Close()
-			_ = e.Emit(ctx, ryn.TextFrame(`{"x":1`)) // partial, invalid JSON
+			_ = e.Emit(ctx, niro.TextFrame(`{"x":1`)) // partial, invalid JSON
 			e.Error(fmt.Errorf("stream error"))
 		}()
 		return s, nil
 	})
 
-	ss, err := structured.StreamStructured[result](ctx, mock, &ryn.Request{
-		Messages: []ryn.Message{ryn.UserText("hi")},
+	ss, err := structured.StreamStructured[result](ctx, mock, &niro.Request{
+		Messages: []niro.Message{niro.UserText("hi")},
 	}, schema)
 	assertNoError(t, err)
 
@@ -236,8 +236,8 @@ func TestStreamStructuredNoOutput(t *testing.T) {
 	type result struct{ X int }
 	schema := json.RawMessage(`{"type":"object"}`)
 
-	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
-		s, e := ryn.NewStream(0)
+	mock := niro.ProviderFunc(func(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
+		s, e := niro.NewStream(0)
 		go func() {
 			defer e.Close()
 			// emit no text
@@ -245,8 +245,8 @@ func TestStreamStructuredNoOutput(t *testing.T) {
 		return s, nil
 	})
 
-	ss, err := structured.StreamStructured[result](ctx, mock, &ryn.Request{
-		Messages: []ryn.Message{ryn.UserText("hi")},
+	ss, err := structured.StreamStructured[result](ctx, mock, &niro.Request{
+		Messages: []niro.Message{niro.UserText("hi")},
 	}, schema)
 	assertNoError(t, err)
 
@@ -263,12 +263,12 @@ func TestGenerateStructuredProviderError(t *testing.T) {
 	ctx := context.Background()
 
 	schema := json.RawMessage(`{"type":"object"}`)
-	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+	mock := niro.ProviderFunc(func(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
 		return nil, fmt.Errorf("provider failed")
 	})
 
-	_, _, _, err := structured.GenerateStructured[map[string]any](ctx, mock, &ryn.Request{
-		Messages: []ryn.Message{ryn.UserText("hi")},
+	_, _, _, err := structured.GenerateStructured[map[string]any](ctx, mock, &niro.Request{
+		Messages: []niro.Message{niro.UserText("hi")},
 	}, schema)
 	assertTrue(t, err != nil)
 }
@@ -278,12 +278,12 @@ func TestStreamStructuredProviderError(t *testing.T) {
 	ctx := context.Background()
 
 	schema := json.RawMessage(`{"type":"object"}`)
-	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
+	mock := niro.ProviderFunc(func(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
 		return nil, fmt.Errorf("provider failed")
 	})
 
-	_, err := structured.StreamStructured[map[string]any](ctx, mock, &ryn.Request{
-		Messages: []ryn.Message{ryn.UserText("hi")},
+	_, err := structured.StreamStructured[map[string]any](ctx, mock, &niro.Request{
+		Messages: []niro.Message{niro.UserText("hi")},
 	}, schema)
 	assertTrue(t, err != nil)
 }
@@ -293,17 +293,17 @@ func TestGenerateStructuredBadJSON(t *testing.T) {
 	ctx := context.Background()
 
 	schema := json.RawMessage(`{"type":"object"}`)
-	mock := ryn.ProviderFunc(func(ctx context.Context, req *ryn.Request) (*ryn.Stream, error) {
-		s, e := ryn.NewStream(0)
+	mock := niro.ProviderFunc(func(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
+		s, e := niro.NewStream(0)
 		go func() {
 			defer e.Close()
-			_ = e.Emit(ctx, ryn.TextFrame(`{not valid json}`))
+			_ = e.Emit(ctx, niro.TextFrame(`{not valid json}`))
 		}()
 		return s, nil
 	})
 
-	_, _, _, err := structured.GenerateStructured[map[string]any](ctx, mock, &ryn.Request{
-		Messages: []ryn.Message{ryn.UserText("hi")},
+	_, _, _, err := structured.GenerateStructured[map[string]any](ctx, mock, &niro.Request{
+		Messages: []niro.Message{niro.UserText("hi")},
 	}, schema)
 	assertTrue(t, err != nil)
 }

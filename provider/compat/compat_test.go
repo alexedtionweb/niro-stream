@@ -30,7 +30,7 @@ func TestCompatProviderStreaming(t *testing.T) {
 
 		// Decode the request body to verify
 		var body map[string]any
-		_ = ryn.JSONNewDecoder(r.Body).Decode(&body)
+		_ = niro.JSONNewDecoder(r.Body).Decode(&body)
 		if body["model"] != "test-model" {
 			t.Errorf("unexpected model: %v", body["model"])
 		}
@@ -60,14 +60,14 @@ func TestCompatProviderStreaming(t *testing.T) {
 	ctx := context.Background()
 	llm := compat.New(srv.URL, "test-key", compat.WithModel("test-model"))
 
-	stream, err := llm.Generate(ctx, &ryn.Request{
-		Messages: []ryn.Message{ryn.UserText("Hi")},
+	stream, err := llm.Generate(ctx, &niro.Request{
+		Messages: []niro.Message{niro.UserText("Hi")},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	text, err := ryn.CollectText(ctx, stream)
+	text, err := niro.CollectText(ctx, stream)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,15 +126,15 @@ func TestCompatProviderToolCalls(t *testing.T) {
 	ctx := context.Background()
 	llm := compat.New(srv.URL, "")
 
-	stream, err := llm.Generate(ctx, &ryn.Request{
+	stream, err := llm.Generate(ctx, &niro.Request{
 		Model:    "m",
-		Messages: []ryn.Message{ryn.UserText("Weather in NYC?")},
+		Messages: []niro.Message{niro.UserText("Weather in NYC?")},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	frames, err := ryn.Collect(ctx, stream)
+	frames, err := niro.Collect(ctx, stream)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,7 +143,7 @@ func TestCompatProviderToolCalls(t *testing.T) {
 	if len(frames) != 1 {
 		t.Fatalf("expected 1 frame, got %d", len(frames))
 	}
-	if frames[0].Kind != ryn.KindToolCall {
+	if frames[0].Kind != niro.KindToolCall {
 		t.Fatalf("expected tool_call, got %s", frames[0].Kind)
 	}
 	if frames[0].Tool.Name != "get_weather" {
@@ -154,7 +154,7 @@ func TestCompatProviderToolCalls(t *testing.T) {
 	}
 
 	var args map[string]string
-	_ = ryn.JSONUnmarshal(frames[0].Tool.Args, &args)
+	_ = niro.JSONUnmarshal(frames[0].Tool.Args, &args)
 	if args["city"] != "NYC" {
 		t.Errorf("tool args city: got %q, want %q", args["city"], "NYC")
 	}
@@ -172,9 +172,9 @@ func TestCompatProviderErrorStatus(t *testing.T) {
 	ctx := context.Background()
 	llm := compat.New(srv.URL, "")
 
-	_, err := llm.Generate(ctx, &ryn.Request{
+	_, err := llm.Generate(ctx, &niro.Request{
 		Model:    "m",
-		Messages: []ryn.Message{ryn.UserText("hi")},
+		Messages: []niro.Message{niro.UserText("hi")},
 	})
 
 	if err == nil {
@@ -200,14 +200,14 @@ func TestCompatProviderCustomHeaders(t *testing.T) {
 	ctx := context.Background()
 	llm := compat.New(srv.URL, "", compat.WithHeader("X-Custom", "value"))
 
-	stream, err := llm.Generate(ctx, &ryn.Request{
+	stream, err := llm.Generate(ctx, &niro.Request{
 		Model:    "m",
-		Messages: []ryn.Message{ryn.UserText("hi")},
+		Messages: []niro.Message{niro.UserText("hi")},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	ryn.Collect(ctx, stream) // drain
+	niro.Collect(ctx, stream) // drain
 }
 
 func TestCompatWithClient(t *testing.T) {
@@ -223,14 +223,14 @@ func TestCompatWithClient(t *testing.T) {
 	llm := compat.New(srv.URL, "", compat.WithClient(customClient))
 
 	ctx := context.Background()
-	stream, err := llm.Generate(ctx, &ryn.Request{
+	stream, err := llm.Generate(ctx, &niro.Request{
 		Model:    "m",
-		Messages: []ryn.Message{ryn.UserText("hi")},
+		Messages: []niro.Message{niro.UserText("hi")},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	ryn.Collect(ctx, stream)
+	niro.Collect(ctx, stream)
 }
 
 func TestCompatProviderMultipartMessages(t *testing.T) {
@@ -238,7 +238,7 @@ func TestCompatProviderMultipartMessages(t *testing.T) {
 
 	var capturedBody map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ryn.JSONNewDecoder(r.Body).Decode(&capturedBody)
+		niro.JSONNewDecoder(r.Body).Decode(&capturedBody)
 		w.Header().Set("Content-Type", "text/event-stream")
 		fmt.Fprint(w, "data: [DONE]\n\n")
 	}))
@@ -248,19 +248,19 @@ func TestCompatProviderMultipartMessages(t *testing.T) {
 	llm := compat.New(srv.URL, "")
 
 	// Message with image URL
-	stream, err := llm.Generate(ctx, &ryn.Request{
+	stream, err := llm.Generate(ctx, &niro.Request{
 		Model: "m",
-		Messages: []ryn.Message{
-			ryn.Multi(ryn.RoleUser,
-				ryn.TextPart("check this"),
-				ryn.ImageURLPart("https://example.com/img.png", "image/png"),
+		Messages: []niro.Message{
+			niro.Multi(niro.RoleUser,
+				niro.TextPart("check this"),
+				niro.ImageURLPart("https://example.com/img.png", "image/png"),
 			),
 		},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	ryn.Collect(ctx, stream)
+	niro.Collect(ctx, stream)
 }
 
 func TestCompatProviderImageDataMessage(t *testing.T) {
@@ -268,7 +268,7 @@ func TestCompatProviderImageDataMessage(t *testing.T) {
 
 	var capturedBody map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ryn.JSONNewDecoder(r.Body).Decode(&capturedBody)
+		niro.JSONNewDecoder(r.Body).Decode(&capturedBody)
 		w.Header().Set("Content-Type", "text/event-stream")
 		fmt.Fprint(w, "data: [DONE]\n\n")
 	}))
@@ -277,19 +277,19 @@ func TestCompatProviderImageDataMessage(t *testing.T) {
 	ctx := context.Background()
 	llm := compat.New(srv.URL, "")
 
-	stream, err := llm.Generate(ctx, &ryn.Request{
+	stream, err := llm.Generate(ctx, &niro.Request{
 		Model: "m",
-		Messages: []ryn.Message{
-			ryn.Multi(ryn.RoleUser,
-				ryn.TextPart("check this"),
-				ryn.ImagePart([]byte{0xFF, 0xD8}, "image/jpeg"),
+		Messages: []niro.Message{
+			niro.Multi(niro.RoleUser,
+				niro.TextPart("check this"),
+				niro.ImagePart([]byte{0xFF, 0xD8}, "image/jpeg"),
 			),
 		},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	ryn.Collect(ctx, stream)
+	niro.Collect(ctx, stream)
 }
 
 func TestCompatProviderAudioMessage(t *testing.T) {
@@ -297,7 +297,7 @@ func TestCompatProviderAudioMessage(t *testing.T) {
 
 	var capturedBody map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ryn.JSONNewDecoder(r.Body).Decode(&capturedBody)
+		niro.JSONNewDecoder(r.Body).Decode(&capturedBody)
 		w.Header().Set("Content-Type", "text/event-stream")
 		fmt.Fprint(w, "data: [DONE]\n\n")
 	}))
@@ -308,18 +308,18 @@ func TestCompatProviderAudioMessage(t *testing.T) {
 
 	// Test each audio format
 	for _, mime := range []string{"audio/mpeg", "audio/opus", "audio/flac", "audio/wav"} {
-		stream, err := llm.Generate(ctx, &ryn.Request{
+		stream, err := llm.Generate(ctx, &niro.Request{
 			Model: "m",
-			Messages: []ryn.Message{
-				ryn.Multi(ryn.RoleUser,
-					ryn.AudioPart([]byte{0x01}, mime),
+			Messages: []niro.Message{
+				niro.Multi(niro.RoleUser,
+					niro.AudioPart([]byte{0x01}, mime),
 				),
 			},
 		})
 		if err != nil {
 			t.Fatalf("mime %s: %v", mime, err)
 		}
-		ryn.Collect(ctx, stream)
+		niro.Collect(ctx, stream)
 	}
 }
 
@@ -328,7 +328,7 @@ func TestCompatProviderToolCallMessage(t *testing.T) {
 
 	var capturedBody map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ryn.JSONNewDecoder(r.Body).Decode(&capturedBody)
+		niro.JSONNewDecoder(r.Body).Decode(&capturedBody)
 		w.Header().Set("Content-Type", "text/event-stream")
 		fmt.Fprint(w, "data: [DONE]\n\n")
 	}))
@@ -338,20 +338,20 @@ func TestCompatProviderToolCallMessage(t *testing.T) {
 	llm := compat.New(srv.URL, "")
 
 	// Assistant with tool call
-	stream, err := llm.Generate(ctx, &ryn.Request{
+	stream, err := llm.Generate(ctx, &niro.Request{
 		Model: "m",
-		Messages: []ryn.Message{
-			ryn.UserText("what's the weather?"),
-			ryn.Multi(ryn.RoleAssistant,
-				ryn.ToolCallPart(&ryn.ToolCall{ID: "c1", Name: "get_weather", Args: []byte(`{"city":"NYC"}`)}),
+		Messages: []niro.Message{
+			niro.UserText("what's the weather?"),
+			niro.Multi(niro.RoleAssistant,
+				niro.ToolCallPart(&niro.ToolCall{ID: "c1", Name: "get_weather", Args: []byte(`{"city":"NYC"}`)}),
 			),
-			ryn.ToolMessage("c1", `{"temp":72}`),
+			niro.ToolMessage("c1", `{"temp":72}`),
 		},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	ryn.Collect(ctx, stream)
+	niro.Collect(ctx, stream)
 }
 
 func TestCompatProviderWithOptions(t *testing.T) {
@@ -359,7 +359,7 @@ func TestCompatProviderWithOptions(t *testing.T) {
 
 	var capturedBody map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ryn.JSONNewDecoder(r.Body).Decode(&capturedBody)
+		niro.JSONNewDecoder(r.Body).Decode(&capturedBody)
 		w.Header().Set("Content-Type", "text/event-stream")
 		fmt.Fprint(w, "data: [DONE]\n\n")
 	}))
@@ -370,10 +370,10 @@ func TestCompatProviderWithOptions(t *testing.T) {
 	topP := 0.9
 	llm := compat.New(srv.URL, "")
 
-	stream, err := llm.Generate(ctx, &ryn.Request{
+	stream, err := llm.Generate(ctx, &niro.Request{
 		Model:    "m",
-		Messages: []ryn.Message{ryn.UserText("hi")},
-		Options: ryn.Options{
+		Messages: []niro.Message{niro.UserText("hi")},
+		Options: niro.Options{
 			MaxTokens:   100,
 			Temperature: &temp,
 			TopP:        &topP,
@@ -383,7 +383,7 @@ func TestCompatProviderWithOptions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ryn.Collect(ctx, stream)
+	niro.Collect(ctx, stream)
 }
 
 func TestCompatProviderWithTools(t *testing.T) {
@@ -398,10 +398,10 @@ func TestCompatProviderWithTools(t *testing.T) {
 	ctx := context.Background()
 	llm := compat.New(srv.URL, "")
 
-	stream, err := llm.Generate(ctx, &ryn.Request{
+	stream, err := llm.Generate(ctx, &niro.Request{
 		Model:    "m",
-		Messages: []ryn.Message{ryn.UserText("hi")},
-		Tools: []ryn.Tool{{
+		Messages: []niro.Message{niro.UserText("hi")},
+		Tools: []niro.Tool{{
 			Name:        "get_weather",
 			Description: "Get weather",
 			Parameters:  []byte(`{"type":"object","properties":{"city":{"type":"string"}}}`),
@@ -410,7 +410,7 @@ func TestCompatProviderWithTools(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ryn.Collect(ctx, stream)
+	niro.Collect(ctx, stream)
 }
 
 func TestCompatSSEParseError(t *testing.T) {
@@ -428,15 +428,15 @@ func TestCompatSSEParseError(t *testing.T) {
 	ctx := context.Background()
 	llm := compat.New(srv.URL, "")
 
-	stream, err := llm.Generate(ctx, &ryn.Request{
+	stream, err := llm.Generate(ctx, &niro.Request{
 		Model:    "m",
-		Messages: []ryn.Message{ryn.UserText("hi")},
+		Messages: []niro.Message{niro.UserText("hi")},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	// Collect should return an error due to invalid JSON
-	_, err = ryn.Collect(ctx, stream)
+	_, err = niro.Collect(ctx, stream)
 	if err == nil {
 		t.Error("expected error from invalid SSE JSON")
 	}
@@ -460,14 +460,14 @@ func TestCompatUsageOnlyChunk(t *testing.T) {
 	ctx := context.Background()
 	llm := compat.New(srv.URL, "")
 
-	stream, err := llm.Generate(ctx, &ryn.Request{
+	stream, err := llm.Generate(ctx, &niro.Request{
 		Model:    "m",
-		Messages: []ryn.Message{ryn.UserText("hi")},
+		Messages: []niro.Message{niro.UserText("hi")},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	ryn.Collect(ctx, stream)
+	niro.Collect(ctx, stream)
 	usage := stream.Usage()
 	if usage.TotalTokens != 8 {
 		t.Errorf("expected total_tokens=8, got %d", usage.TotalTokens)
