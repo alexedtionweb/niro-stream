@@ -9,7 +9,7 @@ import (
 )
 
 // Processor transforms Frames from an input Stream to an output Emitter.
-// It is the fundamental unit of composition in a Ryn pipeline.
+// It is the fundamental unit of composition in a Niro pipeline.
 //
 // Contracts:
 //   - Process must not close the Emitter — the Pipeline manages that.

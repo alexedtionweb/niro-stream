@@ -1,6 +1,6 @@
 // Package ryn is a streaming-first LLM runtime for Go.
 //
-// Ryn provides a minimal, composable architecture for building real-time
+// Niro provides a minimal, composable architecture for building real-time
 // AI systems. It is designed for low-latency, multimodal streaming
 // pipelines — not request/response wrappers.
 //

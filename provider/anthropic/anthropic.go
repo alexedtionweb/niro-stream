@@ -1,4 +1,4 @@
-// Package anthropic implements a Ryn Provider backed by the official
+// Package anthropic implements a Niro Provider backed by the official
 // Anthropic Go SDK (github.com/anthropics/anthropic-sdk-go).
 //
 // This is an opt-in provider module. Import it only when you need

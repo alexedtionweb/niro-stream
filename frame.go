@@ -40,7 +40,7 @@ func (k Kind) String() string {
 	}
 }
 
-// Frame is the fundamental unit of data flowing through a Ryn pipeline.
+// Frame is the fundamental unit of data flowing through a Niro pipeline.
 //
 // Frame is a tagged union optimized for the common case: text tokens.
 // For text, only Kind and Text are populated — zero allocations beyond

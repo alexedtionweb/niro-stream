@@ -1,4 +1,4 @@
-// Package realtime implements a Ryn RealtimeProvider backed by the
+// Package realtime implements a Niro RealtimeProvider backed by the
 // OpenAI Realtime API (wss://api.openai.com/v1/realtime).
 //
 // The Realtime API uses a persistent WebSocket connection for bidirectional

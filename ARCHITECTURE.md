@@ -1,14 +1,14 @@
-# Ryn Architecture
+# Niro Architecture
 
-This document describes the internal architecture of Ryn — the streaming-first LLM runtime for Go.
+This document describes the internal architecture of Niro — the streaming-first LLM runtime for Go.
 
 ## Overview
 
-Ryn's architecture is built around a single principle: **data flows as a stream of Frames through a pipeline of Processors, orchestrated concurrently**. Everything — text tokens, tool calls, usage data, control signals — is a Frame in a Stream.
+Niro's architecture is built around a single principle: **data flows as a stream of Frames through a pipeline of Processors, orchestrated concurrently**. Everything — text tokens, tool calls, usage data, control signals — is a Frame in a Stream.
 
 ```
 ┌───────────────────────────────────────────────────────────────────┐
-│                          Ryn Runtime                              │
+│                          Niro Runtime                             │
 │                                                                   │
 │  ┌──────────┐    ┌────────────────────────┐    ┌──────────────┐  │
 │  │ Provider  │───▶│       Pipeline         │───▶│ Output Stream │  │
@@ -525,7 +525,7 @@ type Usage struct {
 
 ## Structured Output (JSON Schema)
 
-Ryn supports schema-constrained output with typed decoding inspired by Genkit’s
+Niro supports schema-constrained output with typed decoding inspired by Genkit’s
 GenerateData/GenerateDataStream model. The request sets:
 
 - `ResponseFormat = "json_schema"`
@@ -544,7 +544,7 @@ performs a fast `JSONValid` check before attempting to unmarshal partial data.
 
 ## Package Structure
 
-Ryn uses a **multi-module** layout. The core module (`github.com/alexedtionweb/niro-stream`) has **zero external dependencies**. Each SDK provider is a separate Go module with its own `go.mod` — users only pull the SDKs they need.
+Niro uses a **multi-module** layout. The core module (`github.com/alexedtionweb/niro-stream`) has **zero external dependencies**. Each SDK provider is a separate Go module with its own `go.mod` — users only pull the SDKs they need.
 
 ```text
 github.com/alexedtionweb/niro-stream                          ← root module (zero external deps)
@@ -692,7 +692,7 @@ The `RequestHook` type is provider-specific — it receives the raw SDK paramete
 
 ## Production Infrastructure
 
-Ryn includes purpose-built infrastructure for high-concurrency production deployments (millions of concurrent LLM calls).
+Niro includes purpose-built infrastructure for high-concurrency production deployments (millions of concurrent LLM calls).
 
 ### BytePool — Zero-Allocation Media Buffers
 

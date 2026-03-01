@@ -1,4 +1,4 @@
-// Package compat implements a Ryn Provider using raw HTTP + SSE.
+// Package compat implements a Niro Provider using raw HTTP + SSE.
 // No external SDK dependencies — stdlib only.
 //
 // Use this for:

@@ -1,4 +1,4 @@
-// Package openai implements a Ryn Provider backed by the official
+// Package openai implements a Niro Provider backed by the official
 // OpenAI Go SDK (github.com/openai/openai-go).
 //
 // This is an opt-in provider module. Import it only when you need

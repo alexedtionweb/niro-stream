@@ -1,4 +1,4 @@
-// Package bedrock implements a Ryn Provider backed by the AWS SDK v2
+// Package bedrock implements a Niro Provider backed by the AWS SDK v2
 // for Amazon Bedrock Runtime (ConverseStream API).
 //
 // This is an opt-in provider module. Import it only when you need

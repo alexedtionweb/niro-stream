@@ -1,4 +1,4 @@
-// Package google implements a Ryn Provider backed by the unified
+// Package google implements a Niro Provider backed by the unified
 // Google GenAI Go SDK (google.golang.org/genai).
 //
 // It supports two backends:

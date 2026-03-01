@@ -24,7 +24,7 @@ const (
 	ErrCodeTimeout            ErrorCode = 504
 	ErrCodeInternalError      ErrorCode = 510
 
-	// Ryn-specific errors (6xx)
+	// Niro-specific errors (6xx)
 	ErrCodeStreamClosed       ErrorCode = 600
 	ErrCodeNoStructuredOutput ErrorCode = 601
 	ErrCodeInvalidSchema      ErrorCode = 602
@@ -32,7 +32,7 @@ const (
 	ErrCodeStreamError        ErrorCode = 604
 )
 
-// Error represents a detailed error from Ryn or a provider.
+// Error represents a detailed error from Niro or a provider.
 type Error struct {
 	Code       ErrorCode
 	Message    string

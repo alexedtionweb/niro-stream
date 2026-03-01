@@ -18,7 +18,7 @@ type JSONDecoder interface {
 	Decode(v any) error
 }
 
-// JSONLibrary defines the JSON functions used by Ryn.
+// JSONLibrary defines the JSON functions used by Niro.
 //
 // Compatible with the same libraries supported by Fiber:
 //   - encoding/json (stdlib)
@@ -43,7 +43,7 @@ func init() {
 	SetJSON(nil)
 }
 
-// SetJSON replaces the JSON implementation used by Ryn.
+// SetJSON replaces the JSON implementation used by Niro.
 // If lib is nil, the stdlib encoding/json implementation is used.
 // Any nil fields are filled with stdlib defaults.
 func SetJSON(lib *JSONLibrary) {

@@ -1,4 +1,4 @@
-# Ryn — Capabilities Overview
+# Niro — Capabilities Overview
 
 This document summarizes the capabilities implemented in this codebase. Each entry has a short title and a concise description of the feature and its intent.
 

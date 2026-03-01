@@ -9,7 +9,7 @@ import (
 	"github.com/alexedtionweb/niro-stream"
 )
 
-// Hook provides observability into Ryn operations.
+// Hook provides observability into Niro operations.
 // Implement this interface for telemetry, logging, cost tracking,
 // or integration with platforms like Langfuse, Datadog, or OpenTelemetry.
 //

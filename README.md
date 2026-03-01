@@ -1,4 +1,4 @@
-# Ryn
+# Niro
 
 **Streaming-first LLM runtime for Go.**
 
@@ -7,15 +7,15 @@
 
 ---
 
-Ryn is a high-performance, streaming-native runtime for building real-time AI systems in Go. Voice agents, telephony pipelines, streaming chat, tool calling, multimodal, parallel orchestration — with millisecond-level control over every frame of data.
+Niro is a high-performance, streaming-native runtime for building real-time AI systems in Go. Voice agents, telephony pipelines, streaming chat, tool calling, multimodal, parallel orchestration — with millisecond-level control over every frame of data.
 
-**This is not LangChain for Go.** There are no chains, no prompt templates, no document loaders, no vector store abstractions. Ryn is a runtime for continuous intelligence — closer to `net/http` than a notebook framework.
+**This is not LangChain for Go.** There are no chains, no prompt templates, no document loaders, no vector store abstractions. Niro is a runtime for continuous intelligence — closer to `net/http` than a notebook framework.
 
-## Why Ryn
+## Why Niro
 
-Most LLM frameworks treat streaming as an afterthought. Ryn inverts this: **streaming is the primitive**. Concurrency is a first-class design goal, not an addon.
+Most LLM frameworks treat streaming as an afterthought. Niro inverts this: **streaming is the primitive**. Concurrency is a first-class design goal, not an addon.
 
-|               | LangChain-style   | Ryn                            |
+|               | LangChain-style   | Niro                           |
 | ------------- | ----------------- | ------------------------------ |
 | Primary model | Request/Response  | Streaming                      |
 | Data unit     | String / Document | Frame (multimodal)             |
@@ -81,7 +81,7 @@ Tokens arrive as they're generated. Usage is tracked silently. No buffering. No 
 
 ## Providers
 
-Ryn uses a **plugin model**: the core (`github.com/alexedtionweb/niro-stream`) has **zero external dependencies**. Each SDK-backed provider lives in its own Go module — you only `go get` what you use. No SDK you don't need ever enters your build graph.
+Niro uses a **plugin model**: the core (`github.com/alexedtionweb/niro-stream`) has **zero external dependencies**. Each SDK-backed provider lives in its own Go module — you only `go get` what you use. No SDK you don't need ever enters your build graph.
 
 | Provider          | Module                           | Install                                 | SDK                                                                           |
 | ----------------- | -------------------------------- | --------------------------------------- | ----------------------------------------------------------------------------- |
@@ -371,7 +371,7 @@ stream, err := rt.Generate(ctx, req)
 
 ## Error Handling & Validation
 
-Ryn provides semantic error types and request validation for robust error handling.
+Niro provides semantic error types and request validation for robust error handling.
 
 ### Request Validation
 
@@ -417,7 +417,7 @@ err := ryn.WrapError(ryn.ErrCodeProviderError, "OpenAI failed", underlying)
 err.WithProvider("openai").WithRequestID("req_123")
 ```
 
-Error codes: InvalidRequest (400), AuthenticationFailed (401), ModelNotFound (404), RateLimited (429), ProviderError (500), ServiceUnavailable (503), Timeout (504), and Ryn-specific codes.
+Error codes: InvalidRequest (400), AuthenticationFailed (401), ModelNotFound (404), RateLimited (429), ProviderError (500), ServiceUnavailable (503), Timeout (504), and Niro-specific codes.
 
 ## Retry & Backoff
 
@@ -639,7 +639,7 @@ go test -bench=. -benchmem ./...
 
 ## Production Infrastructure
 
-Ryn ships with production-grade infrastructure for high-concurrency deployments (millions of concurrent calls).
+Niro ships with production-grade infrastructure for high-concurrency deployments (millions of concurrent calls).
 
 ### BytePool — Zero-Alloc Media
 
@@ -815,7 +815,7 @@ defer ryn.PutResponseMeta(m)
 
 ### JSON Backend (Configurable)
 
-Ryn allows swapping the JSON implementation globally (same compatible set as Fiber):
+Niro allows swapping the JSON implementation globally (same compatible set as Fiber):
 
 - encoding/json (stdlib)
 - github.com/goccy/go-json
