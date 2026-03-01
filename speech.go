@@ -10,7 +10,7 @@ import "context"
 // simple text→audio streaming interface. The returned Stream emits
 // [KindAudio] frames as chunks arrive from the synthesis engine.
 //
-// Built-in: provider/elevenlabs.
+// Built-in: provider/elevenlabs, provider/googlespeech.
 // Custom: implement this interface or use [TTSFunc].
 type TTSProvider interface {
 	Synthesize(ctx context.Context, req *TTSRequest) (*Stream, error)
@@ -61,7 +61,7 @@ type TTSRequest struct {
 // Interim (partial) results and final results are both KindText; use
 // [STTMeta] in Frame.Extra or provider conventions to distinguish them.
 //
-// Built-in: provider/elevenlabs.
+// Built-in: provider/elevenlabs, provider/googlespeech.
 // Custom: implement this interface or use [STTFunc].
 type STTProvider interface {
 	Transcribe(ctx context.Context, req *STTRequest) (*Stream, error)
@@ -122,4 +122,10 @@ const (
 
 	// AudioWAV is RIFF/WAV — uncompressed, widely supported.
 	AudioWAV = "audio/wav"
+
+	// AudioPCMU8k is G.711 μ-law at 8kHz (telephony/PSTN).
+	AudioPCMU8k = "audio/pcmu;rate=8000"
+
+	// AudioPCMA8k is G.711 A-law at 8kHz (telephony/PSTN).
+	AudioPCMA8k = "audio/pcma;rate=8000"
 )

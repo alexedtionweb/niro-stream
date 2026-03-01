@@ -173,18 +173,6 @@ func checkCode(t *testing.T, err error, want niro.ErrorCode) {
 	}
 }
 
-// generate is a convenience that returns the first error from either Generate
-// or the stream — whichever surfaces first.
-func generate(t *testing.T, p *Provider, req *niro.Request) (*niro.Stream, error) {
-	t.Helper()
-	ctx := context.Background()
-	s, err := p.Generate(ctx, req)
-	if err != nil {
-		return nil, err
-	}
-	return s, nil
-}
-
 func streamErr(t *testing.T, p *Provider, req *niro.Request) error {
 	t.Helper()
 	ctx := context.Background()

@@ -9,6 +9,7 @@ This document summarizes the capabilities implemented in this codebase. Each ent
 - **Provider Adapter Interface**: The `Provider` interface abstracts SDKs and endpoints (OpenAI, Anthropic, Google, AWS Bedrock, compat HTTP). Providers implement `Generate(ctx, *Request) (*Stream, error)` and expose SDK hooks/clients.
 
 - **SDK-backed Providers**: Dedicated provider modules for OpenAI, Anthropic, Google Gemini, and AWS Bedrock. Each provider exposes the underlying SDK client and provider-level/per-request hooks for raw SDK param customization.
+- **Isolated Speech Provider Modules**: Speech engines can be shipped as separate modules (for example `provider/elevenlabs`, `provider/googlespeech` for TTS/STT) so cloud speech SDK dependencies stay out of core/runtime builds.
 
 - **Tooling & Toolset Abstraction**: High-level Genkit-like tooling (`ToolDefinition`, `Toolset`) with JSON Schema-based parameter definitions, validation, runtime hooks, and `ToolingProvider` that integrates declared tools into the generation loop.
 
