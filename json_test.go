@@ -7,7 +7,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"ryn.dev/ryn"
+	"github.com/alexedtionweb/niro-stream"
 )
 
 func TestSetJSON(t *testing.T) {

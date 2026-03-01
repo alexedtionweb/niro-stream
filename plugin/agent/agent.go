@@ -6,8 +6,8 @@ import (
 	"strings"
 	"sync"
 
-	"ryn.dev/ryn"
-	"ryn.dev/ryn/component"
+	"github.com/alexedtionweb/niro-stream"
+	"github.com/alexedtionweb/niro-stream/component"
 )
 
 // Memory stores conversation state by session ID.

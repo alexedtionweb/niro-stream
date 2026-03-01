@@ -4,7 +4,7 @@ import (
 	"context"
 	"sync"
 
-	"ryn.dev/ryn"
+	"github.com/alexedtionweb/niro-stream"
 )
 
 // Pipeline chains Processors into a concurrent processing graph.

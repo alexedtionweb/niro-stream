@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"ryn.dev/ryn"
+	"github.com/alexedtionweb/niro-stream"
 )
 
 // ── DiscardHandler (slog.Handler) ────────────────────────────────────────────

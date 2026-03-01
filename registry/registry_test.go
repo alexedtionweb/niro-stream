@@ -6,8 +6,8 @@ import (
 	"sync"
 	"testing"
 
-	"ryn.dev/ryn"
-	"ryn.dev/ryn/registry"
+	"github.com/alexedtionweb/niro-stream"
+	"github.com/alexedtionweb/niro-stream/registry"
 )
 
 func TestRegistryBasic(t *testing.T) {

@@ -3,7 +3,7 @@ package tools
 import (
 	"context"
 
-	"ryn.dev/ryn"
+	"github.com/alexedtionweb/niro-stream"
 )
 
 // InputStreamingProvider is an optional provider extension for native

@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"ryn.dev/ryn"
-	"ryn.dev/ryn/tools"
+	"github.com/alexedtionweb/niro-stream"
+	"github.com/alexedtionweb/niro-stream/tools"
 )
 
 func TestToolLoopBasic(t *testing.T) {

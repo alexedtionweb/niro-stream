@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"ryn.dev/ryn"
-	"ryn.dev/ryn/middleware"
+	"github.com/alexedtionweb/niro-stream"
+	"github.com/alexedtionweb/niro-stream/middleware"
 )
 
 func TestGenerateRequestID(t *testing.T) {

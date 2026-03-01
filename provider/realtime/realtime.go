@@ -44,7 +44,7 @@ import (
 
 	"github.com/gorilla/websocket"
 
-	"ryn.dev/ryn"
+	"github.com/alexedtionweb/niro-stream"
 )
 
 const (

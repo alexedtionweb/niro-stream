@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"time"
 
-	"ryn.dev/ryn"
+	"github.com/alexedtionweb/niro-stream"
 )
 
 // ToolExecutor defines how to execute a tool call.

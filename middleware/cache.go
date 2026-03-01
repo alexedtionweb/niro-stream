@@ -9,7 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"ryn.dev/ryn"
+	"github.com/alexedtionweb/niro-stream"
 )
 
 // Cache is a sharded LRU response cache with TTL for Provider responses.

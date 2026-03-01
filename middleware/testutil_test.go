@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"ryn.dev/ryn"
+	"github.com/alexedtionweb/niro-stream"
 )
 
 // retryHintProviderMock is a provider that can declare it handles retries internally.

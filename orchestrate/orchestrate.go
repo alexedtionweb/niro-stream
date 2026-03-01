@@ -6,7 +6,7 @@ import (
 	"context"
 	"sync"
 
-	"ryn.dev/ryn"
+	"github.com/alexedtionweb/niro-stream"
 )
 
 // Fan runs multiple providers or requests in parallel and merges

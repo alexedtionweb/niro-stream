@@ -37,8 +37,8 @@ import (
 	"sync"
 	"time"
 
-	"ryn.dev/ryn"
-	"ryn.dev/ryn/provider/realtime"
+	"github.com/alexedtionweb/niro-stream"
+	"github.com/alexedtionweb/niro-stream/provider/realtime"
 )
 
 func main() {

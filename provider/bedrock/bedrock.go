@@ -4,7 +4,7 @@
 // This is an opt-in provider module. Import it only when you need
 // AWS Bedrock models:
 //
-//	go get ryn.dev/ryn/provider/bedrock
+//	go get github.com/alexedtionweb/niro-stream/provider/bedrock
 //
 // # SDK Access
 //
@@ -33,7 +33,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
 	smithy "github.com/aws/smithy-go"
 
-	"ryn.dev/ryn"
+	"github.com/alexedtionweb/niro-stream"
 )
 
 // RequestHook allows modifying the raw ConverseStreamInput before the

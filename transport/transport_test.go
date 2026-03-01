@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"ryn.dev/ryn/transport"
+	"github.com/alexedtionweb/niro-stream/transport"
 )
 
 func TestTransportDefaults(t *testing.T) {

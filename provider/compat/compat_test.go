@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"ryn.dev/ryn"
-	"ryn.dev/ryn/provider/compat"
+	"github.com/alexedtionweb/niro-stream"
+	"github.com/alexedtionweb/niro-stream/provider/compat"
 )
 
 func TestCompatProviderStreaming(t *testing.T) {

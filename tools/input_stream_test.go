@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"testing"
 
-	"ryn.dev/ryn"
-	"ryn.dev/ryn/tools"
+	"github.com/alexedtionweb/niro-stream"
+	"github.com/alexedtionweb/niro-stream/tools"
 )
 
 func TestGenerateInputStreamFallback(t *testing.T) {

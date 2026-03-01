@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"ryn.dev/ryn"
+	"github.com/alexedtionweb/niro-stream"
 )
 
 func TestFrameConstructors(t *testing.T) {

@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"ryn.dev/ryn"
-	"ryn.dev/ryn/middleware"
+	"github.com/alexedtionweb/niro-stream"
+	"github.com/alexedtionweb/niro-stream/middleware"
 )
 
 func TestRetryProvider(t *testing.T) {

@@ -5,7 +5,7 @@ package pipe
 import (
 	"context"
 
-	"ryn.dev/ryn"
+	"github.com/alexedtionweb/niro-stream"
 )
 
 // Processor transforms Frames from an input Stream to an output Emitter.

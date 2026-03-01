@@ -36,9 +36,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/alexedtionweb/niro-stream"
+	"github.com/alexedtionweb/niro-stream/provider/bedrock"
 	"github.com/aws/aws-sdk-go-v2/config"
-	"ryn.dev/ryn"
-	"ryn.dev/ryn/provider/bedrock"
 )
 
 func main() {

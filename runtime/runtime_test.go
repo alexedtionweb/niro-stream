@@ -7,10 +7,10 @@ import (
 	"testing"
 	"time"
 
-	"ryn.dev/ryn"
-	"ryn.dev/ryn/hook"
-	"ryn.dev/ryn/pipe"
-	"ryn.dev/ryn/runtime"
+	"github.com/alexedtionweb/niro-stream"
+	"github.com/alexedtionweb/niro-stream/hook"
+	"github.com/alexedtionweb/niro-stream/pipe"
+	"github.com/alexedtionweb/niro-stream/runtime"
 )
 
 func TestRuntimeBasic(t *testing.T) {

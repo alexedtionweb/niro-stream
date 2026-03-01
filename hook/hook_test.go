@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"ryn.dev/ryn"
-	"ryn.dev/ryn/hook"
+	"github.com/alexedtionweb/niro-stream"
+	"github.com/alexedtionweb/niro-stream/hook"
 )
 
 type countingHook struct {

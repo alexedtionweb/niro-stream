@@ -1,6 +1,6 @@
 # ryn examples
 
-Runnable examples for [ryn](https://pkg.go.dev/ryn.dev/ryn) — a provider-agnostic Go library for streaming LLM generation.
+Runnable examples for [ryn](https://pkg.go.dev/github.com/alexedtionweb/niro-stream) — a provider-agnostic Go library for streaming LLM generation.
 
 Every example selects a provider at runtime via environment variables, so you
 can swap backends without editing code.
@@ -66,7 +66,7 @@ OPENAI_API_KEY=sk-...  PROMPT="Explain monads in one sentence."  go run ./chat
 
 ### `gemini` — Gemini-specific features
 
-Demonstrates three Gemini-specific patterns using `ryn.dev/ryn/provider/google`:
+Demonstrates three Gemini-specific patterns using `github.com/alexedtionweb/niro-stream/provider/google`:
 
 1. **Basic streaming** — token-by-token output with `gemini-2.0-flash`
 2. **Structured JSON output** — `structured.GenerateStructured[T]` decodes the
@@ -82,7 +82,7 @@ GEMINI_API_KEY=...  go run ./gemini
 
 ### `bedrock` — Amazon Bedrock features
 
-Demonstrates three Bedrock-specific patterns using `ryn.dev/ryn/provider/bedrock`:
+Demonstrates three Bedrock-specific patterns using `github.com/alexedtionweb/niro-stream/provider/bedrock`:
 
 1. **Basic streaming chat** — single-turn response
 2. **Multi-turn conversation** — serverless → containers → comparison
@@ -142,7 +142,7 @@ stream, err := router.Generate(ctx, &ryn.Request{Client: "gemini", ...})
 
 ### `parallel` — Fan / Race / Sequence orchestration
 
-Demonstrates the three orchestration primitives in `ryn.dev/ryn/orchestrate`:
+Demonstrates the three orchestration primitives in `github.com/alexedtionweb/niro-stream/orchestrate`:
 
 | Pattern      | What it does                                                    |
 | ------------ | --------------------------------------------------------------- |
@@ -221,6 +221,6 @@ GEMINI_API_KEY=...     go run ./examples/gemini
 AWS_REGION=us-east-1   go run ./examples/bedrock
 ```
 
-All examples live in a single Go module (`ryn.dev/ryn/examples`) inside a
+All examples live in a single Go module (`github.com/alexedtionweb/niro-stream/examples`) inside a
 Go workspace, so no extra setup is required beyond setting the relevant
 environment variables.

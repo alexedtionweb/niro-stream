@@ -1,10 +1,10 @@
-module ryn.dev/ryn/provider/google
+module github.com/alexedtionweb/niro-stream/provider/google
 
 go 1.24.0
 
 require (
 	google.golang.org/genai v1.48.0
-	ryn.dev/ryn v0.0.0
+	github.com/alexedtionweb/niro-stream v0.0.0
 )
 
 require (
@@ -26,4 +26,4 @@ require (
 	google.golang.org/protobuf v1.34.2 // indirect
 )
 
-replace ryn.dev/ryn => ../..
+replace github.com/alexedtionweb/niro-stream => ../..

@@ -1,4 +1,4 @@
-module ryn.dev/ryn
+module github.com/alexedtionweb/niro-stream
 
 go 1.23.0
 

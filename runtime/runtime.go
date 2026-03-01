@@ -7,9 +7,9 @@ import (
 	"context"
 	"time"
 
-	"ryn.dev/ryn"
-	"ryn.dev/ryn/hook"
-	"ryn.dev/ryn/pipe"
+	"github.com/alexedtionweb/niro-stream"
+	"github.com/alexedtionweb/niro-stream/hook"
+	"github.com/alexedtionweb/niro-stream/pipe"
 )
 
 // Runtime manages the lifecycle of a Provider with hooks and

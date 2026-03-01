@@ -7,7 +7,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"ryn.dev/ryn/component"
+	"github.com/alexedtionweb/niro-stream/component"
 )
 
 type testComponent struct {

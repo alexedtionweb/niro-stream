@@ -276,7 +276,7 @@ Providers ignore unrecognized `Extra` types. This pattern lets a single `ryn.Req
 
 ### Provider Implementations
 
-All SDK providers are **separate Go modules** (`ryn.dev/ryn/provider/<name>`). They follow the same internal pattern:
+All SDK providers are **separate Go modules** (`github.com/alexedtionweb/niro-stream/provider/<name>`). They follow the same internal pattern:
 
 1. **Translate** `ryn.Request` → SDK-specific params (messages, tools, options)
 2. **Apply hooks**: provider-level `WithRequestHook` + per-request `Request.Extra`
@@ -544,11 +544,11 @@ performs a fast `JSONValid` check before attempting to unmarshal partial data.
 
 ## Package Structure
 
-Ryn uses a **multi-module** layout. The core module (`ryn.dev/ryn`) has **zero external dependencies**. Each SDK provider is a separate Go module with its own `go.mod` — users only pull the SDKs they need.
+Ryn uses a **multi-module** layout. The core module (`github.com/alexedtionweb/niro-stream`) has **zero external dependencies**. Each SDK provider is a separate Go module with its own `go.mod` — users only pull the SDKs they need.
 
 ```text
-ryn.dev/ryn                          ← root module (zero external deps)
-├── go.mod                           module ryn.dev/ryn
+github.com/alexedtionweb/niro-stream                          ← root module (zero external deps)
+├── go.mod                           module github.com/alexedtionweb/niro-stream
 ├── go.work                          workspace linking all sub-modules (dev only)
 ├── doc.go                           Package documentation
 ├── frame.go                         Frame, Kind, Signal, ToolCall, ToolResult, Tool, Usage
@@ -612,19 +612,19 @@ ryn.dev/ryn                          ← root module (zero external deps)
 │   ├── compat/                      OpenAI-compatible HTTP+SSE (in root module, stdlib-only)
 │   │   ├── compat.go
 │   │   └── compat_test.go
-│   ├── openai/                      separate module: ryn.dev/ryn/provider/openai
-│   ├── anthropic/                   separate module: ryn.dev/ryn/provider/anthropic
-│   ├── google/                      separate module: ryn.dev/ryn/provider/google
-│   └── bedrock/                     separate module: ryn.dev/ryn/provider/bedrock
+│   ├── openai/                      separate module: github.com/alexedtionweb/niro-stream/provider/openai
+│   ├── anthropic/                   separate module: github.com/alexedtionweb/niro-stream/provider/anthropic
+│   ├── google/                      separate module: github.com/alexedtionweb/niro-stream/provider/google
+│   └── bedrock/                     separate module: github.com/alexedtionweb/niro-stream/provider/bedrock
 │
 ├── plugin/
-│   └── agent/                       separate module: ryn.dev/ryn/plugin/agent
+│   └── agent/                       separate module: github.com/alexedtionweb/niro-stream/plugin/agent
 │       ├── agent.go                 Declarative agent with memory + routing
 │       ├── orchestrator.go          Step-based orchestrator (tool, llm, condition, etc.)
 │       ├── components.go            Agent-specific components
 │       └── decl.go                  YAML/JSON agent declaration types
 │
-└── examples/                        separate module: ryn.dev/ryn/examples
+└── examples/                        separate module: github.com/alexedtionweb/niro-stream/examples
     ├── chat/main.go
     ├── tools/main.go
     ├── parallel/main.go
@@ -635,16 +635,16 @@ ryn.dev/ryn                          ← root module (zero external deps)
 
 **Why separate modules?**
 
-Without separate modules, `go get ryn.dev/ryn` would pull every SDK (OpenAI, Anthropic, Google, AWS) into the dependency graph — even if you only use one provider. This balloons `go.sum`, slows builds, and introduces transitive dependencies you don't control.
+Without separate modules, `go get github.com/alexedtionweb/niro-stream` would pull every SDK (OpenAI, Anthropic, Google, AWS) into the dependency graph — even if you only use one provider. This balloons `go.sum`, slows builds, and introduces transitive dependencies you don't control.
 
 With the plugin model:
 
 ```bash
 # Core — zero external deps
-go get ryn.dev/ryn
+go get github.com/alexedtionweb/niro-stream
 
 # Only the provider you need
-go get ryn.dev/ryn/provider/openai
+go get github.com/alexedtionweb/niro-stream/provider/openai
 ```
 
 Your binary contains only the SDK you actually import. The compat provider (stdlib HTTP+SSE) stays in the root module since it has zero external deps.
@@ -679,7 +679,7 @@ The `RequestHook` type is provider-specific — it receives the raw SDK paramete
 ### Dependency Graph
 
 ```
-                ryn.dev/ryn (core)         ← stdlib only, zero deps
+                github.com/alexedtionweb/niro-stream (core)         ← stdlib only, zero deps
               /    |       \        \
          stream  pipeline  hook  orchestrate
                        \
@@ -901,5 +901,5 @@ The plugin model makes it easy to add providers without touching the core:
 
 ```go
 // Third-party provider — just implement ryn.Provider
-// and publish as ryn.dev/ryn/provider/mistral (or your own module path)
+// and publish as github.com/alexedtionweb/niro-stream/provider/mistral (or your own module path)
 ```

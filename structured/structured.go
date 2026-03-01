@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 
-	"ryn.dev/ryn"
+	"github.com/alexedtionweb/niro-stream"
 )
 
 // StructuredEvent is emitted by StructuredStream.Next.

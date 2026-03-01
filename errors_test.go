@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"ryn.dev/ryn"
+	"github.com/alexedtionweb/niro-stream"
 )
 
 func TestErrorCreation(t *testing.T) {

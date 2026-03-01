@@ -27,14 +27,14 @@ import (
 	"strings"
 	"time"
 
+	"github.com/alexedtionweb/niro-stream"
+	"github.com/alexedtionweb/niro-stream/provider/anthropic"
+	"github.com/alexedtionweb/niro-stream/provider/bedrock"
+	"github.com/alexedtionweb/niro-stream/provider/compat"
+	"github.com/alexedtionweb/niro-stream/provider/google"
+	"github.com/alexedtionweb/niro-stream/provider/openai"
+	"github.com/alexedtionweb/niro-stream/tools"
 	"github.com/aws/aws-sdk-go-v2/config"
-	"ryn.dev/ryn"
-	"ryn.dev/ryn/provider/anthropic"
-	"ryn.dev/ryn/provider/bedrock"
-	"ryn.dev/ryn/provider/compat"
-	"ryn.dev/ryn/provider/google"
-	"ryn.dev/ryn/provider/openai"
-	"ryn.dev/ryn/tools"
 )
 
 // --- Tool argument types ---

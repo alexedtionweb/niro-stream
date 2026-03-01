@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"ryn.dev/ryn"
-	"ryn.dev/ryn/orchestrate"
+	"github.com/alexedtionweb/niro-stream"
+	"github.com/alexedtionweb/niro-stream/orchestrate"
 )
 
 func TestFan(t *testing.T) {

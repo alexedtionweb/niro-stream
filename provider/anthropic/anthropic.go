@@ -4,7 +4,7 @@
 // This is an opt-in provider module. Import it only when you need
 // Anthropic Claude models:
 //
-//	go get ryn.dev/ryn/provider/anthropic
+//	go get github.com/alexedtionweb/niro-stream/provider/anthropic
 //
 // # SDK Access
 //
@@ -31,7 +31,7 @@ import (
 	"github.com/anthropics/anthropic-sdk-go/option"
 	"github.com/anthropics/anthropic-sdk-go/packages/ssestream"
 
-	"ryn.dev/ryn"
+	"github.com/alexedtionweb/niro-stream"
 )
 
 // RequestHook allows modifying the raw SDK params before the request is sent.

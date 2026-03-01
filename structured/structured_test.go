@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"testing"
 
-	"ryn.dev/ryn"
-	"ryn.dev/ryn/structured"
+	"github.com/alexedtionweb/niro-stream"
+	"github.com/alexedtionweb/niro-stream/structured"
 )
 
 func TestGenerateStructured(t *testing.T) {

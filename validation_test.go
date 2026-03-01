@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"ryn.dev/ryn"
+	"github.com/alexedtionweb/niro-stream"
 )
 
 func TestRequestValidation(t *testing.T) {

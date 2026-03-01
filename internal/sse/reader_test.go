@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"ryn.dev/ryn/internal/sse"
+	"github.com/alexedtionweb/niro-stream/internal/sse"
 )
 
 func TestReaderBasic(t *testing.T) {

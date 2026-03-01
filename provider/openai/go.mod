@@ -1,10 +1,10 @@
-module ryn.dev/ryn/provider/openai
+module github.com/alexedtionweb/niro-stream/provider/openai
 
 go 1.23.0
 
 require (
 	github.com/openai/openai-go v0.1.0-beta.10
-	ryn.dev/ryn v0.0.0
+	github.com/alexedtionweb/niro-stream v0.0.0
 )
 
 require (
@@ -14,4 +14,4 @@ require (
 	github.com/tidwall/sjson v1.2.5 // indirect
 )
 
-replace ryn.dev/ryn => ../..
+replace github.com/alexedtionweb/niro-stream => ../..

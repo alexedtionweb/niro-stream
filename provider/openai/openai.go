@@ -4,7 +4,7 @@
 // This is an opt-in provider module. Import it only when you need
 // OpenAI (or Azure OpenAI, or any OpenAI-compatible endpoint):
 //
-//	go get ryn.dev/ryn/provider/openai
+//	go get github.com/alexedtionweb/niro-stream/provider/openai
 //
 // # SDK Access
 //
@@ -34,7 +34,7 @@ import (
 	"github.com/openai/openai-go/packages/ssestream"
 	"github.com/openai/openai-go/shared"
 
-	"ryn.dev/ryn"
+	"github.com/alexedtionweb/niro-stream"
 )
 
 // RequestHook allows modifying the raw SDK params before the request is sent.

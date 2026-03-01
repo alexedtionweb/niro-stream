@@ -5,11 +5,11 @@ import (
 	"fmt"
 	"time"
 
-	"ryn.dev/ryn"
-	"ryn.dev/ryn/component"
-	"ryn.dev/ryn/middleware"
-	"ryn.dev/ryn/registry"
-	"ryn.dev/ryn/tools"
+	"github.com/alexedtionweb/niro-stream"
+	"github.com/alexedtionweb/niro-stream/component"
+	"github.com/alexedtionweb/niro-stream/middleware"
+	"github.com/alexedtionweb/niro-stream/registry"
+	"github.com/alexedtionweb/niro-stream/tools"
 )
 
 // ── ToolingComponent ─────────────────────────────────────────────────────────

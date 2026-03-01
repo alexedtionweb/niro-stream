@@ -3,7 +3,7 @@ package cost
 import (
 	"sync"
 
-	"ryn.dev/ryn"
+	"github.com/alexedtionweb/niro-stream"
 )
 
 // ModelPricing represents the cost per 1M tokens for a model.

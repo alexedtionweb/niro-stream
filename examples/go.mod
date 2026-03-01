@@ -1,4 +1,4 @@
-module ryn.dev/ryn/examples
+module github.com/alexedtionweb/niro-stream/examples
 
 go 1.24.0
 
@@ -6,12 +6,12 @@ toolchain go1.24.2
 
 require (
 	github.com/aws/aws-sdk-go-v2/config v1.27.27
-	ryn.dev/ryn v0.0.0
-	ryn.dev/ryn/provider/anthropic v0.0.0
-	ryn.dev/ryn/provider/bedrock v0.0.0-00010101000000-000000000000
-	ryn.dev/ryn/provider/google v0.0.0-00010101000000-000000000000
-	ryn.dev/ryn/provider/openai v0.0.0
-	ryn.dev/ryn/provider/realtime v0.0.0-00010101000000-000000000000
+	github.com/alexedtionweb/niro-stream v0.0.0
+	github.com/alexedtionweb/niro-stream/provider/anthropic v0.0.0
+	github.com/alexedtionweb/niro-stream/provider/bedrock v0.0.0-00010101000000-000000000000
+	github.com/alexedtionweb/niro-stream/provider/google v0.0.0-00010101000000-000000000000
+	github.com/alexedtionweb/niro-stream/provider/openai v0.0.0
+	github.com/alexedtionweb/niro-stream/provider/realtime v0.0.0-00010101000000-000000000000
 )
 
 require (
@@ -57,10 +57,10 @@ require (
 )
 
 replace (
-	ryn.dev/ryn => ..
-	ryn.dev/ryn/provider/anthropic => ../provider/anthropic
-	ryn.dev/ryn/provider/bedrock => ../provider/bedrock
-	ryn.dev/ryn/provider/google => ../provider/google
-	ryn.dev/ryn/provider/openai => ../provider/openai
-	ryn.dev/ryn/provider/realtime => ../provider/realtime
+	github.com/alexedtionweb/niro-stream => ..
+	github.com/alexedtionweb/niro-stream/provider/anthropic => ../provider/anthropic
+	github.com/alexedtionweb/niro-stream/provider/bedrock => ../provider/bedrock
+	github.com/alexedtionweb/niro-stream/provider/google => ../provider/google
+	github.com/alexedtionweb/niro-stream/provider/openai => ../provider/openai
+	github.com/alexedtionweb/niro-stream/provider/realtime => ../provider/realtime
 )

@@ -2,8 +2,8 @@
 
 **Streaming-first LLM runtime for Go.**
 
-[![Go Reference](https://pkg.go.dev/badge/ryn.dev/ryn.svg)](https://pkg.go.dev/ryn.dev/ryn)
-[![Go Report Card](https://goreportcard.com/badge/ryn.dev/ryn)](https://goreportcard.com/report/ryn.dev/ryn)
+[![Go Reference](https://pkg.go.dev/badge/github.com/alexedtionweb/niro-stream.svg)](https://pkg.go.dev/github.com/alexedtionweb/niro-stream)
+[![Go Report Card](https://goreportcard.com/badge/github.com/alexedtionweb/niro-stream)](https://goreportcard.com/report/github.com/alexedtionweb/niro-stream)
 
 ---
 
@@ -47,8 +47,8 @@ import (
     "fmt"
     "os"
 
-    "ryn.dev/ryn"
-    "ryn.dev/ryn/provider/openai"
+    "github.com/alexedtionweb/niro-stream"
+    "github.com/alexedtionweb/niro-stream/provider/openai"
 )
 
 func main() {
@@ -81,28 +81,28 @@ Tokens arrive as they're generated. Usage is tracked silently. No buffering. No 
 
 ## Providers
 
-Ryn uses a **plugin model**: the core (`ryn.dev/ryn`) has **zero external dependencies**. Each SDK-backed provider lives in its own Go module — you only `go get` what you use. No SDK you don't need ever enters your build graph.
+Ryn uses a **plugin model**: the core (`github.com/alexedtionweb/niro-stream`) has **zero external dependencies**. Each SDK-backed provider lives in its own Go module — you only `go get` what you use. No SDK you don't need ever enters your build graph.
 
 | Provider          | Module                           | Install                                 | SDK                                                                           |
 | ----------------- | -------------------------------- | --------------------------------------- | ----------------------------------------------------------------------------- |
-| OpenAI            | `ryn.dev/ryn/provider/openai`    | `go get ryn.dev/ryn/provider/openai`    | [openai/openai-go](https://github.com/openai/openai-go)                       |
-| Anthropic         | `ryn.dev/ryn/provider/anthropic` | `go get ryn.dev/ryn/provider/anthropic` | [anthropics/anthropic-sdk-go](https://github.com/anthropics/anthropic-sdk-go) |
-| Google Gemini     | `ryn.dev/ryn/provider/google`    | `go get ryn.dev/ryn/provider/google`    | [google/generative-ai-go](https://github.com/google/generative-ai-go)         |
-| AWS Bedrock       | `ryn.dev/ryn/provider/bedrock`   | `go get ryn.dev/ryn/provider/bedrock`   | [aws-sdk-go-v2](https://github.com/aws/aws-sdk-go-v2)                         |
-| OpenAI-compatible | `ryn.dev/ryn/provider/compat`    | included in core (zero deps)            | stdlib HTTP + SSE                                                             |
-| Agent plugin      | `ryn.dev/ryn/plugin/agent`       | `go get ryn.dev/ryn/plugin/agent`       | optional component-based agent runtime                                        |
+| OpenAI            | `github.com/alexedtionweb/niro-stream/provider/openai`    | `go get github.com/alexedtionweb/niro-stream/provider/openai`    | [openai/openai-go](https://github.com/openai/openai-go)                       |
+| Anthropic         | `github.com/alexedtionweb/niro-stream/provider/anthropic` | `go get github.com/alexedtionweb/niro-stream/provider/anthropic` | [anthropics/anthropic-sdk-go](https://github.com/anthropics/anthropic-sdk-go) |
+| Google Gemini     | `github.com/alexedtionweb/niro-stream/provider/google`    | `go get github.com/alexedtionweb/niro-stream/provider/google`    | [google/generative-ai-go](https://github.com/google/generative-ai-go)         |
+| AWS Bedrock       | `github.com/alexedtionweb/niro-stream/provider/bedrock`   | `go get github.com/alexedtionweb/niro-stream/provider/bedrock`   | [aws-sdk-go-v2](https://github.com/aws/aws-sdk-go-v2)                         |
+| OpenAI-compatible | `github.com/alexedtionweb/niro-stream/provider/compat`    | included in core (zero deps)            | stdlib HTTP + SSE                                                             |
+| Agent plugin      | `github.com/alexedtionweb/niro-stream/plugin/agent`       | `go get github.com/alexedtionweb/niro-stream/plugin/agent`       | optional component-based agent runtime                                        |
 
 ```go
-// OpenAI — go get ryn.dev/ryn/provider/openai
+// OpenAI — go get github.com/alexedtionweb/niro-stream/provider/openai
 llm := openai.New(os.Getenv("OPENAI_API_KEY"))
 
-// Anthropic — go get ryn.dev/ryn/provider/anthropic
+// Anthropic — go get github.com/alexedtionweb/niro-stream/provider/anthropic
 llm := anthropic.New(os.Getenv("ANTHROPIC_API_KEY"))
 
-// Google Gemini — go get ryn.dev/ryn/provider/google
+// Google Gemini — go get github.com/alexedtionweb/niro-stream/provider/google
 llm := google.New(ctx, os.Getenv("GOOGLE_API_KEY"))
 
-// AWS Bedrock — go get ryn.dev/ryn/provider/bedrock
+// AWS Bedrock — go get github.com/alexedtionweb/niro-stream/provider/bedrock
 llm := bedrock.New(cfg) // from aws-sdk-go-v2 config
 
 // Any OpenAI-compatible endpoint (Ollama, vLLM, LiteLLM, etc.)
@@ -624,7 +624,7 @@ Streams carry interleaved text, tool calls, usage, and control signals. No separ
 
 ## Performance
 
-- **Zero-dependency core**: `ryn.dev/ryn` has no external imports — only the Go stdlib.
+- **Zero-dependency core**: `github.com/alexedtionweb/niro-stream` has no external imports — only the Go stdlib.
 - **Frame**: Tagged union (~80B value type). Text tokens: zero allocations beyond the string header.
 - **Stream**: `chan Frame` with `sync/atomic` error propagation. No mutexes on the read path.
 - **Pipeline**: One goroutine per stage, bounded channels for backpressure.
@@ -781,7 +781,7 @@ stream, err := llm.Generate(ctx, &ryn.Request{
 Core stays agent-agnostic. Agent behavior (agent-to-agent, memory, MCP memory adapters) lives in the optional plugin module.
 
 ```go
-import "ryn.dev/ryn/plugin/agent"
+import "github.com/alexedtionweb/niro-stream/plugin/agent"
 
 mem := agent.NewInMemoryMemory()
 

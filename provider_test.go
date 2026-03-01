@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"ryn.dev/ryn"
+	"github.com/alexedtionweb/niro-stream"
 )
 
 func TestProviderFunc(t *testing.T) {

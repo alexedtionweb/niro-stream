@@ -55,9 +55,9 @@ import (
 
 	"github.com/gorilla/websocket"
 
-	"ryn.dev/ryn"
-	"ryn.dev/ryn/pool"
-	"ryn.dev/ryn/transport"
+	"github.com/alexedtionweb/niro-stream"
+	"github.com/alexedtionweb/niro-stream/pool"
+	"github.com/alexedtionweb/niro-stream/transport"
 )
 
 const (

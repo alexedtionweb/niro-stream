@@ -9,7 +9,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"ryn.dev/ryn"
+	"github.com/alexedtionweb/niro-stream"
 )
 
 // ToolHandler executes a tool with raw JSON args and returns any JSON-serializable value.

@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"testing"
 
-	"ryn.dev/ryn"
+	"github.com/alexedtionweb/niro-stream"
 )
 
 func TestStreamBasic(t *testing.T) {

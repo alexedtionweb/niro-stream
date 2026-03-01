@@ -4,7 +4,7 @@ import (
 	"sync"
 	"testing"
 
-	"ryn.dev/ryn/pool"
+	"github.com/alexedtionweb/niro-stream/pool"
 )
 
 func TestBytePoolGetPut(t *testing.T) {

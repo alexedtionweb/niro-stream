@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"ryn.dev/ryn"
-	"ryn.dev/ryn/tools"
+	"github.com/alexedtionweb/niro-stream"
+	"github.com/alexedtionweb/niro-stream/tools"
 )
 
 // Orchestrator executes a declarative agent definition using a Runtime

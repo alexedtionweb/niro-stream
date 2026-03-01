@@ -13,8 +13,8 @@ import (
 
 	"google.golang.org/genai"
 
-	"ryn.dev/ryn"
-	. "ryn.dev/ryn/provider/google"
+	"github.com/alexedtionweb/niro-stream"
+	. "github.com/alexedtionweb/niro-stream/provider/google"
 )
 
 // ---------------------------------------------------------------------------

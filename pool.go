@@ -3,11 +3,11 @@ package ryn
 import (
 	"sync"
 
-	"ryn.dev/ryn/pool"
+	"github.com/alexedtionweb/niro-stream/pool"
 )
 
 // BytePool is an alias for pool.BytePool.
-// See ryn.dev/ryn/pool for direct usage without the ryn import.
+// See github.com/alexedtionweb/niro-stream/pool for direct usage without the ryn import.
 type BytePool = pool.BytePool
 
 // NewBytePool creates a new BytePool.

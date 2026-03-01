@@ -1,10 +1,10 @@
-module ryn.dev/ryn/provider/anthropic
+module github.com/alexedtionweb/niro-stream/provider/anthropic
 
 go 1.23.0
 
 require (
 	github.com/anthropics/anthropic-sdk-go v1.26.0
-	ryn.dev/ryn v0.0.0
+	github.com/alexedtionweb/niro-stream v0.0.0
 )
 
 require (
@@ -15,4 +15,4 @@ require (
 	golang.org/x/sync v0.16.0 // indirect
 )
 
-replace ryn.dev/ryn => ../..
+replace github.com/alexedtionweb/niro-stream => ../..

@@ -14,8 +14,8 @@ import (
 	ant "github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
 
-	"ryn.dev/ryn"
-	. "ryn.dev/ryn/provider/anthropic"
+	"github.com/alexedtionweb/niro-stream"
+	. "github.com/alexedtionweb/niro-stream/provider/anthropic"
 )
 
 // ─── SSE helpers ─────────────────────────────────────────────────────────────

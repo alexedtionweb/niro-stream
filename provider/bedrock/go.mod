@@ -1,4 +1,4 @@
-module ryn.dev/ryn/provider/bedrock
+module github.com/alexedtionweb/niro-stream/provider/bedrock
 
 go 1.23.0
 
@@ -7,7 +7,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.7.5
 	github.com/aws/aws-sdk-go-v2/service/bedrockruntime v1.50.0
 	github.com/aws/smithy-go v1.24.1
-	ryn.dev/ryn v0.0.0
+	github.com/alexedtionweb/niro-stream v0.0.0
 )
 
 require (
@@ -16,4 +16,4 @@ require (
 	github.com/google/uuid v1.6.0 // indirect
 )
 
-replace ryn.dev/ryn => ../..
+replace github.com/alexedtionweb/niro-stream => ../..

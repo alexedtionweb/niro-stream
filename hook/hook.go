@@ -6,7 +6,7 @@ import (
 	"context"
 	"time"
 
-	"ryn.dev/ryn"
+	"github.com/alexedtionweb/niro-stream"
 )
 
 // Hook provides observability into Ryn operations.

@@ -14,8 +14,8 @@ import (
 	oai "github.com/openai/openai-go"
 	"github.com/openai/openai-go/option"
 
-	"ryn.dev/ryn"
-	. "ryn.dev/ryn/provider/openai"
+	"github.com/alexedtionweb/niro-stream"
+	. "github.com/alexedtionweb/niro-stream/provider/openai"
 )
 
 // ─── SSE helpers ─────────────────────────────────────────────────────────────

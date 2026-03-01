@@ -6,7 +6,7 @@ import (
 	"math/rand/v2"
 	"time"
 
-	"ryn.dev/ryn"
+	"github.com/alexedtionweb/niro-stream"
 )
 
 // BackoffStrategy defines how to calculate delays between retries.

@@ -8,7 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"ryn.dev/ryn"
+	"github.com/alexedtionweb/niro-stream"
 )
 
 // RequestID is a unique identifier for a request used for tracing.

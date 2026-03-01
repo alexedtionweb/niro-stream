@@ -5,14 +5,14 @@ import (
 	"encoding/json"
 	"testing"
 
-	"ryn.dev/ryn"
-	"ryn.dev/ryn/hook"
-	"ryn.dev/ryn/middleware"
-	"ryn.dev/ryn/orchestrate"
-	"ryn.dev/ryn/pipe"
-	"ryn.dev/ryn/registry"
-	"ryn.dev/ryn/runtime"
-	"ryn.dev/ryn/structured"
+	"github.com/alexedtionweb/niro-stream"
+	"github.com/alexedtionweb/niro-stream/hook"
+	"github.com/alexedtionweb/niro-stream/middleware"
+	"github.com/alexedtionweb/niro-stream/orchestrate"
+	"github.com/alexedtionweb/niro-stream/pipe"
+	"github.com/alexedtionweb/niro-stream/registry"
+	"github.com/alexedtionweb/niro-stream/runtime"
+	"github.com/alexedtionweb/niro-stream/structured"
 )
 
 // ─── Frame Construction ─────────────────────────────────────

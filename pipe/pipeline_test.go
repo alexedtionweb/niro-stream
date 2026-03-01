@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"testing"
 
-	"ryn.dev/ryn"
-	"ryn.dev/ryn/pipe"
+	"github.com/alexedtionweb/niro-stream"
+	"github.com/alexedtionweb/niro-stream/pipe"
 )
 
 func TestPipelineEmpty(t *testing.T) {

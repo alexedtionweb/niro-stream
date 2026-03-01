@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"sync"
 
-	"ryn.dev/ryn"
+	"github.com/alexedtionweb/niro-stream"
 )
 
 // Registry is a named provider registry that allows looking up

@@ -16,8 +16,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	smithyhttp "github.com/aws/smithy-go/transport/http"
 
-	"ryn.dev/ryn"
-	. "ryn.dev/ryn/provider/bedrock"
+	"github.com/alexedtionweb/niro-stream"
+	. "github.com/alexedtionweb/niro-stream/provider/bedrock"
 )
 
 // ---------------------------------------------------------------------------

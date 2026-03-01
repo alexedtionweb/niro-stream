@@ -1,10 +1,10 @@
-module ryn.dev/ryn/provider/realtime
+module github.com/alexedtionweb/niro-stream/provider/realtime
 
 go 1.23.0
 
 require (
 	github.com/gorilla/websocket v1.5.3
-	ryn.dev/ryn v0.0.0
+	github.com/alexedtionweb/niro-stream v0.0.0
 )
 
-replace ryn.dev/ryn => ../..
+replace github.com/alexedtionweb/niro-stream => ../..

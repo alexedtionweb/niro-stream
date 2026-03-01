@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"ryn.dev/ryn"
+	"github.com/alexedtionweb/niro-stream"
 )
 
 // TimeoutConfig configures timeout behavior.

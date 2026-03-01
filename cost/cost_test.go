@@ -3,8 +3,8 @@ package cost_test
 import (
 	"testing"
 
-	"ryn.dev/ryn"
-	"ryn.dev/ryn/cost"
+	"github.com/alexedtionweb/niro-stream"
+	"github.com/alexedtionweb/niro-stream/cost"
 )
 
 func TestCostCalculation(t *testing.T) {

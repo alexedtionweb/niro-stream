@@ -1,7 +1,7 @@
-module ryn.dev/ryn/plugin/agent
+module github.com/alexedtionweb/niro-stream/plugin/agent
 
 go 1.23.0
 
-require ryn.dev/ryn v0.0.0
+require github.com/alexedtionweb/niro-stream v0.0.0
 
-replace ryn.dev/ryn => ../..
+replace github.com/alexedtionweb/niro-stream => ../..

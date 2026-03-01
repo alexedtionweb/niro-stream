@@ -16,8 +16,8 @@ import (
 
 	"github.com/gorilla/websocket"
 
-	"ryn.dev/ryn"
-	"ryn.dev/ryn/pool"
+	"github.com/alexedtionweb/niro-stream"
+	"github.com/alexedtionweb/niro-stream/pool"
 )
 
 // ── helpers ─────────────────────────────────────────────────────────────────

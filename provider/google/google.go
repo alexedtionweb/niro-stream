@@ -39,7 +39,7 @@ import (
 
 	"google.golang.org/genai"
 
-	"ryn.dev/ryn"
+	"github.com/alexedtionweb/niro-stream"
 )
 
 // RequestHook lets callers inspect or modify the GenerateContentConfig and

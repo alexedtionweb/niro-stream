@@ -29,9 +29,9 @@ import (
 	"net/http"
 	"strings"
 
-	"ryn.dev/ryn"
-	"ryn.dev/ryn/internal/sse"
-	"ryn.dev/ryn/transport"
+	"github.com/alexedtionweb/niro-stream"
+	"github.com/alexedtionweb/niro-stream/internal/sse"
+	"github.com/alexedtionweb/niro-stream/transport"
 )
 
 // Provider implements ryn.Provider using raw HTTP + SSE.
