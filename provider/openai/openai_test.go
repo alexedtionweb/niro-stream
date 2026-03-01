@@ -56,6 +56,15 @@ func usageChunk(id, model string, prompt, completion, total int) string {
 	)
 }
 
+func usageChunkWithCached(id, model string, prompt, completion, total, cached int) string {
+	return fmt.Sprintf(
+		`{"id":%q,"object":"chat.completion.chunk","created":1700000000,"model":%q,`+
+			`"choices":[{"index":0,"delta":{},"finish_reason":"stop"}],`+
+			`"usage":{"prompt_tokens":%d,"completion_tokens":%d,"total_tokens":%d,"prompt_tokens_details":{"cached_tokens":%d}}}`,
+		id, model, prompt, completion, total, cached,
+	)
+}
+
 // toolCallChunk produces the three-chunk sequence the OpenAI SSE stream uses
 // for a single tool call: start, arguments, finish.
 func toolCallChunks(id, model, callID, funcName, args string) []string {
@@ -361,6 +370,86 @@ func TestGenerate_UsageAccumulated(t *testing.T) {
 	usage := stream.Usage()
 	if usage.InputTokens != 10 || usage.OutputTokens != 5 || usage.TotalTokens != 15 {
 		t.Errorf("usage = %+v, want 10/5/15", usage)
+	}
+}
+
+func TestGenerate_CacheUsageDetailFromContext(t *testing.T) {
+	t.Parallel()
+
+	p := newProvider(t, func(r *http.Request) (int, string, string) {
+		body := sseBody(
+			textChunk("id1", "gpt-4o", "ok", ""),
+			usageChunkWithCached("id1", "gpt-4o", 10, 1, 11, 6),
+		)
+		return 200, body, "text/event-stream"
+	})
+
+	ctx := niro.WithCacheHint(context.Background(), niro.CacheHint{
+		Mode: niro.CachePrefer,
+		Key:  "tenant-a:key",
+	})
+	stream, err := p.Generate(ctx, &niro.Request{
+		Model:    "gpt-4o",
+		Messages: []niro.Message{niro.UserText("hi")},
+	})
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	_, err = collectText(t, stream)
+	if err != nil {
+		t.Fatalf("collect: %v", err)
+	}
+	u := stream.Usage()
+	if u.Detail[niro.UsageCacheAttempted] != 1 {
+		t.Fatalf("cache_attempted = %d, want 1", u.Detail[niro.UsageCacheAttempted])
+	}
+	if u.Detail[niro.UsageCacheHit] != 1 {
+		t.Fatalf("cache_hit = %d, want 1", u.Detail[niro.UsageCacheHit])
+	}
+	if u.Detail[niro.UsageCachedInputTokens] != 6 {
+		t.Fatalf("cached_input_tokens = %d, want 6", u.Detail[niro.UsageCachedInputTokens])
+	}
+}
+
+func TestGenerate_CacheRequireMissReturnsError(t *testing.T) {
+	t.Parallel()
+
+	p := newProvider(t, func(r *http.Request) (int, string, string) {
+		body := sseBody(
+			textChunk("id1", "gpt-4o", "ok", ""),
+			usageChunkWithCached("id1", "gpt-4o", 10, 1, 11, 0),
+		)
+		return 200, body, "text/event-stream"
+	})
+
+	ctx := niro.WithCacheHint(context.Background(), niro.CacheHint{
+		Mode: niro.CacheRequire,
+		Key:  "tenant-a:key",
+	})
+	stream, err := p.Generate(ctx, &niro.Request{
+		Model:    "gpt-4o",
+		Messages: []niro.Message{niro.UserText("hi")},
+	})
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	_, err = collectText(t, stream)
+	if err == nil || !strings.Contains(err.Error(), "cache required") {
+		t.Fatalf("expected cache required error, got %v", err)
+	}
+}
+
+func TestCacheCaps(t *testing.T) {
+	t.Parallel()
+	p := newProvider(t, func(r *http.Request) (int, string, string) {
+		return 200, sseBody(textChunk("id1", "gpt-4o", "ok", "stop")), ""
+	})
+	caps := p.CacheCaps()
+	if !caps.SupportsPrefix {
+		t.Fatal("SupportsPrefix = false, want true")
+	}
+	if caps.SupportsExplicitKeys {
+		t.Fatal("SupportsExplicitKeys = true, want false")
 	}
 }
 

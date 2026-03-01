@@ -26,6 +26,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	ant "github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
@@ -111,6 +112,16 @@ func NewFromClient(client ant.Client, model string) *Provider {
 // Use for direct SDK access when the niro abstraction is insufficient.
 func (p *Provider) Client() ant.Client { return p.client }
 
+// CacheCaps reports Anthropic cache support characteristics.
+func (p *Provider) CacheCaps() niro.CacheCapabilities {
+	return niro.CacheCapabilities{
+		SupportsPrefix:       true,
+		SupportsExplicitKeys: false,
+		SupportsTTL:          true,
+		SupportsBypass:       true,
+	}
+}
+
 // Generate implements niro.Provider.
 func (p *Provider) Generate(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
 	if req == nil {
@@ -125,7 +136,16 @@ func (p *Provider) Generate(ctx context.Context, req *niro.Request) (*niro.Strea
 		model = p.model
 	}
 
-	params := p.buildParams(model, req)
+	cacheHint, cacheEnabled := niro.GetCacheHint(ctx)
+	cacheAttempted := cacheEnabled && cacheHint.Mode != niro.CacheBypass
+	cacheRequire := cacheHint.Mode == niro.CacheRequire
+	if cacheRequire {
+		if err := validateRequireTTL(cacheHint.TTL); err != nil {
+			return nil, niro.WrapError(niro.ErrCodeInvalidRequest, err.Error(), err).WithProvider("anthropic")
+		}
+	}
+
+	params := p.buildParams(model, req, cacheHint, cacheAttempted)
 
 	// Provider-level hooks
 	for _, h := range p.hooks {
@@ -139,11 +159,17 @@ func (p *Provider) Generate(ctx context.Context, req *niro.Request) (*niro.Strea
 	sdk := p.client.Messages.NewStreaming(ctx, params)
 
 	stream, emitter := niro.NewStream(32)
-	go p.consume(ctx, sdk, emitter)
+	go p.consume(ctx, sdk, emitter, cacheAttempted, cacheRequire)
 	return stream, nil
 }
 
-func (p *Provider) consume(ctx context.Context, sdk *ssestream.Stream[ant.MessageStreamEventUnion], out *niro.Emitter) {
+func (p *Provider) consume(
+	ctx context.Context,
+	sdk *ssestream.Stream[ant.MessageStreamEventUnion],
+	out *niro.Emitter,
+	cacheAttempted bool,
+	cacheRequire bool,
+) {
 	defer out.Close()
 	defer sdk.Close()
 
@@ -186,16 +212,28 @@ func (p *Provider) consume(ctx context.Context, sdk *ssestream.Stream[ant.Messag
 	}
 
 	// Emit usage
+	cacheRead := int(message.Usage.CacheReadInputTokens)
+	cacheWrite := int(message.Usage.CacheCreationInputTokens)
 	usage := &niro.Usage{
 		InputTokens:  int(message.Usage.InputTokens),
 		OutputTokens: int(message.Usage.OutputTokens),
 		TotalTokens:  int(message.Usage.InputTokens + message.Usage.OutputTokens),
 	}
+	niro.SetCacheUsageDetail(usage, cacheAttempted, cacheRead > 0, cacheWrite > 0, cacheRead, 0)
 	if message.Usage.CacheReadInputTokens > 0 || message.Usage.CacheCreationInputTokens > 0 {
 		usage.Detail = map[string]int{
 			"cache_read_input_tokens":     int(message.Usage.CacheReadInputTokens),
 			"cache_creation_input_tokens": int(message.Usage.CacheCreationInputTokens),
+			niro.UsageCacheAttempted:      usage.Detail[niro.UsageCacheAttempted],
+			niro.UsageCacheHit:            usage.Detail[niro.UsageCacheHit],
+			niro.UsageCacheWrite:          usage.Detail[niro.UsageCacheWrite],
+			niro.UsageCachedInputTokens:   usage.Detail[niro.UsageCachedInputTokens],
+			niro.UsageCacheLatencySavedMS: usage.Detail[niro.UsageCacheLatencySavedMS],
 		}
+	}
+	if cacheRequire && cacheAttempted && message.Usage.CacheReadInputTokens == 0 {
+		out.Error(niro.NewError(niro.ErrCodeProviderError, "niro/anthropic: cache required but provider reported no cache read tokens").WithProvider("anthropic"))
+		return
 	}
 	_ = out.Emit(ctx, niro.UsageFrame(usage))
 
@@ -208,9 +246,16 @@ func (p *Provider) consume(ctx context.Context, sdk *ssestream.Stream[ant.Messag
 	})
 }
 
-func (p *Provider) buildParams(model string, req *niro.Request) ant.MessageNewParams {
+func (p *Provider) buildParams(model string, req *niro.Request, cacheHint niro.CacheHint, cacheAttempted bool) ant.MessageNewParams {
 	params := ant.MessageNewParams{
 		Model: ant.Model(model),
+	}
+	if cacheAttempted {
+		cc := ant.NewCacheControlEphemeralParam()
+		if ttl := mapAnthropicTTL(cacheHint.TTL); ttl != "" {
+			cc.TTL = ttl
+		}
+		params.CacheControl = cc
 	}
 
 	// System prompt
@@ -284,6 +329,23 @@ func (p *Provider) buildParams(model string, req *niro.Request) ant.MessageNewPa
 	}
 
 	return params
+}
+
+func validateRequireTTL(ttl time.Duration) error {
+	if ttl == 0 || ttl == 5*time.Minute || ttl == time.Hour {
+		return nil
+	}
+	return fmt.Errorf("niro/anthropic: cache require supports TTL 5m or 1h only")
+}
+
+func mapAnthropicTTL(ttl time.Duration) ant.CacheControlEphemeralTTL {
+	if ttl >= time.Hour {
+		return ant.CacheControlEphemeralTTLTTL1h
+	}
+	if ttl >= 5*time.Minute {
+		return ant.CacheControlEphemeralTTLTTL5m
+	}
+	return ""
 }
 
 func convertMessage(msg niro.Message) ant.MessageParam {

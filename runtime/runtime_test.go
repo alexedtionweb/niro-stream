@@ -365,3 +365,130 @@ func TestRuntimeDefaultModel(t *testing.T) {
 	})
 	assertEqual(t, capturedModel, "(default)")
 }
+
+func TestRuntimeCacheRequireFailsWhenUnsupported(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	mock := niro.ProviderFunc(func(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
+		return niro.StreamFromSlice(nil), nil
+	})
+
+	rt := runtime.New(mock)
+	_, err := rt.Generate(ctx, &niro.Request{
+		Client:   "tenant-a",
+		Messages: []niro.Message{niro.UserText("hi")},
+		Options: niro.Options{
+			Cache: &niro.CacheOptions{
+				Mode: niro.CacheRequire,
+				Key:  "k",
+			},
+		},
+	})
+	assertTrue(t, err != nil)
+}
+
+func TestRuntimeCacheHintAttachedOnce(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	var gotHint niro.CacheHint
+	var gotHintOK bool
+	calls := 0
+
+	norm := niro.PrefixNormalizerFunc(func(req *niro.Request) ([]byte, error) {
+		calls++
+		return []byte("same-prefix"), nil
+	})
+
+	mock := cacheCapProvider{ProviderFunc: niro.ProviderFunc(func(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
+		gotHint, gotHintOK = niro.GetCacheHint(ctx)
+		return niro.StreamFromSlice([]niro.Frame{niro.TextFrame("ok")}), nil
+	})}
+
+	rt := runtime.New(mock).WithPrefixNormalizer(norm)
+	stream, err := rt.Generate(ctx, &niro.Request{
+		Client:   "tenant-a",
+		Messages: []niro.Message{niro.UserText("hi")},
+		Options: niro.Options{
+			Cache: &niro.CacheOptions{Mode: niro.CacheRequire},
+		},
+	})
+	assertNoError(t, err)
+	_, err = niro.CollectText(ctx, stream)
+	assertNoError(t, err)
+	assertTrue(t, gotHintOK)
+	assertEqual(t, calls, 1)
+	assertTrue(t, gotHint.Key != "")
+	assertTrue(t, gotHint.PrefixHash != "")
+}
+
+func TestRuntimeCacheBypassDoesNotAttachHint(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	var gotHintOK bool
+	mock := cacheCapProvider{ProviderFunc: niro.ProviderFunc(func(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
+		_, gotHintOK = niro.GetCacheHint(ctx)
+		return niro.StreamFromSlice([]niro.Frame{niro.TextFrame("ok")}), nil
+	})}
+
+	rt := runtime.New(mock)
+	stream, err := rt.Generate(ctx, &niro.Request{
+		Messages: []niro.Message{niro.UserText("hi")},
+		Options: niro.Options{
+			Cache: &niro.CacheOptions{Mode: niro.CacheBypass},
+		},
+	})
+	assertNoError(t, err)
+	_, err = niro.CollectText(ctx, stream)
+	assertNoError(t, err)
+	assertTrue(t, !gotHintOK)
+}
+
+func TestRuntimeCacheExplicitKeySkipsNormalizer(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	var calls int
+	norm := niro.PrefixNormalizerFunc(func(req *niro.Request) ([]byte, error) {
+		calls++
+		return []byte("unused"), nil
+	})
+
+	rt := runtime.New(cacheCapProvider{ProviderFunc: niro.ProviderFunc(func(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
+		return niro.StreamFromSlice([]niro.Frame{niro.TextFrame("ok")}), nil
+	})}).WithPrefixNormalizer(norm)
+
+	stream, err := rt.Generate(ctx, &niro.Request{
+		Client:   "tenant-a",
+		Messages: []niro.Message{niro.UserText("hi")},
+		Options: niro.Options{
+			Cache: &niro.CacheOptions{
+				Mode: niro.CachePrefer,
+				Key:  "my-key",
+			},
+		},
+	})
+	assertNoError(t, err)
+	_, err = niro.CollectText(ctx, stream)
+	assertNoError(t, err)
+	assertEqual(t, calls, 0)
+}
+
+type cacheCapProvider struct {
+	niro.ProviderFunc
+}
+
+func (p cacheCapProvider) Generate(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
+	return p.ProviderFunc(ctx, req)
+}
+
+func (cacheCapProvider) CacheCaps() niro.CacheCapabilities {
+	return niro.CacheCapabilities{
+		SupportsPrefix:       true,
+		SupportsExplicitKeys: true,
+		SupportsTTL:          true,
+		SupportsBypass:       true,
+	}
+}

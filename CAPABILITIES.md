@@ -26,6 +26,10 @@ This document summarizes the capabilities implemented in this codebase. Each ent
 
 - **Token Budget Controls**: `Options.MaxTokens` sets output token caps per request; providers map this to native SDK limits and normalized usage is returned via `stream.Usage()` / `ResponseMeta.Usage`.
 
+- **Provider-Agnostic Prompt Cache Hints**: `Options.Cache` expresses cache intent (`Auto|Prefer|Require|Bypass`) without leaking provider types; runtime derives tenant-safe deterministic keys and passes hints through context only when enabled.
+
+- **Cache Extension Hooks**: Runtime exposes `WithPrefixNormalizer(...)` for deterministic prefix canonicalization and `WithCacheEngine(...)` for pluggable local prefix lookup/store integration.
+
 - **Reasoning Metadata Keys**: Stable keys (`UsageReasoningTokens`, `UsageReasoningCost`) are available for provider-reported reasoning usage in `Usage.Detail`.
 
 - **Cache — Sharded LRU**: `cache.go` implements a sharded LRU response cache with TTL and a tee pattern to replay frames on cache hits while storing on misses.

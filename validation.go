@@ -243,5 +243,10 @@ func (o *Options) Validate() error {
 		}
 	}
 
+	// Validate cache options
+	if err := validateCacheOptions(o.Cache); err != nil {
+		return fmt.Errorf("Cache: %w", err)
+	}
+
 	return nil
 }

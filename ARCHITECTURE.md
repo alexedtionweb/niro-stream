@@ -543,6 +543,24 @@ Niro treats token budget as an explicit request contract:
 
 This keeps policy and billing logic provider-agnostic while preserving streaming semantics.
 
+### Prompt Cache Hints
+
+Niro cache integration is provider-agnostic and input-only:
+
+- `Request.Options.Cache` carries intent (`Auto`, `Prefer`, `Require`, `Bypass`)
+- Runtime derives deterministic tenant-safe keys once per `Generate` call
+- Cache metadata is attached to context only when enabled
+- Deterministic default key: `SHA256(tenant + ":" + model + ":" + normalized_prefix)` (`tenant:<hex>`)
+- Provider adapters translate hints to native APIs (OpenAI/Anthropic/Gemini/Bedrock)
+- Cache signals are normalized into `Usage.Detail` canonical keys:
+  - `cache_attempted`
+  - `cache_hit`
+  - `cache_write`
+  - `cached_input_tokens`
+  - `cache_latency_saved_ms`
+
+Streaming invariants are preserved: no output replay, no token reordering, no mid-stream cache mutation.
+
 ## Structured Output (JSON Schema)
 
 Niro supports schema-constrained output with typed decoding inspired by Genkit’s

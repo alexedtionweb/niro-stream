@@ -511,6 +511,90 @@ func BenchmarkRuntimeFullStack(b *testing.B) {
 	}
 }
 
+func BenchmarkRuntimeGenerateCacheDisabled(b *testing.B) {
+	ctx := context.Background()
+	mock := niro.ProviderFunc(func(_ context.Context, _ *niro.Request) (*niro.Stream, error) {
+		frames := make([]niro.Frame, 50)
+		for i := range frames {
+			frames[i] = niro.TextFrame("tok")
+		}
+		return niro.StreamFromSlice(frames), nil
+	})
+	rt := runtime.New(mock)
+	req := &niro.Request{
+		Model:    "bench-model",
+		Messages: []niro.Message{niro.UserText("hi")},
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	for b.Loop() {
+		s, _ := rt.Generate(ctx, req)
+		for s.Next(ctx) {
+		}
+	}
+}
+
+func BenchmarkRuntimeGenerateCacheEnabled(b *testing.B) {
+	ctx := context.Background()
+	mock := cacheBenchProvider{ProviderFunc: niro.ProviderFunc(func(_ context.Context, _ *niro.Request) (*niro.Stream, error) {
+		frames := make([]niro.Frame, 50)
+		for i := range frames {
+			frames[i] = niro.TextFrame("tok")
+		}
+		return niro.StreamFromSlice(frames), nil
+	})}
+	rt := runtime.New(mock)
+	req := &niro.Request{
+		Client:   "tenant-bench",
+		Model:    "bench-model",
+		Messages: []niro.Message{niro.UserText("hi")},
+		Options: niro.Options{
+			Cache: &niro.CacheOptions{
+				Mode: niro.CachePrefer,
+			},
+		},
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	for b.Loop() {
+		s, _ := rt.Generate(ctx, req)
+		for s.Next(ctx) {
+		}
+	}
+}
+
+func BenchmarkRuntimeCacheStreamThroughputSmoke(b *testing.B) {
+	ctx := context.Background()
+	mock := cacheBenchProvider{ProviderFunc: niro.ProviderFunc(func(_ context.Context, _ *niro.Request) (*niro.Stream, error) {
+		frames := make([]niro.Frame, 200)
+		for i := range frames {
+			frames[i] = niro.TextFrame("tok")
+		}
+		return niro.StreamFromSlice(frames), nil
+	})}
+	rt := runtime.New(mock)
+	req := &niro.Request{
+		Client:   "tenant-bench",
+		Model:    "bench-model",
+		Messages: []niro.Message{niro.UserText("hi")},
+		Options: niro.Options{
+			Cache: &niro.CacheOptions{
+				Mode: niro.CachePrefer,
+			},
+		},
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	for b.Loop() {
+		s, _ := rt.Generate(ctx, req)
+		for s.Next(ctx) {
+		}
+	}
+}
+
 // ─── BytePool ───────────────────────────────────────────────
 
 func BenchmarkBytePoolSmall(b *testing.B) {
@@ -578,6 +662,23 @@ func BenchmarkResponseMetaPool(b *testing.B) {
 		m := niro.GetResponseMeta()
 		m.Model = "gpt-4o"
 		niro.PutResponseMeta(m)
+	}
+}
+
+type cacheBenchProvider struct {
+	niro.ProviderFunc
+}
+
+func (p cacheBenchProvider) Generate(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
+	return p.ProviderFunc(ctx, req)
+}
+
+func (cacheBenchProvider) CacheCaps() niro.CacheCapabilities {
+	return niro.CacheCapabilities{
+		SupportsPrefix:       true,
+		SupportsExplicitKeys: true,
+		SupportsTTL:          true,
+		SupportsBypass:       true,
 	}
 }
 

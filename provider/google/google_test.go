@@ -1482,6 +1482,173 @@ func TestGenerate_DefaultModel(t *testing.T) {
 	}
 }
 
+func TestGenerate_CacheUsageDetailFromContext(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.Contains(r.URL.Path, ":streamGenerateContent") {
+			http.NotFound(w, r)
+			return
+		}
+		sseResponse(w, map[string]any{
+			"candidates": []any{
+				map[string]any{
+					"content": map[string]any{
+						"role":  "model",
+						"parts": []any{map[string]any{"text": "ok"}},
+					},
+					"finishReason": "STOP",
+				},
+			},
+			"usageMetadata": map[string]any{
+				"promptTokenCount":        10,
+				"candidatesTokenCount":    2,
+				"cachedContentTokenCount": 7,
+				"totalTokenCount":         12,
+			},
+		})
+	}))
+	defer srv.Close()
+
+	p := newTestProvider(t, srv.URL)
+	ctx := niro.WithCacheHint(context.Background(), niro.CacheHint{
+		Mode: niro.CachePrefer,
+		Key:  "tenant-a:key",
+	})
+	stream, err := p.Generate(ctx, &niro.Request{
+		Model:    "gemini-2.0-flash",
+		Messages: []niro.Message{niro.UserText("hello")},
+	})
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	_, err = niro.CollectText(context.Background(), stream)
+	if err != nil {
+		t.Fatalf("CollectText: %v", err)
+	}
+	u := stream.Usage()
+	if u.Detail[niro.UsageCacheAttempted] != 1 {
+		t.Fatalf("cache_attempted = %d, want 1", u.Detail[niro.UsageCacheAttempted])
+	}
+	if u.Detail[niro.UsageCacheHit] != 1 {
+		t.Fatalf("cache_hit = %d, want 1", u.Detail[niro.UsageCacheHit])
+	}
+	if u.Detail[niro.UsageCachedInputTokens] != 7 {
+		t.Fatalf("cached_input_tokens = %d, want 7", u.Detail[niro.UsageCachedInputTokens])
+	}
+}
+
+func TestGenerate_CacheHintUsesCachedContentFromEngine(t *testing.T) {
+	var gotCachedContent string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.Contains(r.URL.Path, ":streamGenerateContent"):
+			var body map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			gotCachedContent, _ = body["cachedContent"].(string)
+			sseResponse(w, geminiFinal("ok", "STOP", 3, 1))
+			return
+		default:
+			http.NotFound(w, r)
+			return
+		}
+	}))
+	defer srv.Close()
+
+	p := newTestProvider(t, srv.URL)
+	engine := &mockCacheEngine{
+		meta: map[string]string{"google_cached_content": "cachedContents/abc123"},
+	}
+	ctx := niro.AttachCacheContext(context.Background(), niro.CacheHint{
+		Mode: niro.CachePrefer,
+		Key:  "tenant-a:key",
+	}, engine)
+	stream, err := p.Generate(ctx, &niro.Request{
+		Model:    "gemini-2.0-flash",
+		Messages: []niro.Message{niro.UserText("hello")},
+	})
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	_, err = niro.CollectText(context.Background(), stream)
+	if err != nil {
+		t.Fatalf("CollectText: %v", err)
+	}
+	if gotCachedContent != "cachedContents/abc123" {
+		t.Fatalf("cachedContent = %q, want %q", gotCachedContent, "cachedContents/abc123")
+	}
+}
+
+func TestGenerate_CacheRequireMissReturnsError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.Contains(r.URL.Path, ":streamGenerateContent") {
+			http.NotFound(w, r)
+			return
+		}
+		sseResponse(w, map[string]any{
+			"candidates": []any{
+				map[string]any{
+					"content": map[string]any{
+						"role":  "model",
+						"parts": []any{map[string]any{"text": "ok"}},
+					},
+					"finishReason": "STOP",
+				},
+			},
+			"usageMetadata": map[string]any{
+				"promptTokenCount":        10,
+				"candidatesTokenCount":    2,
+				"cachedContentTokenCount": 0,
+				"totalTokenCount":         12,
+			},
+		})
+	}))
+	defer srv.Close()
+
+	p := newTestProvider(t, srv.URL)
+	ctx := niro.WithCacheHint(context.Background(), niro.CacheHint{
+		Mode: niro.CacheRequire,
+		Key:  "tenant-a:key",
+	})
+	stream, err := p.Generate(ctx, &niro.Request{
+		Model:    "gemini-2.0-flash",
+		Messages: []niro.Message{niro.UserText("hello")},
+	})
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	_, err = niro.CollectText(context.Background(), stream)
+	if err == nil || !strings.Contains(err.Error(), "cache required") {
+		t.Fatalf("expected cache required error, got %v", err)
+	}
+}
+
+func TestCacheCaps(t *testing.T) {
+	p := NewFromClient(&genai.Client{}, "gemini-2.0-flash")
+	caps := p.CacheCaps()
+	if !caps.SupportsPrefix || !caps.SupportsExplicitKeys || !caps.SupportsTTL {
+		t.Fatalf("unexpected cache caps: %+v", caps)
+	}
+}
+
+type mockCacheEngine struct {
+	meta map[string]string
+}
+
+func (m *mockCacheEngine) ResolvePrefixHash(ctx context.Context, req *niro.Request, scope niro.CacheScope) (string, bool, error) {
+	return "", false, nil
+}
+
+func (m *mockCacheEngine) StorePrefix(ctx context.Context, key string, scope niro.CacheScope, ttl time.Duration, meta map[string]string) error {
+	m.meta = meta
+	return nil
+}
+
+func (m *mockCacheEngine) LookupPrefix(ctx context.Context, key string, scope niro.CacheScope) (map[string]string, bool, error) {
+	if len(m.meta) == 0 {
+		return nil, false, nil
+	}
+	return m.meta, true, nil
+}
+
 // ---------------------------------------------------------------------------
 // classifyError: clean single-line message and errors.As chain
 // ---------------------------------------------------------------------------

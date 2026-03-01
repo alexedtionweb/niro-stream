@@ -186,6 +186,16 @@ func NewFromClient(client *genai.Client, model string, hooks ...RequestHook) *Pr
 //	session, err := provider.Client().Live.Connect(ctx, model, config)
 func (p *Provider) Client() *genai.Client { return p.client }
 
+// CacheCaps reports Google cache support characteristics.
+func (p *Provider) CacheCaps() niro.CacheCapabilities {
+	return niro.CacheCapabilities{
+		SupportsPrefix:       true,
+		SupportsExplicitKeys: true,
+		SupportsTTL:          true,
+		SupportsBypass:       true,
+	}
+}
+
 // Close is a no-op for this provider. The underlying HTTP client used by
 // the Google GenAI SDK is stateless and requires no explicit teardown.
 // The method exists to satisfy common io.Closer patterns.
@@ -209,7 +219,55 @@ func (p *Provider) Generate(ctx context.Context, req *niro.Request) (*niro.Strea
 		modelName = p.model
 	}
 
+	cacheHint, cacheEnabled := niro.GetCacheHint(ctx)
+	cacheAttempted := cacheEnabled && cacheHint.Mode != niro.CacheBypass
+	cacheRequire := cacheHint.Mode == niro.CacheRequire
+	cacheWrite := false
+	cacheID := ""
+
 	config := buildConfig(req)
+	contents := buildContents(req)
+	if len(contents) == 0 {
+		return nil, niro.NewError(niro.ErrCodeInvalidRequest,
+			"niro/google: request must contain at least one non-system message").
+			WithProvider("google")
+	}
+
+	if cacheAttempted && cacheHint.Key != "" {
+		if eng, ok := niro.GetCacheEngine(ctx); ok {
+			meta, found, err := eng.LookupPrefix(ctx, cacheHint.Key, cacheHint.Scope)
+			if err != nil && cacheRequire {
+				return nil, niro.WrapError(niro.ErrCodeProviderError, "niro/google: cache lookup failed", err).WithProvider("google")
+			}
+			if found {
+				cacheID = meta["google_cached_content"]
+			}
+			if cacheID == "" {
+				cc := &genai.CreateCachedContentConfig{
+					TTL:               cacheHint.TTL,
+					DisplayName:       cacheHint.Key,
+					Contents:          contents,
+					SystemInstruction: config.SystemInstruction,
+					Tools:             config.Tools,
+					ToolConfig:        config.ToolConfig,
+				}
+				created, err := p.client.Caches.Create(ctx, modelName, cc)
+				if err != nil && cacheRequire {
+					return nil, niro.WrapError(niro.ErrCodeProviderError, "niro/google: cache creation failed", err).WithProvider("google")
+				}
+				if err == nil && created != nil && created.Name != "" {
+					cacheWrite = true
+					cacheID = created.Name
+					_ = eng.StorePrefix(ctx, cacheHint.Key, cacheHint.Scope, cacheHint.TTL, map[string]string{
+						"google_cached_content": created.Name,
+					})
+				}
+			}
+		}
+		if cacheID != "" {
+			config.CachedContent = cacheID
+		}
+	}
 
 	for _, h := range p.hooks {
 		h(modelName, config)
@@ -218,17 +276,10 @@ func (p *Provider) Generate(ctx context.Context, req *niro.Request) (*niro.Strea
 		hook(modelName, config)
 	}
 
-	contents := buildContents(req)
-	if len(contents) == 0 {
-		return nil, niro.NewError(niro.ErrCodeInvalidRequest,
-			"niro/google: request must contain at least one non-system message").
-			WithProvider("google")
-	}
-
 	seq := p.client.Models.GenerateContentStream(ctx, modelName, contents, config)
 
 	stream, emitter := niro.NewStream(32)
-	go consume(ctx, seq, emitter, modelName)
+	go consume(ctx, seq, emitter, modelName, cacheAttempted, cacheRequire, cacheWrite, cacheID)
 	return stream, nil
 }
 
@@ -241,10 +292,15 @@ func consume(
 	seq iter.Seq2[*genai.GenerateContentResponse, error],
 	out *niro.Emitter,
 	modelName string,
+	cacheAttempted bool,
+	cacheRequire bool,
+	cacheWrite bool,
+	cacheID string,
 ) {
 	defer out.Close()
 
 	var totalInput, totalOutput int32
+	var cachedInput int32
 	var finishReason string
 	var modelVersion string
 	var responseID string
@@ -259,6 +315,7 @@ func consume(
 		if resp.UsageMetadata != nil {
 			totalInput = resp.UsageMetadata.PromptTokenCount
 			totalOutput = resp.UsageMetadata.CandidatesTokenCount
+			cachedInput = resp.UsageMetadata.CachedContentTokenCount
 		}
 		if resp.ModelVersion != "" {
 			modelVersion = resp.ModelVersion
@@ -319,12 +376,25 @@ func consume(
 		OutputTokens: int(totalOutput),
 		TotalTokens:  int(totalInput + totalOutput),
 	}
+	niro.SetCacheUsageDetail(usage, cacheAttempted, cachedInput > 0, cacheWrite, int(cachedInput), 0)
+	if cacheRequire && cacheAttempted && !cacheWrite && totalInput > 0 && cachedInput == 0 {
+		out.Error(niro.NewError(niro.ErrCodeProviderError, "niro/google: cache required but provider reported no cached input tokens").WithProvider("google"))
+		return
+	}
 	_ = out.Emit(ctx, niro.UsageFrame(usage))
+	providerMeta := map[string]any{}
+	if cacheID != "" {
+		providerMeta["cache_id"] = cacheID
+	}
+	if len(providerMeta) == 0 {
+		providerMeta = nil
+	}
 	out.SetResponse(&niro.ResponseMeta{
 		Model:        modelVersion,
 		FinishReason: finishReason,
 		ID:           responseID,
 		Usage:        *usage,
+		ProviderMeta: providerMeta,
 	})
 }
 

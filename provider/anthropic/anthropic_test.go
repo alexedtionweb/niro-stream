@@ -1219,6 +1219,105 @@ func TestGenerate_CacheTokensInUsage(t *testing.T) {
 		if meta.Usage.Detail["cache_creation_input_tokens"] != 5 {
 			t.Errorf("cache_creation_input_tokens = %d, want 5", meta.Usage.Detail["cache_creation_input_tokens"])
 		}
+		if meta.Usage.Detail[niro.UsageCacheAttempted] != 0 {
+			t.Errorf("cache_attempted = %d, want 0", meta.Usage.Detail[niro.UsageCacheAttempted])
+		}
+	}
+}
+
+func TestGenerate_CacheHintAddsCacheControl(t *testing.T) {
+	var cacheControlType string
+	p := newProvider(t, func(r *http.Request) (int, string, string) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if cc, ok := body["cache_control"].(map[string]any); ok {
+			cacheControlType, _ = cc["type"].(string)
+		}
+		return 200, sseTextStream("id1", "claude-sonnet-4-5", "ok"), ""
+	})
+
+	ctx := niro.WithCacheHint(context.Background(), niro.CacheHint{
+		Mode: niro.CachePrefer,
+		Key:  "tenant-a:key",
+		TTL:  5 * time.Minute,
+	})
+	stream, err := p.Generate(ctx, &niro.Request{
+		Messages: []niro.Message{niro.UserText("hi")},
+	})
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	for stream.Next(context.Background()) {
+	}
+	if err := stream.Err(); err != nil {
+		t.Fatalf("stream err: %v", err)
+	}
+	if cacheControlType != "ephemeral" {
+		t.Fatalf("cache_control.type = %q, want %q", cacheControlType, "ephemeral")
+	}
+}
+
+func TestGenerate_CacheRequireMissReturnsError(t *testing.T) {
+	var b strings.Builder
+	b.WriteString(sseEvent("message_start", map[string]any{
+		"type": "message_start",
+		"message": map[string]any{
+			"id":      "id1",
+			"type":    "message",
+			"role":    "assistant",
+			"model":   "claude-sonnet-4-5",
+			"content": []any{},
+			"usage": map[string]any{
+				"input_tokens":  10,
+				"output_tokens": 1,
+			},
+		},
+	}))
+	b.WriteString(sseEvent("content_block_start", map[string]any{
+		"type": "content_block_start", "index": 0,
+		"content_block": map[string]any{"type": "text", "text": ""},
+	}))
+	b.WriteString(sseEvent("content_block_delta", map[string]any{
+		"type": "content_block_delta", "index": 0,
+		"delta": map[string]any{"type": "text_delta", "text": "ok"},
+	}))
+	b.WriteString(sseEvent("content_block_stop", map[string]any{
+		"type": "content_block_stop", "index": 0,
+	}))
+	b.WriteString(sseEvent("message_delta", map[string]any{
+		"type":  "message_delta",
+		"delta": map[string]any{"stop_reason": "end_turn"},
+		"usage": map[string]any{"output_tokens": 3},
+	}))
+	b.WriteString(sseEvent("message_stop", map[string]any{"type": "message_stop"}))
+
+	p := newProvider(t, func(r *http.Request) (int, string, string) {
+		return 200, b.String(), ""
+	})
+	ctx := niro.WithCacheHint(context.Background(), niro.CacheHint{
+		Mode: niro.CacheRequire,
+		Key:  "tenant-a:key",
+		TTL:  5 * time.Minute,
+	})
+	stream, err := p.Generate(ctx, &niro.Request{
+		Messages: []niro.Message{niro.UserText("hi")},
+	})
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	_, err = niro.CollectText(context.Background(), stream)
+	if err == nil || !strings.Contains(err.Error(), "cache required") {
+		t.Fatalf("expected cache required error, got %v", err)
+	}
+}
+
+func TestCacheCaps(t *testing.T) {
+	p := newProvider(t, func(r *http.Request) (int, string, string) {
+		return 200, sseTextStream("id1", "claude-sonnet-4-5", "ok"), ""
+	})
+	caps := p.CacheCaps()
+	if !caps.SupportsPrefix || !caps.SupportsTTL {
+		t.Fatalf("unexpected cache caps: %+v", caps)
 	}
 }
 

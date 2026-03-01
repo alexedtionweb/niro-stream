@@ -125,6 +125,9 @@ type Options struct {
 	FrequencyPenalty *float64 // Frequency penalty (OpenAI)
 	PresencePenalty  *float64 // Presence penalty (OpenAI)
 	Stop             []string // Stop sequences
+	// Cache configures provider-agnostic input cache intent.
+	// Nil means cache is disabled with zero hot-path overhead.
+	Cache *CacheOptions
 	// ExperimentalReasoning enables provider-specific reasoning extensions.
 	// Providers may emit KindCustom frames (summaries/traces) when enabled.
 	ExperimentalReasoning bool

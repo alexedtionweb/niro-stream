@@ -127,6 +127,16 @@ func NewFromClient(client oai.Client, model string) *Provider {
 // Use for direct SDK access when the niro abstraction is insufficient.
 func (p *Provider) Client() oai.Client { return p.client }
 
+// CacheCaps reports OpenAI cache support characteristics.
+func (p *Provider) CacheCaps() niro.CacheCapabilities {
+	return niro.CacheCapabilities{
+		SupportsPrefix:       true,  // OpenAI prompt caching is automatic for shared prefixes.
+		SupportsExplicitKeys: false, // No explicit cache-key API for chat completions.
+		SupportsTTL:          false, // TTL is provider-managed.
+		SupportsBypass:       true,  // Bypass is respected by omitting cache hints.
+	}
+}
+
 // Generate implements niro.Provider.
 func (p *Provider) Generate(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
 	if req == nil {
@@ -140,6 +150,9 @@ func (p *Provider) Generate(ctx context.Context, req *niro.Request) (*niro.Strea
 	if model == "" {
 		model = p.model
 	}
+
+	cacheHint, cacheEnabled := niro.GetCacheHint(ctx)
+	cacheAttempted := cacheEnabled && cacheHint.Mode != niro.CacheBypass
 
 	params := buildParams(model, req)
 
@@ -155,16 +168,23 @@ func (p *Provider) Generate(ctx context.Context, req *niro.Request) (*niro.Strea
 	sdk := p.client.Chat.Completions.NewStreaming(ctx, params)
 
 	stream, emitter := niro.NewStream(32)
-	go consume(ctx, sdk, emitter)
+	go consume(ctx, sdk, emitter, cacheAttempted, cacheHint.Mode == niro.CacheRequire)
 	return stream, nil
 }
 
 // consume reads from the SDK stream and emits niro Frames.
-func consume(ctx context.Context, sdk *ssestream.Stream[oai.ChatCompletionChunk], out *niro.Emitter) {
+func consume(
+	ctx context.Context,
+	sdk *ssestream.Stream[oai.ChatCompletionChunk],
+	out *niro.Emitter,
+	cacheAttempted bool,
+	cacheRequire bool,
+) {
 	defer out.Close()
 	defer sdk.Close()
 
 	acc := oai.ChatCompletionAccumulator{}
+	cachedInputTokens := 0
 
 	for sdk.Next() {
 		chunk := sdk.Current()
@@ -194,10 +214,16 @@ func consume(ctx context.Context, sdk *ssestream.Stream[oai.ChatCompletionChunk]
 
 		// Token usage (present in the final chunk when StreamOptions.IncludeUsage is set)
 		if chunk.Usage.TotalTokens > 0 {
+			cachedInputTokens = int(chunk.Usage.PromptTokensDetails.CachedTokens)
 			usage := &niro.Usage{
 				InputTokens:  int(chunk.Usage.PromptTokens),
 				OutputTokens: int(chunk.Usage.CompletionTokens),
 				TotalTokens:  int(chunk.Usage.TotalTokens),
+			}
+			niro.SetCacheUsageDetail(usage, cacheAttempted, cachedInputTokens > 0, false, cachedInputTokens, 0)
+			if cacheRequire && cacheAttempted && chunk.Usage.PromptTokensDetails.RawJSON() != "" && chunk.Usage.PromptTokens > 0 && cachedInputTokens == 0 {
+				out.Error(niro.NewError(niro.ErrCodeProviderError, "niro/openai: cache required but provider reported no cached input tokens").WithProvider("openai"))
+				return
 			}
 			if err := out.Emit(ctx, niro.UsageFrame(usage)); err != nil {
 				return
@@ -212,14 +238,22 @@ func consume(ctx context.Context, sdk *ssestream.Stream[oai.ChatCompletionChunk]
 
 	// Set response metadata from accumulated completion
 	completion := acc.ChatCompletion
+	cachedInputTokens = int(completion.Usage.PromptTokensDetails.CachedTokens)
+	if cacheRequire && cacheAttempted && completion.Usage.PromptTokensDetails.RawJSON() != "" && completion.Usage.PromptTokens > 0 && cachedInputTokens == 0 {
+		out.Error(niro.NewError(niro.ErrCodeProviderError, "niro/openai: cache required but provider reported no cached input tokens").WithProvider("openai"))
+		return
+	}
+	finalUsage := niro.Usage{
+		InputTokens:  int(completion.Usage.PromptTokens),
+		OutputTokens: int(completion.Usage.CompletionTokens),
+		TotalTokens:  int(completion.Usage.TotalTokens),
+	}
+	niro.SetCacheUsageDetail(&finalUsage, cacheAttempted, cachedInputTokens > 0, false, cachedInputTokens, 0)
+
 	meta := &niro.ResponseMeta{
 		ID:    completion.ID,
 		Model: completion.Model,
-		Usage: niro.Usage{
-			InputTokens:  int(completion.Usage.PromptTokens),
-			OutputTokens: int(completion.Usage.CompletionTokens),
-			TotalTokens:  int(completion.Usage.TotalTokens),
-		},
+		Usage: finalUsage,
 	}
 	if len(completion.Choices) > 0 {
 		meta.FinishReason = string(completion.Choices[0].FinishReason)

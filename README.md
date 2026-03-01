@@ -230,6 +230,54 @@ Recommended production pattern:
 - Enforce upstream request-size limits before provider call.
 - Use `Usage.TotalTokens` and `Usage.Detail` for per-tenant policy/cost accounting.
 
+### Provider Prompt Cache (Input-Side)
+
+Niro supports provider-agnostic prompt cache intent via `Options.Cache`.
+This is an **input optimization only**: it does not replay output and does not change stream ordering.
+
+```go
+req := &niro.Request{
+    Client:   "tenant-a", // required for tenant-safe deterministic cache keys
+    Model:    "gpt-4o",
+    Messages: []niro.Message{niro.UserText("Summarize this policy doc")},
+    Options: niro.Options{
+        Cache: &niro.CacheOptions{
+            Mode: niro.CachePrefer, // Auto | Prefer | Require | Bypass
+            TTL:  10 * time.Minute, // hint only
+        },
+    },
+}
+
+stream, _ := rt.Generate(ctx, req)
+_, _ = niro.CollectText(ctx, stream)
+u := stream.Usage()
+fmt.Printf("attempted=%d hit=%d cached_in=%d\n",
+    u.Detail[niro.UsageCacheAttempted],
+    u.Detail[niro.UsageCacheHit],
+    u.Detail[niro.UsageCachedInputTokens],
+)
+```
+
+Canonical cache metrics in `Usage.Detail`:
+
+- `cache_attempted` (0/1)
+- `cache_hit` (0/1)
+- `cache_write` (0/1)
+- `cached_input_tokens` (int)
+- `cache_latency_saved_ms` (int)
+
+Runtime behavior:
+
+- Deterministic key (when `CacheOptions.Key` is empty): `SHA256(tenant + ":" + model + ":" + normalized_prefix)`, stored as `tenant:<hex>`.
+- `CacheOptions.Key` is always tenant-prefixed by the runtime (`tenant:user_key`) to prevent cross-tenant reuse.
+- `CacheRequire` fails when the provider cannot honor requested cache semantics or when the provider explicitly reports a cache miss in require mode.
+- `CacheBypass` skips cache hint/context wiring entirely (fast path remains unchanged).
+
+Advanced hooks:
+
+- `runtime.WithPrefixNormalizer(...)` lets you plug a custom canonicalizer for deterministic key derivation.
+- `runtime.WithCacheEngine(...)` provides local prefix lookup/store hooks (used by adapters like Gemini cached-content IDs).
+
 ### Experimental reasoning
 
 `Options.ExperimentalReasoning` is an opt-in flag for provider-specific reasoning extensions (for example, `KindCustom` summaries/traces). Providers that do not support it should return an explicit error instead of silently ignoring the option.
@@ -826,6 +874,13 @@ fmt.Println(out.Text)
 ```
 
 `agent.Runtime` also supports peer calls via `WithPeer(...)` and `CallPeer(...)` for agent-to-agent workflows.
+
+## Migration Notes (Cache)
+
+- Existing code remains valid: `Options.Cache` is optional and defaults to disabled.
+- For cache-enabled requests, set `Request.Client` to enforce tenant-safe key namespacing.
+- `CacheRequire` fails fast when provider cache capabilities cannot satisfy the requested semantics.
+- Provider adapters map native cache signals to canonical `Usage.Detail` keys listed above.
 
 ### Object Pools
 

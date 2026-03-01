@@ -26,6 +26,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
@@ -145,6 +146,16 @@ func NewFromClient(client *bedrockruntime.Client, model string, opts ...Option) 
 // Use for direct SDK access when the niro abstraction is insufficient.
 func (p *Provider) Client() *bedrockruntime.Client { return p.client }
 
+// CacheCaps reports Bedrock cache support characteristics.
+func (p *Provider) CacheCaps() niro.CacheCapabilities {
+	return niro.CacheCapabilities{
+		SupportsPrefix:       true,
+		SupportsExplicitKeys: false,
+		SupportsTTL:          true,
+		SupportsBypass:       true,
+	}
+}
+
 // Generate implements niro.Provider.
 func (p *Provider) Generate(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
 	if req == nil {
@@ -166,6 +177,10 @@ func (p *Provider) Generate(ctx context.Context, req *niro.Request) (*niro.Strea
 		model = p.model
 	}
 
+	cacheHint, cacheEnabled := niro.GetCacheHint(ctx)
+	cacheAttempted := cacheEnabled && cacheHint.Mode != niro.CacheBypass
+	cacheRequire := cacheHint.Mode == niro.CacheRequire
+
 	var extraHook RequestHook
 	if extra, ok := req.Extra.(Extras); ok {
 		if extra.InferenceProfile != "" {
@@ -180,7 +195,7 @@ func (p *Provider) Generate(ctx context.Context, req *niro.Request) (*niro.Strea
 		extraHook = extra.Hook
 	}
 
-	input := p.buildInput(model, req)
+	input := p.buildInput(model, req, cacheHint, cacheAttempted)
 
 	// Provider-level hooks
 	for _, h := range p.hooks {
@@ -200,11 +215,18 @@ func (p *Provider) Generate(ctx context.Context, req *niro.Request) (*niro.Strea
 	}
 
 	stream, emitter := niro.NewStream(32)
-	go consume(ctx, resp, emitter, model)
+	go consume(ctx, resp, emitter, model, cacheAttempted, cacheRequire)
 	return stream, nil
 }
 
-func consume(ctx context.Context, resp *bedrockruntime.ConverseStreamOutput, out *niro.Emitter, model string) {
+func consume(
+	ctx context.Context,
+	resp *bedrockruntime.ConverseStreamOutput,
+	out *niro.Emitter,
+	model string,
+	cacheAttempted bool,
+	cacheRequire bool,
+) {
 	defer out.Close()
 
 	events := resp.GetStream()
@@ -263,10 +285,20 @@ func consume(ctx context.Context, resp *bedrockruntime.ConverseStreamOutput, out
 		case *types.ConverseStreamOutputMemberMetadata:
 			if ev.Value.Usage != nil {
 				u := ev.Value.Usage
+				cacheRead := int(aws.ToInt32(u.CacheReadInputTokens))
+				cacheWriteTokens := int(aws.ToInt32(u.CacheWriteInputTokens))
 				usage := &niro.Usage{
 					InputTokens:  int(aws.ToInt32(u.InputTokens)),
 					OutputTokens: int(aws.ToInt32(u.OutputTokens)),
 					TotalTokens:  int(aws.ToInt32(u.TotalTokens)),
+				}
+				niro.SetCacheUsageDetail(usage, cacheAttempted, cacheRead > 0, cacheWriteTokens > 0, cacheRead, 0)
+				if usage.Detail != nil {
+					usage.Detail["bedrock_cache_write_input_tokens"] = cacheWriteTokens
+				}
+				if cacheRequire && cacheAttempted && cacheRead == 0 && cacheWriteTokens == 0 {
+					out.Error(niro.NewError(niro.ErrCodeProviderError, "niro/bedrock: cache required but provider reported no cache usage").WithProvider("bedrock"))
+					return
 				}
 				_ = out.Emit(ctx, niro.UsageFrame(usage))
 				meta.Usage = *usage
@@ -388,7 +420,12 @@ func mapFinishReason(r types.StopReason) string {
 	}
 }
 
-func (p *Provider) buildInput(model string, req *niro.Request) *bedrockruntime.ConverseStreamInput {
+func (p *Provider) buildInput(
+	model string,
+	req *niro.Request,
+	cacheHint niro.CacheHint,
+	cacheAttempted bool,
+) *bedrockruntime.ConverseStreamInput {
 	input := &bedrockruntime.ConverseStreamInput{
 		ModelId: aws.String(model),
 	}
@@ -418,6 +455,21 @@ func (p *Provider) buildInput(model string, req *niro.Request) *bedrockruntime.C
 
 	if len(systemBlocks) > 0 {
 		input.System = systemBlocks
+	}
+	if cacheAttempted {
+		cachePoint := types.CachePointBlock{
+			Type: types.CachePointTypeDefault,
+		}
+		if ttl := mapBedrockTTL(cacheHint.TTL); ttl != "" {
+			cachePoint.Ttl = ttl
+		}
+		if len(input.System) > 0 {
+			input.System = append(input.System, &types.SystemContentBlockMemberCachePoint{Value: cachePoint})
+		} else if len(input.Messages) > 0 {
+			msg := input.Messages[0]
+			msg.Content = append(msg.Content, &types.ContentBlockMemberCachePoint{Value: cachePoint})
+			input.Messages[0] = msg
+		}
 	}
 
 	// Inference config
@@ -566,4 +618,14 @@ func imageFormat(mime string) types.ImageFormat {
 	default:
 		return types.ImageFormatPng
 	}
+}
+
+func mapBedrockTTL(ttl time.Duration) types.CacheTTL {
+	if ttl >= time.Hour {
+		return types.CacheTTLOneHour
+	}
+	if ttl >= 5*time.Minute {
+		return types.CacheTTLFiveMinutes
+	}
+	return ""
 }

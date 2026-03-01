@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream"
@@ -80,6 +81,19 @@ func msgStop(reason string) evtSpec {
 func metadataEvt(in, out int) evtSpec {
 	return evtSpec{"metadata", map[string]any{
 		"usage":   map[string]any{"inputTokens": in, "outputTokens": out, "totalTokens": in + out},
+		"metrics": map[string]any{"latencyMs": 42},
+	}}
+}
+
+func metadataEvtWithCache(in, out, cacheRead, cacheWrite int) evtSpec {
+	return evtSpec{"metadata", map[string]any{
+		"usage": map[string]any{
+			"inputTokens":           in,
+			"outputTokens":          out,
+			"totalTokens":           in + out,
+			"cacheReadInputTokens":  cacheRead,
+			"cacheWriteInputTokens": cacheWrite,
+		},
 		"metrics": map[string]any{"latencyMs": 42},
 	}}
 }
@@ -268,6 +282,126 @@ func TestGenerate_UsageAndLatency(t *testing.T) {
 	meta := stream.Response()
 	if lat, ok := meta.ProviderMeta["latency_ms"]; !ok || lat != int64(42) {
 		t.Errorf("want latency_ms=42, got %v", lat)
+	}
+}
+
+func TestGenerate_CacheUsageDetailFromContext(t *testing.T) {
+	p := newProvider(func(r *http.Request) (*http.Response, error) {
+		return streamResp(
+			textDelta(0, "ok"),
+			msgStop("end_turn"),
+			metadataEvtWithCache(10, 3, 6, 1),
+		), nil
+	})
+
+	ctx := niro.WithCacheHint(context.Background(), niro.CacheHint{
+		Mode: niro.CachePrefer,
+		Key:  "tenant-a:key",
+	})
+	s, err := p.Generate(ctx, &niro.Request{
+		Model:    "m",
+		Messages: []niro.Message{niro.UserText("hi")},
+	})
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	_ = mustDrain(t, s)
+	u := s.Usage()
+	if u.Detail[niro.UsageCacheAttempted] != 1 {
+		t.Fatalf("cache_attempted = %d, want 1", u.Detail[niro.UsageCacheAttempted])
+	}
+	if u.Detail[niro.UsageCacheHit] != 1 {
+		t.Fatalf("cache_hit = %d, want 1", u.Detail[niro.UsageCacheHit])
+	}
+	if u.Detail[niro.UsageCachedInputTokens] != 6 {
+		t.Fatalf("cached_input_tokens = %d, want 6", u.Detail[niro.UsageCachedInputTokens])
+	}
+}
+
+func TestGenerate_CacheHintAddsCachePointMarker(t *testing.T) {
+	var bodyText string
+	p := newProvider(func(r *http.Request) (*http.Response, error) {
+		b, _ := io.ReadAll(r.Body)
+		bodyText = string(b)
+		return streamResp(textDelta(0, "ok"), msgStop("end_turn"), metadataEvt(1, 1)), nil
+	})
+
+	ctx := niro.WithCacheHint(context.Background(), niro.CacheHint{
+		Mode: niro.CachePrefer,
+		Key:  "tenant-a:key",
+	})
+	s, err := p.Generate(ctx, &niro.Request{
+		Model:    "m",
+		Messages: []niro.Message{niro.UserText("hi")},
+	})
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	_ = mustDrain(t, s)
+	if !strings.Contains(bodyText, "cachePoint") {
+		t.Fatalf("request body does not include cachePoint marker: %s", bodyText)
+	}
+}
+
+func TestGenerate_CacheRequireMissReturnsError(t *testing.T) {
+	p := newProvider(func(r *http.Request) (*http.Response, error) {
+		return streamResp(
+			textDelta(0, "ok"),
+			msgStop("end_turn"),
+			metadataEvtWithCache(10, 3, 0, 0),
+		), nil
+	})
+
+	ctx := niro.WithCacheHint(context.Background(), niro.CacheHint{
+		Mode: niro.CacheRequire,
+		Key:  "tenant-a:key",
+	})
+	s, err := p.Generate(ctx, &niro.Request{
+		Model:    "m",
+		Messages: []niro.Message{niro.UserText("hi")},
+	})
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	_, err = niro.CollectText(context.Background(), s)
+	if err == nil || !strings.Contains(err.Error(), "cache required") {
+		t.Fatalf("expected cache required error, got %v", err)
+	}
+}
+
+func TestGenerate_CacheHintWithTTLSerializesTTL(t *testing.T) {
+	var bodyText string
+	p := newProvider(func(r *http.Request) (*http.Response, error) {
+		b, _ := io.ReadAll(r.Body)
+		bodyText = string(b)
+		return streamResp(textDelta(0, "ok"), msgStop("end_turn"), metadataEvt(1, 1)), nil
+	})
+
+	ctx := niro.WithCacheHint(context.Background(), niro.CacheHint{
+		Mode: niro.CachePrefer,
+		Key:  "tenant-a:key",
+		TTL:  time.Hour,
+	})
+	s, err := p.Generate(ctx, &niro.Request{
+		Model:    "m",
+		Messages: []niro.Message{niro.UserText("hi")},
+	})
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	_ = mustDrain(t, s)
+	if !strings.Contains(bodyText, `"ttl":"1h"`) {
+		t.Fatalf("request body does not include ttl=1h cache point: %s", bodyText)
+	}
+}
+
+func TestCacheCaps(t *testing.T) {
+	p := newProvider(func(r *http.Request) (*http.Response, error) {
+		return streamResp(textDelta(0, "ok"), msgStop("end_turn"), metadataEvt(1, 1)), nil
+	})
+	caps := p.CacheCaps()
+	if !caps.SupportsPrefix || !caps.SupportsTTL {
+		t.Fatalf("unexpected cache caps: %+v", caps)
 	}
 }
 

@@ -222,6 +222,16 @@ const (
 	UsageReasoningTokens = "reasoning_tokens"
 	// UsageReasoningCost is the standard key for provider-reported reasoning cost units.
 	UsageReasoningCost = "reasoning_cost"
+	// UsageCacheAttempted is 0|1 indicating cache was attempted.
+	UsageCacheAttempted = "cache_attempted"
+	// UsageCacheHit is 0|1 indicating cache hit occurred.
+	UsageCacheHit = "cache_hit"
+	// UsageCacheWrite is 0|1 indicating cache write occurred.
+	UsageCacheWrite = "cache_write"
+	// UsageCachedInputTokens is the number of prompt tokens served from cache.
+	UsageCachedInputTokens = "cached_input_tokens"
+	// UsageCacheLatencySavedMS is integer milliseconds saved by cache.
+	UsageCacheLatencySavedMS = "cache_latency_saved_ms"
 )
 
 // Add accumulates usage from another Usage into this one.
@@ -238,7 +248,14 @@ func (u *Usage) Add(other *Usage) {
 			u.Detail = make(map[string]int, 4)
 		}
 		for k, v := range other.Detail {
-			u.Detail[k] += v
+			switch k {
+			case UsageCacheAttempted, UsageCacheHit, UsageCacheWrite:
+				if v != 0 || u.Detail[k] != 0 {
+					u.Detail[k] = 1
+				}
+			default:
+				u.Detail[k] += v
+			}
 		}
 	}
 }
