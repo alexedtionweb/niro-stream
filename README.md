@@ -208,6 +208,28 @@ for stream.Next(ctx) {
 
 **ResponseMeta**: Providers set model name, finish reason, and response ID via `Emitter.SetResponse()`. Access it after streaming with `stream.Response()`.
 
+### Token Budget
+
+Token budget is controlled via `Request.Options.MaxTokens` (output cap) and tracked via `stream.Usage()`:
+
+```go
+req := &niro.Request{
+    Messages: []niro.Message{niro.UserText("Summarize this document.")},
+    Options:  niro.Options{MaxTokens: 512},
+}
+
+stream, _ := llm.Generate(ctx, req)
+_, _ = niro.CollectText(ctx, stream)
+usage := stream.Usage()
+fmt.Printf("budget out=%d, actual out=%d\n", req.Options.MaxTokens, usage.OutputTokens)
+```
+
+Recommended production pattern:
+
+- Set `MaxTokens` per route/use case (chat, tools, summaries).
+- Enforce upstream request-size limits before provider call.
+- Use `Usage.TotalTokens` and `Usage.Detail` for per-tenant policy/cost accounting.
+
 ### Experimental reasoning
 
 `Options.ExperimentalReasoning` is an opt-in flag for provider-specific reasoning extensions (for example, `KindCustom` summaries/traces). Providers that do not support it should return an explicit error instead of silently ignoring the option.

@@ -325,12 +325,12 @@ Uses `anthropic-sdk-go` (official SDK). Key details:
 
 #### Google Gemini Provider
 
-Uses `google/generative-ai-go`. Key details:
+Uses `googleapis/go-genai` (`google.golang.org/genai`). Key details:
 
-- `GenerativeModel` with `StartChat` + `SendMessageStream`
-- `iterator.Done` pattern for stream exhaustion
-- Parts: `genai.Text`, `genai.FunctionCall`, `genai.Blob`
-- System instruction set via `model.SystemInstruction`
+- Unified SDK types under `genai` for chat/content generation
+- Streaming via `Models.GenerateContentStream(...)` events
+- Parts mapped from text + media + tool call content
+- Generation config maps `Options` (`MaxTokens`, `Temperature`, `TopP`, etc.)
 
 #### AWS Bedrock Provider
 
@@ -531,6 +531,17 @@ type Usage struct {
 - `Stream.Next()` auto-accumulates them
 - `Usage.Add()` merges two Usage values (Detail maps are combined)
 - Orchestration primitives (Race) return Usage alongside text
+
+### Token Budget
+
+Niro treats token budget as an explicit request contract:
+
+- Output budget is set with `Request.Options.MaxTokens`
+- Providers map it to their native caps (for example `max_completion_tokens`, `max_tokens`, `MaxOutputTokens`)
+- Actual consumption is read from `stream.Usage()` / `ResponseMeta.Usage`
+- Budget overrun behavior is provider-defined but normalized to finish-reason `"length"` when possible
+
+This keeps policy and billing logic provider-agnostic while preserving streaming semantics.
 
 ## Structured Output (JSON Schema)
 

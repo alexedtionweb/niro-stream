@@ -24,6 +24,8 @@ This document summarizes the capabilities implemented in this codebase. Each ent
 
 - **Cost Tracking & Pricing Registry**: `cost.go` contains model pricing and a global pricing registry to compute and record costs per model/request in real-time.
 
+- **Token Budget Controls**: `Options.MaxTokens` sets output token caps per request; providers map this to native SDK limits and normalized usage is returned via `stream.Usage()` / `ResponseMeta.Usage`.
+
 - **Reasoning Metadata Keys**: Stable keys (`UsageReasoningTokens`, `UsageReasoningCost`) are available for provider-reported reasoning usage in `Usage.Detail`.
 
 - **Cache — Sharded LRU**: `cache.go` implements a sharded LRU response cache with TTL and a tee pattern to replay frames on cache hits while storing on misses.
