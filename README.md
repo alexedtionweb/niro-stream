@@ -226,6 +226,8 @@ usage := stream.Usage()
 fmt.Printf("budget out=%d, actual out=%d\n", req.Options.MaxTokens, usage.OutputTokens)
 ```
 
+For thinking models (e.g. Gemini 2.5 Flash), set `Options.ThinkingBudget` so internal reasoning does not consume the whole output budget: `0` disables thinking, `nil` uses provider default.
+
 Recommended production pattern:
 
 - Set `MaxTokens` per route/use case (chat, tools, summaries).
@@ -920,14 +922,32 @@ niro.SetJSON(&niro.JSONLibrary{
 })
 ```
 
+## Documentation
+
+| Document | Description |
+|----------|-------------|
+| [docs/INTEGRATION.md](docs/INTEGRATION.md) | **Integration guide** — dependencies, minimal setup, validation, errors, hooks, tools, middleware, registry, orchestration, structured output, configuration, testing. Use this to hook Niro into another project. |
+| [docs/API_REFERENCE.md](docs/API_REFERENCE.md) | **API overview** — packages and main types (Provider, Request, Stream, runtime, hook, tools, output, middleware, registry, structured, plugins). |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | Internal design — Frame, Stream, Pipeline, Provider adapters, Hook lifecycle, orchestration. |
+| [CAPABILITIES.md](CAPABILITIES.md) | Feature list — streaming, tools, cache, registry, multi-tenancy, etc. |
+| [pkg.go.dev](https://pkg.go.dev/github.com/alexedtionweb/niro-stream) | Full Go doc for all packages. |
+
 ## Examples
 
-| Example                               | Description                                 |
-| ------------------------------------- | ------------------------------------------- |
-| [chat](examples/chat/main.go)         | Streaming chat with provider selection      |
-| [tools](examples/tools/main.go)       | Tool-calling loop with automatic round-trip |
-| [parallel](examples/parallel/main.go) | Fan, Race, Sequence orchestration           |
-| [pipeline](examples/pipeline/main.go) | Processing pipeline with hooks              |
+| Example | Description |
+|---------|-------------|
+| [chat](examples/chat/main.go) | Streaming chat with provider selection |
+| [tools](examples/tools/main.go) | Tool-calling loop with automatic round-trip |
+| [parallel](examples/parallel/main.go) | Fan, Race, Sequence orchestration |
+| [pipeline](examples/pipeline/main.go) | Processing pipeline with hooks |
+| [dsl](examples/dsl/main.go) | JSON-defined agents and workflows (handoff, debate fan_then) |
+| [multi-provider](examples/multi-provider/main.go) | Registry and multi-tenant routing |
+| [gemini](examples/gemini/main.go) | Gemini streaming, structured output, multi-turn |
+| [bedrock](examples/bedrock/main.go) | Bedrock chat, multi-turn, tool calling |
+| [hitl](examples/hitl/main.go) | Human-in-the-loop tool approval |
+| [realtime](examples/realtime/main.go) | OpenAI Realtime API (voice) |
+| [sonic](examples/sonic/main.go) | Bedrock Sonic (realtime audio) |
+| [elevenlabs](examples/elevenlabs/main.go) | ElevenLabs TTS and STT |
 
 ## Requirements
 

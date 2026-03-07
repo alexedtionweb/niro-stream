@@ -584,20 +584,28 @@ performs a fast `JSONValid` check before attempting to unmarshal partial data.
 
 Niro uses a **multi-module** layout. The core module (`github.com/alexedtionweb/niro-stream`) has **zero external dependencies**. Each SDK provider is a separate Go module with its own `go.mod` — users only pull the SDKs they need.
 
+**Subpackages** (same module): `runtime` (Provider + Hook + Pipeline), `hook` (Hook interface, WrapStream), `pipe` (Processor, Pipeline), `orchestrate` (Fan, Race, Sequence), `tools` (ToolLoop, Toolset, ToolingProvider), `output` (Route, RouteAgent, Sink for stream-first routing to callbacks), `middleware` (Retry, Timeout, Cache, Tracing), `registry` (Registry, MultiTenantProvider), `structured` (GenerateStructured, StreamStructured), `transport`, `pool`, `component`.
+
 ```text
 github.com/alexedtionweb/niro-stream                          ← root module (zero external deps)
 ├── go.mod                           module github.com/alexedtionweb/niro-stream
 ├── go.work                          workspace linking all sub-modules (dev only)
 ├── doc.go                           Package documentation
-├── frame.go                         Frame, Kind, Signal, ToolCall, ToolResult, Tool, Usage
+├── frame.go                         Frame, Kind, Signal, ToolCall, ToolResult, Tool, Usage, ResponseMeta, FinishReason
 ├── message.go                       Message, Part, Role — conversation model
-├── stream.go                        Stream, Emitter, NewStream — the core pipe
-├── processor.go                     Processor interface, Map/Filter/Tap/TextOnly/Accumulate
-├── pipeline.go                      Pipeline — concurrent goroutine-per-stage chain
-├── provider.go                      Provider interface, Request, Options, Extra
-├── hook.go                          Hook interface, GenerateStartInfo/EndInfo, NoOpHook, Hooks()
-├── orchestrate.go                   Fan, Race, Sequence — concurrent workflow primitives
-├── runtime.go                       Runtime — lifecycle composer (Provider + Pipeline + Hook)
+├── stream.go                        Stream, Emitter, NewStream, Forward, CollectText
+├── provider.go                      Provider interface, Request, Options (incl. ThinkingBudget), Extra
+├── errors.go                        Error type, ErrorCode, IsRetryable, IsRateLimited, etc.
+├── validation.go                    Request.Validate(), Message.Validate(), Tool.Validate()
+├── pipe/                            Processor, Pipeline — stream transformation
+├── hook/                            Hook interface, Compose, WrapStream
+├── runtime/                         Runtime — Provider + Pipeline + Hook
+├── orchestrate/                     Fan, Race, Sequence
+├── tools/                           ToolLoop, ToolExecutor, ToolingProvider, Toolset
+├── output/                          Route, RouteAgent, Sink — tee stream to callbacks, agent attribution
+├── middleware/                      Retry, Timeout, Cache, Tracing wrappers
+├── registry/                        Registry, MultiTenantProvider
+├── structured/                      GenerateStructured, StreamStructured
 ├── pool.go                          BytePool, pooled frame constructors, Usage/ResponseMeta pools
 ├── transport.go                     Transport(), HTTPClient(), DefaultTransport, DefaultHTTPClient
 ├── cache.go                         Cache — sharded LRU response cache with TTL
@@ -654,17 +662,28 @@ github.com/alexedtionweb/niro-stream                          ← root module (z
 │   └── bedrock/                     separate module: github.com/alexedtionweb/niro-stream/provider/bedrock
 │
 ├── plugin/
-│   └── agent/                       separate module: github.com/alexedtionweb/niro-stream/plugin/agent
-│       ├── agent.go                 Declarative agent with memory + routing
-│       ├── orchestrator.go          Step-based orchestrator (tool, llm, condition, etc.)
-│       ├── components.go            Agent-specific components
-│       └── decl.go                  YAML/JSON agent declaration types
+│   ├── agent/                       separate module: agent runtime with memory, components
+│   │   ├── agent.go                 Agent, memory, peers
+│   │   ├── orchestrator.go          Step-based orchestrator
+│   │   └── components.go            ToolingComponent, etc.
+│   └── dsl/                         Agent + workflow JSON DSL (same module)
+│       ├── parse.go, compile.go     Agents + tools from JSON
+│       ├── runner.go                Stream, handoff, fan_then
+│       └── workflow_*.go            Workflow parse/compile/run
 │
-└── examples/                        separate module: github.com/alexedtionweb/niro-stream/examples
-    ├── chat/main.go
-    ├── tools/main.go
-    ├── parallel/main.go
-    └── pipeline/main.go
+└── examples/
+    ├── chat/main.go                 Streaming chat, all providers
+    ├── tools/main.go                Tool loop
+    ├── parallel/main.go             Fan, Race, Sequence
+    ├── pipeline/main.go             Pipeline + hooks
+    ├── dsl/main.go                  JSON agents + workflows
+    ├── multi-provider/main.go        Registry, multi-tenant
+    ├── gemini/main.go               Gemini structured + multi-turn
+    ├── bedrock/main.go              Bedrock chat + tools
+    ├── hitl/main.go                 Human-in-the-loop approval
+    ├── realtime/main.go             OpenAI Realtime API
+    ├── sonic/main.go                Bedrock Sonic
+    └── elevenlabs/main.go           TTS/STT
 ```
 
 ### Multi-Module Design

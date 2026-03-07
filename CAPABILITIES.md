@@ -25,7 +25,9 @@ This document summarizes the capabilities implemented in this codebase. Each ent
 
 - **Usage-First Billing Inputs**: Core runtime emits raw usage (`Usage` + `Usage.Detail`) for external billing systems; pricing is handled outside the runtime.
 
-- **Token Budget Controls**: `Options.MaxTokens` sets output token caps per request; providers map this to native SDK limits and normalized usage is returned via `stream.Usage()` / `ResponseMeta.Usage`.
+- **Token Budget Controls**: `Options.MaxTokens` sets output token caps per request; providers map this to native SDK limits and normalized usage is returned via `stream.Usage()` / `ResponseMeta.Usage`. For thinking/reasoning models (e.g. Gemini 2.5), `Options.ThinkingBudget` caps reasoning tokens separately from output tokens.
+
+- **Finish Reason & Refusal Handling**: `ResponseMeta.FinishReason` and constants (`FinishStop`, `FinishLength`, `FinishRefusal`, etc.) indicate how generation ended. `FinishReason.IsRefusalOrBlock()` identifies refusals and content blocks for fallback or UX handling.
 
 - **Provider-Agnostic Prompt Cache Hints**: `Options.Cache` expresses cache intent (`Auto|Prefer|Require|Bypass`) without leaking provider types; runtime derives tenant-safe deterministic keys and passes hints through context only when enabled.
 
@@ -42,6 +44,8 @@ This document summarizes the capabilities implemented in this codebase. Each ent
 - **Transport Optimizations**: `transport.go` provides tuned `*http.Transport` defaults optimized for streaming LLM workloads (keepalive, pool sizing, TLS, HTTP/2 tuning).
 
 - **BytePool & Low-allocation Primitives**: `pool.go` provides size-class `sync.Pool` buffer pooling and pooled frame constructors to minimize GC pressure under high concurrency.
+
+- **Output Routing & Agent Attribution**: `output.Route` and `output.RouteAgent` tee stream frames to callbacks or sinks; `RouteAgent` associates frames with an agent identifier for multi-agent or orchestrator attribution in logs and metrics.
 
 - **Structured Output (JSON Schema)**: `structured.go` supports typed decode and streaming parse of JSON Schema constrained model outputs with `GenerateStructured` and `StreamStructured` helpers.
 
@@ -63,6 +67,8 @@ This document summarizes the capabilities implemented in this codebase. Each ent
 
 - **Tool Execution Hooks & Telemetry**: Tool lifecycle hooks (`OnToolValidate`, `OnToolExecuteStart`, `OnToolExecuteEnd`) are available for auditing, instrumentation, and security checks.
 
-- **Test Coverage & Examples**: Test suite exercises registry, provider adapters, tool loop, toolset behaviors, multi-tenancy, and component host lifecycle. Example programs under `examples` demonstrate chat, tools, parallel, and pipeline usages.
+- **DSL Plugin (Agents & Workflows)**: `plugin/dsl` parses and compiles JSON agent and workflow definitions (tools, handoffs, fan_then, stream steps) and runs them via the core runtime for declarative multi-step and multi-agent flows.
+
+- **Test Coverage & Examples**: Test suite exercises registry, provider adapters, tool loop, toolset behaviors, multi-tenancy, and component host lifecycle. Example programs under `examples` demonstrate chat, tools, parallel, pipeline, DSL agents/workflows, multi-provider, Gemini, Bedrock, HITL, realtime, Sonic, and ElevenLabs.
 
 - **Design Goals & Production Focus**: The codebase targets production systems: low-latency streaming, low allocations, pluggable providers, observability, multi-tenancy, and safe retry/timeout semantics.
