@@ -57,6 +57,8 @@ func (r *Runtime) WithPrefixNormalizer(normalizer niro.PrefixNormalizer) *Runtim
 	return r
 }
 
+const defaultModelLabel = "(default)" // hook metadata when req.Model is empty
+
 // Generate sends a request to the provider and returns a stream
 // of frames, optionally processed through the attached pipeline.
 // Hooks are invoked at each stage.
@@ -69,7 +71,7 @@ func (r *Runtime) Generate(ctx context.Context, req *niro.Request) (*niro.Stream
 
 	model := req.Model
 	if model == "" {
-		model = "(default)"
+		model = defaultModelLabel
 	}
 
 	// Cache fast path: a single predictable nil-check.
@@ -117,102 +119,9 @@ func (r *Runtime) Generate(ctx context.Context, req *niro.Request) (*niro.Stream
 	// If we have a hook, wrap the stream to intercept frames and
 	// fire OnGenerateEnd when the stream is exhausted.
 	if r.hook != nil {
-		stream = r.wrapStream(ctx, stream, model, start)
+		stream = hook.WrapStream(ctx, stream, r.hook, model, start)
 	}
 
 	return stream, nil
 }
 
-// wrapStream interposes a hook between the provider stream and the consumer.
-func (r *Runtime) wrapStream(ctx context.Context, src *niro.Stream, model string, start time.Time) *niro.Stream {
-	out, emitter := niro.NewStream(32)
-
-	go func() {
-		defer emitter.Close()
-
-		for src.Next(ctx) {
-			f := src.Frame()
-
-			// Hook per-frame with wall-clock elapsed since generation start.
-			// Receivers can extract TTFT from the first KindText frame.
-			if err := r.hook.OnFrame(ctx, f, time.Since(start)); err != nil {
-				emitter.Error(err)
-				r.hook.OnError(ctx, err)
-				return
-			}
-
-			if err := emitter.Emit(ctx, f); err != nil {
-				return
-			}
-		}
-
-		// Always capture usage — even on error, partial usage may exist.
-		usage := src.Usage()
-		resp := src.Response()
-
-		if err := src.Err(); err != nil {
-			emitter.Error(err)
-			r.hook.OnError(ctx, err)
-			r.hook.OnGenerateEnd(ctx, hook.GenerateEndInfo{
-				Model:    model,
-				Usage:    usage,
-				Duration: time.Since(start),
-				Error:    err,
-			})
-			return
-		}
-
-		// Propagate response metadata
-		if resp != nil {
-			emitter.SetResponse(resp)
-		}
-
-		finalModel := model
-		finishReason := ""
-		responseID := ""
-		if resp != nil {
-			if resp.Model != "" {
-				finalModel = resp.Model
-			}
-			finishReason = resp.FinishReason
-			responseID = resp.ID
-			mergeUsage(&usage, &resp.Usage)
-		}
-
-		r.hook.OnGenerateEnd(ctx, hook.GenerateEndInfo{
-			Model:        finalModel,
-			Usage:        usage,
-			FinishReason: finishReason,
-			Duration:     time.Since(start),
-			ResponseID:   responseID,
-		})
-	}()
-
-	return out
-}
-
-func mergeUsage(dst *niro.Usage, fallback *niro.Usage) {
-	if dst == nil || fallback == nil {
-		return
-	}
-	if dst.InputTokens == 0 {
-		dst.InputTokens = fallback.InputTokens
-	}
-	if dst.OutputTokens == 0 {
-		dst.OutputTokens = fallback.OutputTokens
-	}
-	if dst.TotalTokens == 0 {
-		dst.TotalTokens = fallback.TotalTokens
-	}
-	if len(fallback.Detail) == 0 {
-		return
-	}
-	if dst.Detail == nil {
-		dst.Detail = make(map[string]int, len(fallback.Detail))
-	}
-	for key, value := range fallback.Detail {
-		if _, exists := dst.Detail[key]; !exists {
-			dst.Detail[key] = value
-		}
-	}
-}

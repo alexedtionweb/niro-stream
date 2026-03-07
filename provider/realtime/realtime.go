@@ -151,7 +151,7 @@ func (p *Provider) Session(ctx context.Context, cfg niro.RealtimeConfig) (niro.R
 		return nil, fmt.Errorf("realtime: dial %s: %w", url, err)
 	}
 
-	recv, recvEmit := niro.NewStream(64)
+	recv, recvEmit := niro.NewStream(niro.RealtimeStreamBuffer)
 	sess := &Session{
 		cfg:           cfg,
 		voice:         voice,

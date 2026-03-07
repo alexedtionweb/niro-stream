@@ -28,6 +28,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	oai "github.com/openai/openai-go"
 	"github.com/openai/openai-go/option"
@@ -167,7 +168,7 @@ func (p *Provider) Generate(ctx context.Context, req *niro.Request) (*niro.Strea
 
 	sdk := p.client.Chat.Completions.NewStreaming(ctx, params)
 
-	stream, emitter := niro.NewStream(32)
+	stream, emitter := niro.NewStream(niro.DefaultStreamBuffer)
 	go consume(ctx, sdk, emitter, cacheAttempted, cacheHint.Mode == niro.CacheRequire)
 	return stream, nil
 }
@@ -329,8 +330,7 @@ func buildParams(model string, req *niro.Request) oai.ChatCompletionNewParams {
 			}
 		default:
 			// Check for func:name pattern
-			if len(req.ToolChoice) > 5 && req.ToolChoice[:5] == "func:" {
-				name := string(req.ToolChoice[5:])
+			if name := strings.TrimPrefix(string(req.ToolChoice), niro.ToolChoiceFuncPrefix); name != "" && name != string(req.ToolChoice) {
 				params.ToolChoice = oai.ChatCompletionToolChoiceOptionParamOfChatCompletionNamedToolChoice(
 					oai.ChatCompletionNamedToolChoiceFunctionParam{Name: name},
 				)

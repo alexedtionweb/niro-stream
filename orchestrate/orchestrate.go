@@ -23,7 +23,7 @@ import (
 // is propagated but remaining streams continue until done or
 // the context is canceled.
 func Fan(ctx context.Context, fns ...func(context.Context) (*niro.Stream, error)) *niro.Stream {
-	out, emitter := niro.NewStream(32)
+	out, emitter := niro.NewStream(niro.DefaultStreamBuffer)
 
 	var (
 		wg       sync.WaitGroup

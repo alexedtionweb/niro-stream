@@ -16,7 +16,10 @@ import (
 	"github.com/theory/jsonpath"
 )
 
-const outputModeText = "text"
+const (
+	defaultHTTPToolTimeout = 30 * time.Second // per-request timeout for HTTP tools
+	outputModeText         = "text"
+)
 
 func init() {
 	RegisterToolType("http", ToolTypeBuilderFunc(BuildHTTPTool))
@@ -93,7 +96,7 @@ func runHTTPTool(ctx context.Context, spec *HTTPToolSpec, args json.RawMessage) 
 	}
 	timeout := parseDuration(spec.Timeout)
 	if timeout <= 0 {
-		timeout = 30 * time.Second
+		timeout = defaultHTTPToolTimeout
 	}
 	client := &http.Client{Timeout: timeout}
 	if spec.Retry != nil && spec.Retry.MaxRetries > 0 {

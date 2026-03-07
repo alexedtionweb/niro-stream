@@ -278,7 +278,7 @@ func (p *Provider) Generate(ctx context.Context, req *niro.Request) (*niro.Strea
 
 	seq := p.client.Models.GenerateContentStream(ctx, modelName, contents, config)
 
-	stream, emitter := niro.NewStream(32)
+	stream, emitter := niro.NewStream(niro.DefaultStreamBuffer)
 	go consume(ctx, seq, emitter, modelName, cacheAttempted, cacheRequire, cacheWrite, cacheID)
 	return stream, nil
 }
@@ -571,8 +571,7 @@ func buildConfig(req *niro.Request) *genai.GenerateContentConfig {
 		default:
 			// ToolChoiceAuto — SDK default, no explicit config needed.
 			// ToolChoiceFunc("name") — restrict to a single function.
-			if s := string(req.ToolChoice); strings.HasPrefix(s, "func:") {
-				name := strings.TrimPrefix(s, "func:")
+			if name := strings.TrimPrefix(string(req.ToolChoice), niro.ToolChoiceFuncPrefix); name != "" && name != string(req.ToolChoice) {
 				cfg.ToolConfig = &genai.ToolConfig{
 					FunctionCallingConfig: &genai.FunctionCallingConfig{
 						Mode:                 genai.FunctionCallingConfigModeAny,

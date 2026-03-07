@@ -224,7 +224,7 @@ func runSTTStream(args []string) {
 	defer cancel()
 
 	// Create a stream of KindAudio frames and emit them with pacing.
-	audioStream, emitter := niro.NewStream(32)
+	audioStream, emitter := niro.NewStream(niro.DefaultStreamBuffer)
 	go func() {
 		defer emitter.Close()
 		for off := 0; off < len(audio); off += *frameBytes {

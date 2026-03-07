@@ -57,7 +57,7 @@ func Route(ctx context.Context, src *niro.Stream, sink *Sink) *niro.Stream {
 	if sink == nil {
 		return src
 	}
-	out, em := niro.NewStream(32)
+	out, em := niro.NewStream(niro.DefaultStreamBuffer)
 	go func() {
 		defer em.Close()
 		for src.Next(ctx) {
@@ -112,7 +112,7 @@ func dispatch(ctx context.Context, sink *Sink, f niro.Frame) error {
 		typ := f.Custom.Type
 		data := f.Custom.Data
 		switch typ {
-		case "thinking", "reasoning":
+		case niro.CustomThinking, niro.CustomReasoning:
 			if sink.OnThinking != nil {
 				s := dataString(data)
 				if s != "" {

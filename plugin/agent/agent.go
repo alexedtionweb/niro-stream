@@ -11,6 +11,11 @@ import (
 	"github.com/alexedtionweb/niro-stream/component"
 )
 
+const (
+	defaultMemoryRetryAttempts = 3                      // max Load/Save attempts before giving up
+	defaultMemoryRetryBackoff  = 50 * time.Millisecond  // initial backoff between retries (doubles each attempt)
+)
+
 // Memory is the storage primitive for conversation history by session ID.
 // Implement it to inject any backend (SQL, NoSQL, Redis, file); the runtime only calls Load and Save.
 //
@@ -174,10 +179,10 @@ func New(provider niro.Provider, opts ...Option) (*Runtime, error) {
 		o(rt)
 	}
 	if rt.memoryRetryAttempts <= 0 {
-		rt.memoryRetryAttempts = 3
+		rt.memoryRetryAttempts = defaultMemoryRetryAttempts
 	}
 	if rt.memoryRetryBackoff <= 0 {
-		rt.memoryRetryBackoff = 50 * time.Millisecond
+		rt.memoryRetryBackoff = defaultMemoryRetryBackoff
 	}
 
 	for _, c := range rt.components {
@@ -402,7 +407,7 @@ func (rt *Runtime) RunStream(ctx context.Context, sessionID string, input string
 		return nil, err
 	}
 
-	out, emitter := niro.NewStream(32)
+	out, emitter := niro.NewStream(niro.DefaultStreamBuffer)
 	go func() {
 		defer emitter.Close()
 		var buf strings.Builder

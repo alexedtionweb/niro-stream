@@ -129,7 +129,7 @@ func (p *Provider) Generate(ctx context.Context, req *niro.Request) (*niro.Strea
 		return nil, fmt.Errorf("niro/compat: status %d: %s", resp.StatusCode, b)
 	}
 
-	stream, emitter := niro.NewStream(32)
+	stream, emitter := niro.NewStream(niro.DefaultStreamBuffer)
 	go consume(ctx, resp.Body, emitter)
 	return stream, nil
 }

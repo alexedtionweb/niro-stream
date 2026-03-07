@@ -159,7 +159,7 @@ func (c *Cache) Wrap(p niro.Provider) niro.Provider {
 		}
 
 		// Intercept: collect frames, then serve from memory and store.
-		out, em := niro.NewStream(32)
+		out, em := niro.NewStream(niro.DefaultStreamBuffer)
 		go func() {
 			defer em.Close()
 			var collected []niro.Frame

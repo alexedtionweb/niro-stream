@@ -4,8 +4,10 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/alexedtionweb/niro-stream"
+	"github.com/alexedtionweb/niro-stream/hook"
 	"github.com/alexedtionweb/niro-stream/orchestrate"
 	"github.com/alexedtionweb/niro-stream/output"
 	"github.com/alexedtionweb/niro-stream/tools"
@@ -30,6 +32,7 @@ type Runner struct {
 	toolTransform func(agentName string, base *tools.Toolset) *tools.Toolset
 	toolOptions   func(agentName string) tools.ToolStreamOptions
 	outputSink    *output.Sink // optional: route response/thinking to sinks as stream is consumed
+	hook          hook.Hook    // optional: telemetry/observability hook (OnFrame, OnToolCall, OnGenerateEnd, etc.)
 }
 
 // RunnerOption customizes the runner (e.g. toolset transform, tool stream options per agent).
@@ -56,6 +59,16 @@ func WithToolOptions(fn func(agentName string) tools.ToolStreamOptions) RunnerOp
 func WithOutputSink(sink *output.Sink) RunnerOption {
 	return func(r *Runner) {
 		r.outputSink = sink
+	}
+}
+
+// WithHook attaches a telemetry/observability hook to the runner.
+// The hook fires OnGenerateStart before each provider call, OnFrame/OnToolCall/OnToolResult
+// per frame, and OnGenerateEnd when the stream is exhausted. Use hook.Compose to combine
+// multiple hooks (e.g. Langfuse + Datadog).
+func WithHook(h hook.Hook) RunnerOption {
+	return func(r *Runner) {
+		r.hook = h
 	}
 }
 
@@ -122,17 +135,130 @@ func (r *Runner) Stream(ctx context.Context, runCtx *RunContext, agentName strin
 	req = toolset.Apply(req)
 
 	ctx = WithRunContext(ctx, runCtx)
+
+	start := time.Now()
+	if r.hook != nil {
+		ctx = r.hook.OnGenerateStart(ctx, hook.GenerateStartInfo{
+			Model:    cfg.Model,
+			Messages: len(messages),
+			Tools:    len(req.Tools),
+		})
+	}
+
 	stream, err := tools.NewToolingProvider(r.provider, toolset, opts).Generate(ctx, req)
 	if err != nil {
+		if r.hook != nil {
+			r.hook.OnError(ctx, err)
+			r.hook.OnGenerateEnd(ctx, hook.GenerateEndInfo{
+				Model:    cfg.Model,
+				Duration: time.Since(start),
+				Error:    err,
+			})
+		}
 		return nil, err
 	}
+
+	stream = hook.WrapStream(ctx, stream, r.hook, cfg.Model, start)
 	if r.outputSink != nil {
-		return output.Route(ctx, stream, r.outputSink), nil
+		stream = output.Route(ctx, stream, r.outputSink)
 	}
+	stream = r.resolveHandoff(ctx, stream, runCtx, sessionID)
 	return stream, nil
 }
 
-const defaultMaxToolRounds = 8
+// resolveHandoff wraps a stream to transparently resolve handoff signals.
+// When a KindCustom "handoff" frame arrives, it emits a "handoff_start" frame
+// (so sinks can reset state), runs the target agent/workflow, and splices
+// the target's stream into the output. Supports chained handoffs.
+func (r *Runner) resolveHandoff(ctx context.Context, src *niro.Stream, runCtx *RunContext, sessionID string) *niro.Stream {
+	out, em := niro.NewStream(niro.DefaultStreamBuffer)
+	go func() {
+		defer em.Close()
+		var classifierText strings.Builder
+
+		for src.Next(ctx) {
+			f := src.Frame()
+
+			if f.Kind == niro.KindText {
+				classifierText.WriteString(f.Text)
+			}
+
+			if f.Kind == niro.KindCustom && f.Custom != nil && f.Custom.Type == niro.CustomHandoff {
+				target := strings.TrimSpace(fmt.Sprint(f.Custom.Data))
+				if target == "" {
+					if err := em.Emit(ctx, f); err != nil {
+						return
+					}
+					continue
+				}
+
+				_ = em.Emit(ctx, niro.Frame{
+					Kind:   niro.KindCustom,
+					Custom: &niro.ExperimentalFrame{Type: niro.CustomHandoffStart, Data: target},
+				})
+
+				if err := r.streamHandoff(ctx, em, runCtx, classifierText.String(), target, sessionID); err != nil {
+					em.Error(err)
+					return
+				}
+				continue
+			}
+
+			if err := em.Emit(ctx, f); err != nil {
+				return
+			}
+		}
+
+		if err := src.Err(); err != nil {
+			em.Error(err)
+			return
+		}
+		if resp := src.Response(); resp != nil {
+			em.SetResponse(resp)
+		}
+		usage := src.Usage()
+		if usage.InputTokens > 0 || usage.OutputTokens > 0 || usage.TotalTokens > 0 {
+			uCopy := usage
+			_ = em.Emit(ctx, niro.Frame{Kind: niro.KindUsage, Usage: &uCopy})
+		}
+	}()
+	return out
+}
+
+// streamHandoff runs the handoff target (agent or workflow) and forwards its
+// frames to em. The caller's RunContext provides messages and session.
+func (r *Runner) streamHandoff(ctx context.Context, em *niro.Emitter, runCtx *RunContext, classifierReply, target, sessionID string) error {
+	messages, _ := r.messagesFromRunContext(runCtx)
+
+	handoffCtx := NewRunContext()
+	handoffCtx.Set("session", map[string]any{"id": sessionID})
+	handoffCtx.Set("event", map[string]any{"text": eventTextFromRunContext(runCtx)})
+
+	if cw := r.workflows[target]; cw != nil {
+		handoffCtx.Set("messages", messages)
+		stream, _, _, err := cw.Run(ctx, handoffCtx, sessionID)
+		if err != nil {
+			return err
+		}
+		if stream != nil {
+			return niro.Forward(ctx, stream, em)
+		}
+		return nil
+	}
+
+	if _, ok := r.nd.Agents[target]; ok {
+		handoffCtx.Set("messages", append(append([]niro.Message(nil), messages...), niro.AssistantText(classifierReply)))
+		stream, err := r.Stream(ctx, handoffCtx, target, sessionID)
+		if err != nil {
+			return err
+		}
+		return niro.Forward(ctx, stream, em)
+	}
+
+	return niro.NewErrorf(niro.ErrCodeInvalidRequest, "dsl: handoff target %q not found", target)
+}
+
+const defaultMaxToolRounds = tools.DefaultMaxRounds
 
 // shouldInclude reports whether this tool ref is included given when/unless conditions.
 func (ref *AgentToolRef) shouldInclude(runCtx *RunContext) (bool, error) {
@@ -206,7 +332,7 @@ func (r *Runner) mergeToolOptions(agentName string, resolved tools.ToolStreamOpt
 		opts.MaxRounds = resolved.MaxRounds
 	}
 	if opts.ToolTimeout <= 0 {
-		opts.ToolTimeout = tools.DefaultToolStreamOptions().ToolTimeout
+		opts.ToolTimeout = tools.DefaultToolTimeout
 	}
 	return opts
 }

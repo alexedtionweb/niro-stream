@@ -3,6 +3,7 @@ package dsl
 import (
 	"context"
 	"encoding/json"
+	"strings"
 
 	"github.com/alexedtionweb/niro-stream"
 	"github.com/alexedtionweb/niro-stream/tools"
@@ -127,8 +128,8 @@ func parseToolChoice(s string) niro.ToolChoice {
 	case "auto", "":
 		return niro.ToolChoiceAuto
 	}
-	if len(s) > 5 && s[:5] == "func:" {
-		return niro.ToolChoiceFunc(s[5:])
+	if strings.HasPrefix(s, niro.ToolChoiceFuncPrefix) {
+		return niro.ToolChoiceFunc(strings.TrimPrefix(s, niro.ToolChoiceFuncPrefix))
 	}
 	return niro.ToolChoiceAuto
 }

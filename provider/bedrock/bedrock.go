@@ -26,6 +26,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -214,7 +215,7 @@ func (p *Provider) Generate(ctx context.Context, req *niro.Request) (*niro.Strea
 		return nil, classifyError(err)
 	}
 
-	stream, emitter := niro.NewStream(32)
+	stream, emitter := niro.NewStream(niro.DefaultStreamBuffer)
 	go consume(ctx, resp, emitter, model, cacheAttempted, cacheRequire)
 	return stream, nil
 }
@@ -528,9 +529,9 @@ func (p *Provider) buildInput(
 		case niro.ToolChoiceNone:
 			// Bedrock has no "none" mode; omit ToolChoice to let the model decide.
 		default:
-			if s := string(req.ToolChoice); len(s) > 5 && s[:5] == "func:" {
+			if name := strings.TrimPrefix(string(req.ToolChoice), niro.ToolChoiceFuncPrefix); name != "" && name != string(req.ToolChoice) {
 				toolCfg.ToolChoice = &types.ToolChoiceMemberTool{
-					Value: types.SpecificToolChoice{Name: aws.String(s[5:])},
+					Value: types.SpecificToolChoice{Name: aws.String(name)},
 				}
 			} else {
 				toolCfg.ToolChoice = &types.ToolChoiceMemberAuto{Value: types.AutoToolChoice{}}

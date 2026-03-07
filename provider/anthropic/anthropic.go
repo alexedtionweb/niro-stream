@@ -158,7 +158,7 @@ func (p *Provider) Generate(ctx context.Context, req *niro.Request) (*niro.Strea
 
 	sdk := p.client.Messages.NewStreaming(ctx, params)
 
-	stream, emitter := niro.NewStream(32)
+	stream, emitter := niro.NewStream(niro.DefaultStreamBuffer)
 	go p.consume(ctx, sdk, emitter, cacheAttempted, cacheRequire)
 	return stream, nil
 }

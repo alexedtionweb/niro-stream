@@ -165,7 +165,7 @@ func (p *SonicProvider) Session(ctx context.Context, cfg niro.RealtimeConfig) (n
 		return nil, fmt.Errorf("sonic: open stream: %w", err)
 	}
 
-	recv, recvEmit := niro.NewStream(64)
+	recv, recvEmit := niro.NewStream(niro.RealtimeStreamBuffer)
 	sess := &SonicSession{
 		cfg:      cfg,
 		voice:    voice,

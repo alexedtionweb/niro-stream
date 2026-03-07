@@ -71,6 +71,24 @@ type ExperimentalFrame struct {
 	Data any
 }
 
+// Well-known ExperimentalFrame.Type values used across the framework.
+// Use these constants instead of raw strings so protocol changes are caught at compile time.
+const (
+	CustomThinking     = "thinking"      // Extended thinking / chain-of-thought from the model
+	CustomReasoning    = "reasoning"     // Alias for thinking (provider-dependent naming)
+	CustomHandoff      = "handoff"       // Tool loop signals a handoff to another agent/workflow
+	CustomHandoffStart = "handoff_start" // Emitted before the handoff target's stream begins
+)
+
+// DefaultStreamBuffer is the channel buffer size used by stream tee goroutines
+// (hook.WrapStream, output.Route, resolveHandoff, agent.RunStream).
+// 32 balances latency and throughput for typical LLM token rates.
+const DefaultStreamBuffer = 32
+
+// RealtimeStreamBuffer is the channel buffer for realtime/audio sessions
+// that produce higher-frequency frames (audio chunks, bidirectional events).
+const RealtimeStreamBuffer = 64
+
 // Signal represents a pipeline control signal.
 type Signal uint8
 
@@ -200,9 +218,12 @@ const (
 	ToolChoiceRequired ToolChoice = "required" // Must call at least one tool
 )
 
+// ToolChoiceFuncPrefix is the prefix for function-specific tool choices.
+const ToolChoiceFuncPrefix = "func:"
+
 // ToolChoiceFunc forces the model to call a specific tool.
 func ToolChoiceFunc(name string) ToolChoice {
-	return ToolChoice("func:" + name)
+	return ToolChoice(ToolChoiceFuncPrefix + name)
 }
 
 // --- Usage types ---

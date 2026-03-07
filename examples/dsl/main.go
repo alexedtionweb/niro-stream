@@ -42,6 +42,22 @@ import (
 )
 
 const (
+	defaultWorkflowName = "chat"      // workflow key looked up in workflow.json
+	defaultSessionID    = "session-1"  // session ID for the REPL
+	defaultProvider     = "openai"     // provider when PROVIDER env is unset
+
+	defaultOpenAIModel   = "gpt-4o"
+	defaultGeminiModel   = "gemini-2.5-flash"
+	defaultBedrockModel  = "anthropic.claude-3-5-haiku-20241022-v1:0"
+	defaultOllamaModel   = "llama3.2"
+	defaultOllamaBaseURL = "http://localhost:11434/v1"
+	openAIBaseURL        = "https://api.openai.com/v1"
+
+	maxPreviewLen    = 120 // max chars for history/tool-result preview
+	maxLogContentLen = 200 // max chars for tool result in structured logs
+	maxCompactJSON   = 80  // max chars for multi-key JSON in tool call display
+	maxCompactValue  = 60  // max chars for single-value JSON in tool call display
+
 	colReset  = "\033[0m"
 	colBold   = "\033[1m"
 	colDim    = "\033[2m"
@@ -114,7 +130,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	workflows := compiledWorkflows(wf, compiled)
+	workflows := compiledWorkflows(wf, agentNames)
 	for _, cw := range workflows {
 		cw.BindRunner(runner)
 	}
@@ -122,7 +138,7 @@ func main() {
 
 	stepLog("startup", "chat_agent", chatAgent)
 	printBanner(chatAgent)
-	session := "session-1"
+	session := defaultSessionID
 	state := replState{sink: sink}
 
 	scanner := bufio.NewScanner(os.Stdin)
@@ -218,12 +234,19 @@ func (s *replSink) Sink() *output.Sink {
 			return nil
 		},
 		OnToolResult: func(ctx context.Context, res *niro.ToolResult) error {
-			stepLog("tool_result", "call_id", res.CallID, "is_error", res.IsError, "content", truncateForLog(res.Content, 200))
-			preview := truncateForLog(res.Content, 120)
+			stepLog("tool_result", "call_id", res.CallID, "is_error", res.IsError, "content", truncateForLog(res.Content, maxLogContentLen))
+			preview := truncateForLog(res.Content, maxPreviewLen)
 			if res.IsError {
 				fmt.Println(s.col(colRed, "  ← err: "+preview))
 			} else {
 				fmt.Println(s.col(colDim, "  ← "+preview))
+			}
+			return nil
+		},
+		OnCustom: func(ctx context.Context, typ string, data any) error {
+			if typ == niro.CustomHandoffStart {
+				stepLog("handoff_start", "target", fmt.Sprint(data))
+				s.printedAI = false
 			}
 			return nil
 		},
@@ -283,7 +306,8 @@ func reportErr(scope string, err error) {
 	fmt.Fprintln(os.Stderr, col(colRed, scope+": "+msg))
 }
 
-// runUserMessage runs the chat agent, drains the stream (sink prints output), runs handoff if requested, updates history and usage. Returns true on error.
+// runUserMessage runs the chat agent, drains the stream (sink prints output),
+// and updates history and usage. Handoffs are resolved transparently by the runner.
 func runUserMessage(ctx context.Context, input, chatAgent, session string, runner *dsl.Runner, state *replState) bool {
 	stepLog("turn_start", "session", session, "agent", chatAgent, "input_len", len(input))
 
@@ -294,43 +318,23 @@ func runUserMessage(ctx context.Context, input, chatAgent, session string, runne
 	runCtx.Set("event", map[string]any{"text": input})
 
 	stepLog("agent_start", "session", session, "agent", chatAgent)
+	state.sink.Reset()
 	stream, err := runner.Stream(ctx, runCtx, chatAgent, session)
 	if err != nil {
-		stepLog("error", "session", session, "phase", "stream", "err", err)
 		reportErr("stream", err)
 		state.history = state.history[:len(state.history)-1]
 		return true
 	}
 
-	state.sink.Reset()
-	reply, handoffTarget := drainStream(ctx, stream)
+	reply := drainStream(ctx, stream)
 	if err := stream.Err(); err != nil {
-		stepLog("error", "session", session, "phase", "drain", "err", err)
 		reportErr("stream", err)
 		state.history = state.history[:len(state.history)-1]
 		return true
 	}
 
 	u := stream.Usage()
-	stepLog("agent_end", "session", session, "agent", chatAgent, "reply_len", len(reply), "handoff_target", handoffTarget, "in", u.InputTokens, "out", u.OutputTokens)
-
-	if handoffTarget != "" {
-		stepLog("handoff_start", "session", session, "target", handoffTarget)
-		state.sink.Reset() // handoff agent output gets its own "AI   › " line
-		handoffReply, handoffUsage, err := runner.RunHandoff(ctx, state.history, input, reply, handoffTarget, session)
-		if err != nil {
-			stepLog("handoff_end", "session", session, "target", handoffTarget, "err", err)
-			reportErr("handoff", err)
-		} else {
-			stepLog("handoff_end", "session", session, "target", handoffTarget, "reply_len", len(handoffReply), "in", handoffUsage.InputTokens, "out", handoffUsage.OutputTokens)
-			u.InputTokens += handoffUsage.InputTokens
-			u.OutputTokens += handoffUsage.OutputTokens
-			u.TotalTokens += handoffUsage.TotalTokens
-			if handoffReply != "" {
-				reply = handoffReply
-			}
-		}
-	}
+	stepLog("agent_end", "session", session, "agent", chatAgent, "reply_len", len(reply), "in", u.InputTokens, "out", u.OutputTokens)
 
 	if reply != "" {
 		state.history = append(state.history, niro.AssistantText(reply))
@@ -380,7 +384,7 @@ func resolveChatAgent(wf *dsl.WorkflowDefinition, agentNames map[string]struct{}
 	if wf == nil {
 		return ""
 	}
-	if node, ok := wf.Workflows["chat"]; ok {
+	if node, ok := wf.Workflows[defaultWorkflowName]; ok {
 		if node.Agent != "" {
 			return node.Agent
 		}
@@ -394,50 +398,26 @@ func resolveChatAgent(wf *dsl.WorkflowDefinition, agentNames map[string]struct{}
 	return ""
 }
 
-func compiledWorkflows(wf *dsl.WorkflowDefinition, nd *dsl.NiroDefinition) map[string]*dsl.CompiledWorkflow {
-	if wf == nil || nd == nil {
+func compiledWorkflows(wf *dsl.WorkflowDefinition, agentNames map[string]struct{}) map[string]*dsl.CompiledWorkflow {
+	if wf == nil {
 		return nil
-	}
-	agentNames := make(map[string]struct{})
-	for name := range nd.Agents {
-		agentNames[name] = struct{}{}
 	}
 	out, _ := wf.CompileWorkflow(agentNames)
 	return out
 }
 
-// ── Workflow execution ──────────────────────────────────────────────────────────
+// ── Stream helpers ──────────────────────────────────────────────────────────
 
-// drainStream consumes the stream (output is handled by the runner's output sink), accumulates reply text,
-// and detects handoff from KindCustom "handoff" or from handoff tool args. Returns (reply, handoffTarget).
-func drainStream(ctx context.Context, stream *niro.Stream) (reply string, handoffTarget string) {
+// drainStream consumes the stream (output is handled by the runner's output sink)
+// and returns the accumulated text reply. Handoffs are resolved inside the runner.
+func drainStream(ctx context.Context, stream *niro.Stream) string {
 	var sb strings.Builder
 	for stream.Next(ctx) {
-		f := stream.Frame()
-		switch f.Kind {
-		case niro.KindText:
+		if f := stream.Frame(); f.Kind == niro.KindText {
 			sb.WriteString(f.Text)
-		case niro.KindToolCall:
-			if f.Tool != nil && handoffTarget == "" && f.Tool.Name == "handoff" && len(f.Tool.Args) > 0 {
-				var m map[string]any
-				if json.Unmarshal(f.Tool.Args, &m) == nil {
-					if t, _ := m["target"].(string); t != "" {
-						handoffTarget = strings.TrimSpace(t)
-					}
-				}
-			}
-		case niro.KindCustom:
-			if f.Custom != nil && f.Custom.Type == "handoff" && handoffTarget == "" {
-				if s, ok := f.Custom.Data.(string); ok {
-					handoffTarget = strings.TrimSpace(s)
-				} else {
-					handoffTarget = strings.TrimSpace(fmt.Sprint(f.Custom.Data))
-				}
-			}
 		}
 	}
-	fmt.Println()
-	return sb.String(), handoffTarget
+	return sb.String()
 }
 
 func compactJSON(raw json.RawMessage) string {
@@ -446,11 +426,7 @@ func compactJSON(raw json.RawMessage) string {
 	}
 	var m map[string]any
 	if niro.JSONUnmarshal(raw, &m) != nil {
-		s := string(raw)
-		if len(s) > 60 {
-			s = s[:57] + "…"
-		}
-		return s
+		return truncateForLog(string(raw), maxCompactValue)
 	}
 	if len(m) == 0 {
 		return ""
@@ -458,19 +434,11 @@ func compactJSON(raw json.RawMessage) string {
 	if len(m) == 1 {
 		for _, v := range m {
 			b, _ := niro.JSONMarshal(v)
-			s := strings.Trim(string(b), `"`)
-			if len(s) > 60 {
-				s = s[:57] + "…"
-			}
-			return s
+			return truncateForLog(strings.Trim(string(b), `"`), maxCompactValue)
 		}
 	}
 	b, _ := niro.JSONMarshal(m)
-	s := string(b)
-	if len(s) > 80 {
-		s = s[:77] + "…"
-	}
-	return s
+	return truncateForLog(string(b), maxCompactJSON)
 }
 
 // ── UI ────────────────────────────────────────────────────────────────────────
@@ -517,10 +485,7 @@ func printHistory(history []niro.Message) {
 				sb.WriteString(p.Text)
 			}
 		}
-		preview := sb.String()
-		if len(preview) > 120 {
-			preview = preview[:117] + "…"
-		}
+		preview := truncateForLog(sb.String(), maxPreviewLen)
 		fmt.Printf("  %2d. %s %s\n", i+1, label, col(colDim, preview))
 	}
 	fmt.Println(col(colBold, "───────────────────────────────────────────"))
@@ -531,11 +496,22 @@ func printHistory(history []niro.Message) {
 func mustProvider(ctx context.Context) (niro.Provider, string) {
 	providerName := strings.ToLower(strings.TrimSpace(os.Getenv("PROVIDER")))
 	if providerName == "" {
-		providerName = "openai"
+		providerName = defaultProvider
 	}
 	modelName := strings.TrimSpace(os.Getenv("MODEL"))
 
 	switch providerName {
+	case "openai":
+		key := os.Getenv("OPENAI_API_KEY")
+		if key == "" {
+			reportErr("provider", niro.NewError(niro.ErrCodeAuthenticationFailed, "OPENAI_API_KEY is not set"))
+			os.Exit(1)
+		}
+		if modelName == "" {
+			modelName = defaultOpenAIModel
+		}
+		return compat.New(openAIBaseURL, key, compat.WithModel(modelName)), modelName
+
 	case "gemini":
 		key := os.Getenv("GEMINI_API_KEY")
 		if key == "" {
@@ -543,7 +519,7 @@ func mustProvider(ctx context.Context) (niro.Provider, string) {
 			os.Exit(1)
 		}
 		if modelName == "" {
-			modelName = "gemini-2.5-flash"
+			modelName = defaultGeminiModel
 		}
 		p, err := google.New(key, google.WithModel(modelName))
 		if err != nil {
@@ -559,22 +535,22 @@ func mustProvider(ctx context.Context) (niro.Provider, string) {
 			os.Exit(1)
 		}
 		if modelName == "" {
-			modelName = "anthropic.claude-3-5-haiku-20241022-v1:0"
+			modelName = defaultBedrockModel
 		}
 		return bedrock.New(cfg, bedrock.WithModel(modelName)), modelName
 
 	case "ollama":
 		baseURL := os.Getenv("OLLAMA_BASE_URL")
 		if baseURL == "" {
-			baseURL = "http://localhost:11434/v1"
+			baseURL = defaultOllamaBaseURL
 		}
 		if modelName == "" {
-			modelName = "llama3.2"
+			modelName = defaultOllamaModel
 		}
 		return compat.New(baseURL, "", compat.WithModel(modelName)), modelName
 
 	default:
-		fmt.Fprintf(os.Stderr, col(colRed, "unknown PROVIDER=%q — openai|anthropic|gemini|bedrock|ollama\n"), os.Getenv("PROVIDER"))
+		fmt.Fprintf(os.Stderr, col(colRed, "unknown PROVIDER=%q — openai|gemini|bedrock|ollama\n"), os.Getenv("PROVIDER"))
 		os.Exit(1)
 	}
 	return nil, ""

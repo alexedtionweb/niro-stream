@@ -76,7 +76,7 @@ func (tp *TimeoutProvider) Generate(ctx context.Context, req *niro.Request) (*ni
 		return nil, err
 	}
 
-	out, emitter := niro.NewStream(32)
+	out, emitter := niro.NewStream(niro.DefaultStreamBuffer)
 	go func() {
 		defer cancel()
 		defer emitter.Close()

@@ -138,6 +138,115 @@ func (m *multiHook) OnError(ctx context.Context, err error) {
 	}
 }
 
+// --- Stream wrapping ---
+
+// WrapStream interposes a Hook between a provider stream and the consumer.
+// It creates a goroutine that reads from src, fires OnFrame (and OnToolCall /
+// OnToolResult for the corresponding frame kinds) for each frame, and emits
+// the frame to the returned stream. When the source is exhausted it fires
+// OnGenerateEnd with usage and duration. On any error it fires OnError.
+//
+// Both runtime.Runtime and dsl.Runner use this to get consistent hook
+// coverage from a single implementation.
+func WrapStream(ctx context.Context, src *niro.Stream, h Hook, model string, start time.Time) *niro.Stream {
+	if h == nil {
+		return src
+	}
+	out, emitter := niro.NewStream(niro.DefaultStreamBuffer)
+
+	go func() {
+		defer emitter.Close()
+
+		for src.Next(ctx) {
+			f := src.Frame()
+
+			if err := h.OnFrame(ctx, f, time.Since(start)); err != nil {
+				emitter.Error(err)
+				h.OnError(ctx, err)
+				return
+			}
+
+			if f.Kind == niro.KindToolCall && f.Tool != nil {
+				h.OnToolCall(ctx, *f.Tool)
+			}
+			if f.Kind == niro.KindToolResult && f.Result != nil {
+				h.OnToolResult(ctx, *f.Result, time.Since(start))
+			}
+
+			if err := emitter.Emit(ctx, f); err != nil {
+				return
+			}
+		}
+
+		usage := src.Usage()
+		resp := src.Response()
+
+		if err := src.Err(); err != nil {
+			emitter.Error(err)
+			h.OnError(ctx, err)
+			h.OnGenerateEnd(ctx, GenerateEndInfo{
+				Model:    model,
+				Usage:    usage,
+				Duration: time.Since(start),
+				Error:    err,
+			})
+			return
+		}
+
+		if resp != nil {
+			emitter.SetResponse(resp)
+		}
+
+		finalModel := model
+		finishReason := ""
+		responseID := ""
+		if resp != nil {
+			if resp.Model != "" {
+				finalModel = resp.Model
+			}
+			finishReason = resp.FinishReason
+			responseID = resp.ID
+			mergeUsage(&usage, &resp.Usage)
+		}
+
+		h.OnGenerateEnd(ctx, GenerateEndInfo{
+			Model:        finalModel,
+			Usage:        usage,
+			FinishReason: finishReason,
+			Duration:     time.Since(start),
+			ResponseID:   responseID,
+		})
+	}()
+
+	return out
+}
+
+func mergeUsage(dst *niro.Usage, fallback *niro.Usage) {
+	if dst == nil || fallback == nil {
+		return
+	}
+	if dst.InputTokens == 0 {
+		dst.InputTokens = fallback.InputTokens
+	}
+	if dst.OutputTokens == 0 {
+		dst.OutputTokens = fallback.OutputTokens
+	}
+	if dst.TotalTokens == 0 {
+		dst.TotalTokens = fallback.TotalTokens
+	}
+	if len(fallback.Detail) == 0 {
+		return
+	}
+	if dst.Detail == nil {
+		dst.Detail = make(map[string]int, len(fallback.Detail))
+	}
+	for key, value := range fallback.Detail {
+		if _, exists := dst.Detail[key]; !exists {
+			dst.Detail[key] = value
+		}
+	}
+}
+
 // --- NoOpHook ---
 
 // NoOpHook is a Hook that does nothing.

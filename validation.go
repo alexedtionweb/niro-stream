@@ -3,6 +3,7 @@ package niro
 import (
 	"fmt"
 	"regexp"
+	"strings"
 )
 
 // toolNameRe is the cross-provider safe tool name pattern.
@@ -190,7 +191,7 @@ func (tc ToolChoice) Validate() error {
 		return nil
 	default:
 		// Accept func:name pattern created by ToolChoiceFunc()
-		if len(tc) > 5 && tc[:5] == "func:" {
+		if name := strings.TrimPrefix(string(tc), ToolChoiceFuncPrefix); name != "" && name != string(tc) {
 			return nil
 		}
 		return fmt.Errorf("unknown ToolChoice %q", tc)

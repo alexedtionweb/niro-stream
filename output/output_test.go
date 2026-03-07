@@ -37,10 +37,10 @@ func TestRouteDispatch(t *testing.T) {
 	frames := []niro.Frame{
 		niro.TextFrame("hello "),
 		niro.TextFrame("world"),
-		niro.Frame{Kind: niro.KindCustom, Custom: &niro.ExperimentalFrame{Type: "thinking", Data: "reasoning step"}},
+		niro.Frame{Kind: niro.KindCustom, Custom: &niro.ExperimentalFrame{Type: niro.CustomThinking, Data: "reasoning step"}},
 		niro.ToolCallFrame(&niro.ToolCall{ID: "1", Name: "foo", Args: nil}),
 		niro.Frame{Kind: niro.KindToolResult, Result: &niro.ToolResult{CallID: "1", Content: "ok"}},
-		niro.Frame{Kind: niro.KindCustom, Custom: &niro.ExperimentalFrame{Type: "handoff", Data: "agent_x"}},
+		niro.Frame{Kind: niro.KindCustom, Custom: &niro.ExperimentalFrame{Type: niro.CustomHandoff, Data: "agent_x"}},
 	}
 	src := niro.StreamFromSlice(frames)
 	routed := Route(ctx, src, sink)

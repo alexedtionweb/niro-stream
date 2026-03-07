@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/alexedtionweb/niro-stream"
@@ -18,7 +19,7 @@ type HandoffSignal struct {
 	Target string // Agent or workflow name to hand off to
 }
 
-func (HandoffSignal) Error() string { return "handoff" }
+func (HandoffSignal) Error() string { return niro.CustomHandoff }
 
 // ToolExecutor defines how to execute a tool call.
 type ToolExecutor interface {
@@ -55,14 +56,20 @@ type ToolStreamOptions struct {
 	Approver ToolApprover
 }
 
+const (
+	DefaultMaxRounds    = 8               // default tool loop iterations before giving up
+	DefaultToolTimeout  = 30 * time.Second // per-tool execution timeout
+	DefaultStreamBuffer = 16              // channel buffer for tool loop output stream
+)
+
 // DefaultToolStreamOptions returns low-latency defaults.
 func DefaultToolStreamOptions() ToolStreamOptions {
 	return ToolStreamOptions{
-		MaxRounds:       8,
+		MaxRounds:       DefaultMaxRounds,
 		Parallel:        true,
 		EmitToolResults: true,
-		ToolTimeout:     30 * time.Second,
-		StreamBuffer:    16,
+		ToolTimeout:     DefaultToolTimeout,
+		StreamBuffer:    DefaultStreamBuffer,
 	}
 }
 
@@ -104,7 +111,7 @@ func (tl *ToolLoop) GenerateWithTools(ctx context.Context, provider niro.Provide
 
 	buf := tl.opts.StreamBuffer
 	if buf <= 0 {
-		buf = 16
+		buf = DefaultStreamBuffer
 	}
 	out, em := niro.NewStream(buf)
 	go func() {
@@ -129,7 +136,7 @@ func (tl *ToolLoop) run(ctx context.Context, provider niro.Provider, req *niro.R
 		// ToolChoiceRequired and func:name choices only make sense for round 0.
 		if round > 0 {
 			tc := cur.ToolChoice
-			if tc == niro.ToolChoiceRequired || (len(tc) > 5 && tc[:5] == "func:") {
+			if tc == niro.ToolChoiceRequired || strings.HasPrefix(string(tc), niro.ToolChoiceFuncPrefix) {
 				cur.ToolChoice = niro.ToolChoiceAuto
 			}
 		}
@@ -224,7 +231,7 @@ func (tl *ToolLoop) run(ctx context.Context, provider niro.Provider, req *niro.R
 			if tr.HandoffTarget != "" {
 				if err := out.Emit(ctx, niro.Frame{
 					Kind:   niro.KindCustom,
-					Custom: &niro.ExperimentalFrame{Type: "handoff", Data: tr.HandoffTarget},
+					Custom: &niro.ExperimentalFrame{Type: niro.CustomHandoff, Data: tr.HandoffTarget},
 				}); err != nil {
 					return err
 				}

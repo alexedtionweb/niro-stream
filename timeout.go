@@ -83,7 +83,7 @@ func (tp *TimeoutProvider) Generate(ctx context.Context, req *Request) (*Stream,
 
 	// Wrap the stream: forward all frames under the timeout context,
 	// and call cancel() when the stream is fully consumed.
-	out, emitter := NewStream(32)
+	out, emitter := NewStream(DefaultStreamBuffer)
 	go func() {
 		defer cancel()
 		defer emitter.Close()

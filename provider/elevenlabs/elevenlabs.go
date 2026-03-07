@@ -316,7 +316,7 @@ func (p *Provider) Synthesize(ctx context.Context, req *niro.TTSRequest) (*niro.
 	}
 
 	mime := mimeFromFormat(outFmt)
-	stream, emitter := niro.NewStream(16)
+	stream, emitter := niro.NewStream(niro.DefaultStreamBuffer)
 	go p.consumeTTS(ctx, resp.Body, emitter, mime)
 	return stream, nil
 }
@@ -498,7 +498,7 @@ func (p *Provider) transcribeStream(ctx context.Context, req *niro.STTRequest) (
 		return nil, fmt.Errorf("niro/elevenlabs: ws dial: %w", err)
 	}
 
-	stream, emitter := niro.NewStream(32)
+	stream, emitter := niro.NewStream(niro.DefaultStreamBuffer)
 	wsCtx, wsCancel := context.WithCancel(ctx)
 
 	// Read loop — receives transcript messages from ElevenLabs.

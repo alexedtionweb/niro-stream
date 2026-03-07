@@ -283,7 +283,7 @@ func (p *Provider) Synthesize(ctx context.Context, req *niro.TTSRequest) (*niro.
 
 	voice, lang, enc, sampleRate, speed, pitch, volume := p.resolveParams(req)
 
-	stream, emitter := niro.NewStream(16)
+	stream, emitter := niro.NewStream(niro.DefaultStreamBuffer)
 	go func() {
 		defer emitter.Close()
 
@@ -324,7 +324,7 @@ func (p *Provider) Transcribe(ctx context.Context, req *niro.STTRequest) (*niro.
 	}
 	cfg := p.resolveSTTConfig(req)
 
-	stream, emitter := niro.NewStream(32)
+	stream, emitter := niro.NewStream(niro.DefaultStreamBuffer)
 	go func() {
 		defer emitter.Close()
 		callCtx, cancel := context.WithTimeout(ctx, p.requestTimeout)
