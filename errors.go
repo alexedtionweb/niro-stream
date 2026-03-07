@@ -117,7 +117,7 @@ func NewError(code ErrorCode, msg string) *Error {
 }
 
 // NewErrorf creates a new Error with formatted message.
-func NewErrorf(code ErrorCode, format string, args ...interface{}) *Error {
+func NewErrorf(code ErrorCode, format string, args ...any) *Error {
 	return &Error{
 		Code:      code,
 		Message:   fmt.Sprintf(format, args...),
@@ -136,7 +136,7 @@ func WrapError(code ErrorCode, msg string, err error) *Error {
 }
 
 // WrapErrorf wraps an error with formatted message.
-func WrapErrorf(code ErrorCode, format string, err error, args ...interface{}) *Error {
+func WrapErrorf(code ErrorCode, format string, err error, args ...any) *Error {
 	return &Error{
 		Code:      code,
 		Message:   fmt.Sprintf(format, args...),

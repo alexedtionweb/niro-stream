@@ -3,6 +3,7 @@ package agent_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -69,7 +70,7 @@ func echoProvider(reply string) niro.Provider {
 
 func errorProvider(msg string) niro.Provider {
 	return niro.ProviderFunc(func(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
-		return nil, fmt.Errorf(msg)
+		return nil, errors.New(msg)
 	})
 }
 
@@ -106,6 +107,46 @@ func (m *mockMemory) Save(ctx context.Context, sessionID string, history []niro.
 	m.saveCalls++
 	if m.saveErr != nil {
 		return m.saveErr
+	}
+	m.history = append([]niro.Message(nil), history...)
+	return nil
+}
+
+// boundedLoaderMock implements agent.BoundedLoader and records LoadLast usage.
+type boundedLoaderMock struct {
+	mockMemory
+	loadLastCalls   int
+	lastLoadLastMax int
+}
+
+func (m *boundedLoaderMock) LoadLast(ctx context.Context, sessionID string, maxMessages int) ([]niro.Message, error) {
+	m.loadLastCalls++
+	m.lastLoadLastMax = maxMessages
+	if m.loadErr != nil {
+		return nil, m.loadErr
+	}
+	h := m.history
+	if maxMessages <= 0 || len(h) <= maxMessages {
+		return append([]niro.Message(nil), h...), nil
+	}
+	start := len(h) - maxMessages
+	out := make([]niro.Message, maxMessages)
+	copy(out, h[start:])
+	return out, nil
+}
+
+// failingSaveMock fails Save the first failCount times, then succeeds.
+type failingSaveMock struct {
+	mockMemory
+	failCount int
+	failErr   error
+}
+
+func (m *failingSaveMock) Save(ctx context.Context, sessionID string, history []niro.Message) error {
+	m.saveCalls++
+	if m.failCount > 0 {
+		m.failCount--
+		return m.failErr
 	}
 	m.history = append([]niro.Message(nil), history...)
 	return nil
@@ -211,6 +252,47 @@ func TestRuntimeRunMemorySaveError(t *testing.T) {
 
 	_, err = rt.Run(ctx, "session-1", "hello")
 	assertErrorContains(t, err, "save failed")
+}
+
+func TestRuntimeMemorySaveRetry(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	// Fail twice then succeed.
+	mem := &failingSaveMock{failCount: 2, failErr: fmt.Errorf("save transient")}
+	rt, err := agent.New(
+		echoProvider("ok"),
+		agent.WithMemory(mem),
+		agent.WithMemoryRetry(3, 1*time.Millisecond),
+	)
+	assertNoError(t, err)
+
+	res, err := rt.Run(ctx, "s1", "hello")
+	assertNoError(t, err)
+	assertEqual(t, res.Text, "ok")
+	assertEqual(t, mem.saveCalls, 3)
+	// State was persisted after successful retry.
+	assertEqual(t, len(mem.history), 2) // user + assistant
+}
+
+func TestRuntimeUsesLoadLastWhenBounded(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	mem := &boundedLoaderMock{}
+	rt, err := agent.New(
+		echoProvider("reply"),
+		agent.WithMemory(mem),
+		agent.WithHistoryPolicy(agent.SlidingWindow(5)),
+	)
+	assertNoError(t, err)
+
+	_, err = rt.Run(ctx, "s1", "hi")
+	assertNoError(t, err)
+
+	assertEqual(t, mem.loadLastCalls, 1)
+	assertEqual(t, mem.lastLoadLastMax, 5)
+	assertEqual(t, mem.loadCalls, 0) // runtime used LoadLast, not Load
 }
 
 func TestRuntimeRunProviderError(t *testing.T) {
@@ -326,6 +408,20 @@ func TestWithComponentApplyError(t *testing.T) {
 	assertErrorContains(t, err, "apply error")
 }
 
+// --- Memory tests ---
+
+func TestStatelessMemory(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	rt, err := agent.New(echoProvider("ok"), agent.WithMemory(agent.StatelessMemory))
+	assertNoError(t, err)
+	_, err = rt.Run(ctx, "s1", "hi")
+	assertNoError(t, err)
+	// Second turn: StatelessMemory returns no history, so request is still just the new user message.
+	_, err = rt.Run(ctx, "s1", "again")
+	assertNoError(t, err)
+}
+
 // --- InMemoryMemory tests ---
 
 func TestInMemoryMemory(t *testing.T) {
@@ -355,6 +451,37 @@ func TestInMemoryMemory(t *testing.T) {
 	assertEqual(t, len(other), 0)
 }
 
+func TestInMemoryMemoryLoadLast(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	mem := agent.NewInMemoryMemory()
+	msgs := []niro.Message{
+		niro.UserText("1"), niro.AssistantText("a"),
+		niro.UserText("2"), niro.AssistantText("b"),
+		niro.UserText("3"), niro.AssistantText("c"),
+	}
+	err := mem.Save(ctx, "s1", msgs)
+	assertNoError(t, err)
+
+	// maxMessages <= 0: full history
+	all, err := mem.LoadLast(ctx, "s1", 0)
+	assertNoError(t, err)
+	assertEqual(t, len(all), 6)
+
+	// last 2 (oldest to newest)
+	two, err := mem.LoadLast(ctx, "s1", 2)
+	assertNoError(t, err)
+	assertEqual(t, len(two), 2)
+	assertEqual(t, two[0].Parts[0].Text, "3")
+	assertEqual(t, two[1].Parts[0].Text, "c")
+
+	// more than stored: return all
+	six, err := mem.LoadLast(ctx, "s1", 10)
+	assertNoError(t, err)
+	assertEqual(t, len(six), 6)
+}
+
 // --- AgentDefinition / decl tests ---
 
 func TestLoadAgentDefinition(t *testing.T) {
@@ -366,7 +493,7 @@ func TestLoadAgentDefinition(t *testing.T) {
 	def := agent.AgentDefinition{
 		Name: "test-agent",
 		Steps: []agent.Step{
-			{Type: "llm", Messages: []string{"hello"}},
+			{Type: "llm", Input: "hello"},
 		},
 	}
 	b, _ := json.Marshal(def)
@@ -417,7 +544,7 @@ func TestOrchestratorLLMStep(t *testing.T) {
 
 	def := &agent.AgentDefinition{
 		Steps: []agent.Step{
-			{Type: "llm", Messages: []string{"hello world"}},
+			{Type: "llm", Input: "hello world"},
 		},
 	}
 
@@ -432,7 +559,7 @@ func TestOrchestratorLLMStepNoRuntime(t *testing.T) {
 
 	o := agent.NewOrchestrator(nil, nil)
 	def := &agent.AgentDefinition{
-		Steps: []agent.Step{{Type: "llm", Messages: []string{"hi"}}},
+		Steps: []agent.Step{{Type: "llm", Input: "hi"}},
 	}
 	_, err := o.RunDefinition(ctx, "s1", def)
 	assertErrorContains(t, err, "no runtime")
@@ -529,7 +656,7 @@ func TestOrchestratorPeerStep(t *testing.T) {
 
 	def := &agent.AgentDefinition{
 		Steps: []agent.Step{
-			{Type: "peer", PeerName: "assistant", Messages: []string{"hello peer"}},
+			{Type: "peer", PeerName: "assistant", Input: "hello peer"},
 		},
 	}
 
@@ -544,26 +671,25 @@ func TestOrchestratorPeerStepNoRuntime(t *testing.T) {
 
 	o := agent.NewOrchestrator(nil, nil)
 	def := &agent.AgentDefinition{
-		Steps: []agent.Step{{Type: "peer", PeerName: "p1", Messages: []string{"hi"}}},
+		Steps: []agent.Step{{Type: "peer", PeerName: "p1", Input: "hi"}},
 	}
 	_, err := o.RunDefinition(ctx, "s1", def)
 	assertErrorContains(t, err, "runtime missing")
 }
 
-func TestOrchestratorSleepStep(t *testing.T) {
+func TestOrchestratorSleepStepRejected(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 
 	rt, _ := agent.New(echoProvider("ok"))
 	o := agent.NewOrchestrator(rt, nil)
 
-	// SleepSeconds=0 → no actual sleep.
+	// "sleep" is not a valid step type; treat as unknown.
 	def := &agent.AgentDefinition{
-		Steps: []agent.Step{{Type: "sleep", SleepSeconds: 0}},
+		Steps: []agent.Step{{Type: "sleep"}},
 	}
-	result, err := o.RunDefinition(ctx, "s1", def)
-	assertNoError(t, err)
-	assertEqual(t, result, "") // no output from sleep step
+	_, err := o.RunDefinition(ctx, "s1", def)
+	assertErrorContains(t, err, "unknown type")
 }
 
 func TestOrchestratorUnknownStep(t *testing.T) {
@@ -740,7 +866,7 @@ func TestOrchestratorLLMStepError(t *testing.T) {
 	o := agent.NewOrchestrator(rt, nil)
 
 	def := &agent.AgentDefinition{
-		Steps: []agent.Step{{Type: "llm", Messages: []string{"hi"}}},
+		Steps: []agent.Step{{Type: "llm", Input: "hi"}},
 	}
 	_, err := o.RunDefinition(ctx, "s1", def)
 	assertErrorContains(t, err, "llm failed")
@@ -755,7 +881,7 @@ func TestOrchestratorPeerStepError(t *testing.T) {
 	o := agent.NewOrchestrator(rt, nil)
 
 	def := &agent.AgentDefinition{
-		Steps: []agent.Step{{Type: "peer", PeerName: "p1", Messages: []string{"hi"}}},
+		Steps: []agent.Step{{Type: "peer", PeerName: "p1", Input: "hi"}},
 	}
 	_, err := o.RunDefinition(ctx, "s1", def)
 	assertErrorContains(t, err, "peer is down")
@@ -1181,7 +1307,7 @@ func TestComponentLifecycle(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Orchestrator: input chaining, OutputVar, ctx sleep, peer panic fix
+// Orchestrator: input chaining (empty Input = previous output), peer
 // ---------------------------------------------------------------------------
 
 func TestOrchestratorInputChaining(t *testing.T) {
@@ -1207,15 +1333,15 @@ func TestOrchestratorInputChaining(t *testing.T) {
 	def := &agent.AgentDefinition{
 		Steps: []agent.Step{
 			{Type: "llm", Input: "hello"},
-			// Second step uses {{.LastText}} from the first step.
-			{Type: "llm", Input: "got: {{.LastText}}"},
+			// Second step has no Input → receives previous step output.
+			{Type: "llm", Input: ""},
 		},
 	}
 
 	result, err := o.RunDefinition(ctx, "s", def)
 	assertNoError(t, err)
-	// First step: echo:hello → second step input: "got: echo:hello" → echo:got: echo:hello
-	assertEqual(t, result, "echo:got: echo:hello")
+	// First step: echo:hello → second step input: "echo:hello" → echo:echo:hello
+	assertEqual(t, result, "echo:echo:hello")
 }
 
 func TestOrchestratorOutputVar(t *testing.T) {
@@ -1228,7 +1354,7 @@ func TestOrchestratorOutputVar(t *testing.T) {
 		if callCount == 1 {
 			return niro.StreamFromSlice([]niro.Frame{niro.TextFrame("step1out")}), nil
 		}
-		// Second call echoes the input (which should contain the var).
+		// Second call echoes the input (empty Input → previous output).
 		text := ""
 		for _, m := range req.Messages {
 			for _, p := range m.Parts {
@@ -1245,16 +1371,16 @@ func TestOrchestratorOutputVar(t *testing.T) {
 	def := &agent.AgentDefinition{
 		Steps: []agent.Step{
 			{Type: "llm", Input: "first", OutputVar: "First"},
-			{Type: "llm", Input: "use {{.First}}"},
+			{Type: "llm", Input: ""}, // receives "step1out"
 		},
 	}
 
 	result, err := o.RunDefinition(ctx, "s", def)
 	assertNoError(t, err)
-	assertEqual(t, result, "use step1out")
+	assertEqual(t, result, "step1out")
 }
 
-func TestOrchestratorPeerStepEmptyMessages(t *testing.T) {
+func TestOrchestratorPeerStepEmptyInput(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 
@@ -1262,35 +1388,15 @@ func TestOrchestratorPeerStepEmptyMessages(t *testing.T) {
 	rt, _ := agent.New(echoProvider("ok"), agent.WithPeer(peer))
 	o := agent.NewOrchestrator(rt, nil)
 
-	// No Messages and no Input — should use lastText (empty string), not panic.
+	// No Input — resolveInput uses lastText (empty for first step).
 	def := &agent.AgentDefinition{
 		Steps: []agent.Step{
-			{Type: "peer", PeerName: "bot"}, // Messages is nil
+			{Type: "peer", PeerName: "bot"},
 		},
 	}
 	result, err := o.RunDefinition(ctx, "s", def)
 	assertNoError(t, err)
 	assertEqual(t, result, "peer ok")
-}
-
-func TestOrchestratorSleepRespectsContext(t *testing.T) {
-	t.Parallel()
-
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel() // already cancelled
-
-	rt, _ := agent.New(echoProvider("ok"))
-	o := agent.NewOrchestrator(rt, nil)
-
-	def := &agent.AgentDefinition{
-		Steps: []agent.Step{
-			{Type: "sleep", SleepSeconds: 60},
-		},
-	}
-	_, err := o.RunDefinition(ctx, "s", def)
-	if err == nil {
-		t.Error("expected context cancellation error")
-	}
 }
 
 func TestOrchestratorContextCancelledBetweenSteps(t *testing.T) {
@@ -1320,7 +1426,7 @@ func TestOrchestratorContextCancelledBetweenSteps(t *testing.T) {
 	assertEqual(t, calls, 1) // second step must not execute
 }
 
-func TestStepInputPriorityOverMessages(t *testing.T) {
+func TestStepInputUsedWhenSet(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 
@@ -1341,8 +1447,7 @@ func TestStepInputPriorityOverMessages(t *testing.T) {
 
 	def := &agent.AgentDefinition{
 		Steps: []agent.Step{
-			// Input takes priority over Messages[0].
-			{Type: "llm", Input: "from-input", Messages: []string{"from-messages"}},
+			{Type: "llm", Input: "from-input"},
 		},
 	}
 

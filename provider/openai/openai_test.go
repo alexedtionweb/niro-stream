@@ -872,6 +872,54 @@ func TestBuildParams_Tools(t *testing.T) {
 	}
 }
 
+func TestBuildParams_Tools_Enum(t *testing.T) {
+	// Verify that tool parameters with enum are passed through to the API (OpenAI accepts JSON Schema enum).
+	var gotTools []any
+	p := newProvider(t, func(r *http.Request) (int, string, string) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		gotTools, _ = body["tools"].([]any)
+		return 200, sseBody(textChunk("id1", "gpt-4o", "ok", "stop")), ""
+	})
+
+	stream, err := p.Generate(context.Background(), &niro.Request{
+		Messages: []niro.Message{niro.UserText("hi")},
+		Tools: []niro.Tool{{
+			Name:        "get_weather",
+			Description: "Get weather",
+			Parameters:  json.RawMessage(`{"type":"object","properties":{"unit":{"type":"string","description":"Temperature unit","enum":["celsius","fahrenheit"]}},"required":["unit"]}`),
+		}},
+	})
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	_, _ = collectText(t, stream)
+	if len(gotTools) != 1 {
+		t.Fatalf("expected 1 tool, got %d", len(gotTools))
+	}
+	tool := gotTools[0].(map[string]any)
+	fn := tool["function"].(map[string]any)
+	params, ok := fn["parameters"].(map[string]any)
+	if !ok {
+		t.Fatalf("function.parameters = %v, expected object", fn["parameters"])
+	}
+	props, ok := params["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("parameters.properties = %v", params["properties"])
+	}
+	unit, ok := props["unit"].(map[string]any)
+	if !ok {
+		t.Fatalf("properties.unit = %v", props["unit"])
+	}
+	enumVal, ok := unit["enum"].([]any)
+	if !ok || len(enumVal) != 2 {
+		t.Errorf("properties.unit.enum = %v, want [celsius, fahrenheit]", unit["enum"])
+	}
+	if unit["description"] != "Temperature unit" {
+		t.Errorf("properties.unit.description = %v", unit["description"])
+	}
+}
+
 func TestBuildParams_Tools_NilParameters(t *testing.T) {
 	var gotTools []any
 	p := newProvider(t, func(r *http.Request) (int, string, string) {

@@ -886,6 +886,42 @@ func TestBuildParams_Tools(t *testing.T) {
 	}
 }
 
+func TestBuildParams_Tools_Enum(t *testing.T) {
+	// Verify that tool parameters with enum are passed through (Claude API supports enum in input_schema).
+	body := captureRequest(t, &niro.Request{
+		Messages: []niro.Message{niro.UserText("hi")},
+		Tools: []niro.Tool{{
+			Name:        "get_weather",
+			Description: "Get weather",
+			Parameters:  json.RawMessage(`{"type":"object","properties":{"unit":{"type":"string","description":"Temperature unit","enum":["celsius","fahrenheit"]}},"required":["unit"]}`),
+		}},
+	})
+	tools, ok := body["tools"].([]any)
+	if !ok || len(tools) == 0 {
+		t.Fatalf("tools = %v, expected 1 tool", body["tools"])
+	}
+	tool := tools[0].(map[string]any)
+	schema, ok := tool["input_schema"].(map[string]any)
+	if !ok {
+		t.Fatalf("input_schema = %v", tool["input_schema"])
+	}
+	props, _ := schema["properties"].(map[string]any)
+	if props == nil {
+		t.Fatal("input_schema.properties missing")
+	}
+	unit, ok := props["unit"].(map[string]any)
+	if !ok {
+		t.Fatalf("properties.unit = %v", props["unit"])
+	}
+	enumVal, ok := unit["enum"].([]any)
+	if !ok || len(enumVal) != 2 {
+		t.Errorf("properties.unit.enum = %v, want [celsius, fahrenheit]", unit["enum"])
+	}
+	if unit["description"] != "Temperature unit" {
+		t.Errorf("properties.unit.description = %v", unit["description"])
+	}
+}
+
 func TestBuildParams_Tools_Required(t *testing.T) {
 	body := captureRequest(t, &niro.Request{
 		Messages: []niro.Message{niro.UserText("hi")},

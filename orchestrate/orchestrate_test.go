@@ -3,7 +3,6 @@ package orchestrate_test
 import (
 	"context"
 	"fmt"
-	"strings"
 	"testing"
 	"time"
 
@@ -269,8 +268,3 @@ func assertTrue(t *testing.T, v bool) {
 	}
 }
 
-func strContains(s, sub string) bool {
-	return strings.Contains(s, sub)
-}
-
-var _ = strContains // avoid unused

@@ -444,7 +444,7 @@ func (p *Provider) buildInput(
 			for _, p := range msg.Parts {
 				if p.Kind == niro.KindText {
 					systemBlocks = append(systemBlocks, &types.SystemContentBlockMemberText{
-						Value: p.Text,
+						Value: ensureNonEmptyText(p.Text),
 					})
 				}
 			}
@@ -554,7 +554,7 @@ func convertMessage(msg niro.Message) types.Message {
 		switch p.Kind {
 		case niro.KindText:
 			blocks = append(blocks, &types.ContentBlockMemberText{
-				Value: p.Text,
+				Value: ensureNonEmptyText(p.Text),
 			})
 
 		case niro.KindImage:
@@ -595,7 +595,7 @@ func convertMessage(msg niro.Message) types.Message {
 						Status:    status,
 						Content: []types.ToolResultContentBlock{
 							&types.ToolResultContentBlockMemberText{
-								Value: p.Result.Content,
+								Value: ensureNonEmptyText(p.Result.Content),
 							},
 						},
 					},
@@ -605,6 +605,14 @@ func convertMessage(msg niro.Message) types.Message {
 	}
 
 	return types.Message{Role: role, Content: blocks}
+}
+
+// ensureNonEmptyText returns s, or " " if s is empty, for API compatibility (e.g. handoff with no classifier text).
+func ensureNonEmptyText(s string) string {
+	if s == "" {
+		return " "
+	}
+	return s
 }
 
 func imageFormat(mime string) types.ImageFormat {

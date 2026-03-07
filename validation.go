@@ -205,47 +205,47 @@ func (o *Options) Validate() error {
 
 	// Validate MaxTokens
 	if o.MaxTokens < 0 {
-		return fmt.Errorf("MaxTokens must be >= 0")
+		return fmt.Errorf("maxTokens must be >= 0")
 	}
 
 	// Validate Temperature
 	if o.Temperature != nil {
 		if *o.Temperature < 0 || *o.Temperature > 2.0 {
-			return fmt.Errorf("Temperature must be in range [0, 2.0], got %v", *o.Temperature)
+			return fmt.Errorf("temperature must be in range [0, 2.0], got %v", *o.Temperature)
 		}
 	}
 
 	// Validate TopP
 	if o.TopP != nil {
 		if *o.TopP < 0 || *o.TopP > 1.0 {
-			return fmt.Errorf("TopP must be in range [0, 1.0], got %v", *o.TopP)
+			return fmt.Errorf("topP must be in range [0, 1.0], got %v", *o.TopP)
 		}
 	}
 
 	// Validate TopK
 	if o.TopK != nil {
 		if *o.TopK < 0 {
-			return fmt.Errorf("TopK must be >= 0, got %v", *o.TopK)
+			return fmt.Errorf("topK must be >= 0, got %v", *o.TopK)
 		}
 	}
 
 	// Validate FrequencyPenalty
 	if o.FrequencyPenalty != nil {
 		if *o.FrequencyPenalty < -2.0 || *o.FrequencyPenalty > 2.0 {
-			return fmt.Errorf("FrequencyPenalty must be in range [-2.0, 2.0], got %v", *o.FrequencyPenalty)
+			return fmt.Errorf("frequencyPenalty must be in range [-2.0, 2.0], got %v", *o.FrequencyPenalty)
 		}
 	}
 
 	// Validate PresencePenalty
 	if o.PresencePenalty != nil {
 		if *o.PresencePenalty < -2.0 || *o.PresencePenalty > 2.0 {
-			return fmt.Errorf("PresencePenalty must be in range [-2.0, 2.0], got %v", *o.PresencePenalty)
+			return fmt.Errorf("presencePenalty must be in range [-2.0, 2.0], got %v", *o.PresencePenalty)
 		}
 	}
 
 	// Validate cache options
 	if err := validateCacheOptions(o.Cache); err != nil {
-		return fmt.Errorf("Cache: %w", err)
+		return fmt.Errorf("cache: %w", err)
 	}
 
 	return nil

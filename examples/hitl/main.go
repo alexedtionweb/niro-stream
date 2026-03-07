@@ -1,20 +1,3 @@
-// Command hitl demonstrates Human-in-the-Loop (HITL) tool approval.
-//
-// The LLM is asked to perform a sensitive file system operation.
-// Before any tool runs, an approval gate blocks and prompts the operator
-// at the terminal. The operator types "y" to allow or "n" to deny.
-//
-// The denied decision is fed back to the model as an error result so it
-// can explain to the user why the action was blocked — the whole
-// conversation is preserved and continues gracefully.
-//
-// Select a provider with the PROVIDER env var (default: openai):
-//
-//	PROVIDER=openai    OPENAI_API_KEY=sk-...        go run ./hitl
-//	PROVIDER=anthropic ANTHROPIC_API_KEY=sk-ant-... go run ./hitl
-//	PROVIDER=gemini    GEMINI_API_KEY=...            go run ./hitl
-//	PROVIDER=bedrock                                 go run ./hitl  # uses ~/.aws
-//	PROVIDER=ollama    MODEL=llama3.2                go run ./hitl  # local Ollama
 package main
 
 import (
@@ -37,7 +20,9 @@ import (
 	"github.com/aws/aws-sdk-go-v2/config"
 )
 
-// --- Tool argument types ---
+// ─────────────────────────────────────────────────────────────
+// Tool argument structs (still used internally)
+// ─────────────────────────────────────────────────────────────
 
 type deleteArgs struct {
 	Path      string `json:"path"`
@@ -48,15 +33,10 @@ type readArgs struct {
 	Path string `json:"path"`
 }
 
-// --- Human approval gate ---
+// ─────────────────────────────────────────────────────────────
+// HITL Terminal Approver
+// ─────────────────────────────────────────────────────────────
 
-// TerminalApprover prompts the operator at the terminal before every tool
-// call. It blocks until the operator answers or the context is canceled.
-//
-// In production you would replace this with a channel-based approver that
-// sends an ApprovalRequest to a queue (HTTP endpoint, Slack bot, audit UI,
-// etc.) and waits for the response, so the approval can happen asynchronously
-// without blocking a goroutine indefinitely.
 type TerminalApprover struct {
 	reader *bufio.Reader
 }
@@ -66,7 +46,6 @@ func NewTerminalApprover() *TerminalApprover {
 }
 
 func (ta *TerminalApprover) Approve(ctx context.Context, call niro.ToolCall) (tools.ToolApproval, error) {
-	// Pretty-print the args so the operator can read them.
 	var pretty strings.Builder
 	if len(call.Args) > 0 {
 		var v any
@@ -87,7 +66,6 @@ func (ta *TerminalApprover) Approve(ctx context.Context, call niro.ToolCall) (to
 	fmt.Printf("└───────────────────────────────────────────────────────\n")
 	fmt.Printf("  Approve? [y/N] ")
 
-	// Read decision with context awareness.
 	type result struct {
 		line string
 		err  error
@@ -117,15 +95,17 @@ func (ta *TerminalApprover) Approve(ctx context.Context, call niro.ToolCall) (to
 	}
 }
 
-// --- Simulated tool handlers ---
+// ─────────────────────────────────────────────────────────────
+// Tool handlers
+// ─────────────────────────────────────────────────────────────
 
 func handleDelete(_ context.Context, raw json.RawMessage) (any, error) {
 	var args deleteArgs
 	if err := json.Unmarshal(raw, &args); err != nil {
 		return nil, err
 	}
-	// Simulate the operation (never actually deletes in this demo).
 	time.Sleep(30 * time.Millisecond)
+
 	return map[string]any{
 		"deleted":   args.Path,
 		"recursive": args.Recursive,
@@ -139,12 +119,17 @@ func handleRead(_ context.Context, raw json.RawMessage) (any, error) {
 		return nil, err
 	}
 	time.Sleep(10 * time.Millisecond)
+
 	return map[string]any{
 		"path":    args.Path,
 		"content": "# Config\nversion: 2\nlog_level: info\n",
 		"size":    38,
 	}, nil
 }
+
+// ─────────────────────────────────────────────────────────────
+// MAIN
+// ─────────────────────────────────────────────────────────────
 
 func main() {
 	ctx := context.Background()
@@ -157,55 +142,59 @@ func main() {
 
 	llm := mustProvider(ctx)
 
-	// Build toolset with HITL approval gate.
-	// WithApprover stores the approver atomically — zero mutex overhead when
-	// evaluating whether an approver is set on the hot path.
 	ts := tools.NewToolset().WithApprover(NewTerminalApprover())
+
+	// ─────────────────────────────────────────────
+	// FIX: Use explicit JSON Schema (Gemini-safe)
+	// ─────────────────────────────────────────────
 
 	deleteDef, err := tools.NewToolDefinitionAny(
 		"delete_file",
 		"Permanently delete a file or directory from the file system.",
-		deleteArgs{},
+		json.RawMessage(`{
+			"type": "object",
+			"properties": {
+				"path": { "type": "string", "description": "File path to delete" },
+				"recursive": { "type": "boolean", "description": "Delete directories recursively" }
+			},
+			"required": ["path"]
+		}`),
 		handleDelete,
 	)
 	if err != nil {
-		slog.Error("define tool", "err", err)
+		slog.Error("define delete tool", "err", err)
 		os.Exit(1)
 	}
 
 	readDef, err := tools.NewToolDefinitionAny(
 		"read_file",
 		"Read the contents of a file from the file system.",
-		readArgs{},
+		json.RawMessage(`{
+			"type": "object",
+			"properties": {
+				"path": { "type": "string", "description": "File path to read" }
+			},
+			"required": ["path"]
+		}`),
 		handleRead,
 	)
 	if err != nil {
-		slog.Error("define tool", "err", err)
+		slog.Error("define read tool", "err", err)
 		os.Exit(1)
 	}
 
 	ts.MustRegister(deleteDef).MustRegister(readDef)
 
-	// The model will attempt to read the config and then delete a log file.
-	// The read should be approved; the delete should be denied — showing how
-	// the model handles a partial approval scenario.
 	userMsg := "Please read /etc/app/config.yaml and then delete /var/log/app/error.log."
 
-	fmt.Printf("User: %s\n", userMsg)
-	fmt.Println()
-	fmt.Println("(The terminal will prompt for approval before each tool call.)")
-	fmt.Println()
+	fmt.Printf("User: %s\n\n", userMsg)
+	fmt.Println("(The terminal will prompt for approval before each tool call.)\n")
 
 	loop := tools.NewToolLoopWithOptions(ts, tools.ToolStreamOptions{
 		MaxRounds:       6,
-		Parallel:        false, // serial so prompts appear one at a time
-		EmitToolResults: false, // keep output clean; only final text shown
+		Parallel:        false,
+		EmitToolResults: false,
 		ToolTimeout:     30 * time.Second,
-		StreamBuffer:    16,
-		// Approver on ToolStreamOptions is the loop-level gate.
-		// Here we use the Toolset-level gate (WithApprover above) instead,
-		// so the approval policy travels with the toolset regardless of which
-		// loop or provider wraps it.
 	})
 
 	stream, err := loop.GenerateWithTools(ctx, llm, &niro.Request{
@@ -232,14 +221,13 @@ func main() {
 	}
 
 	u := stream.Usage()
-	slog.Info("done",
-		"in", u.InputTokens,
-		"out", u.OutputTokens,
-		"total", u.TotalTokens,
-	)
+	slog.Info("done", "total_tokens", u.TotalTokens)
 }
 
-// mustProvider returns a Provider for the selected PROVIDER.
+// ─────────────────────────────────────────────────────────────
+// Provider factory (unchanged)
+// ─────────────────────────────────────────────────────────────
+
 func mustProvider(ctx context.Context) niro.Provider {
 	switch strings.ToLower(os.Getenv("PROVIDER")) {
 	case "", "openai":
@@ -280,9 +268,8 @@ func mustProvider(ctx context.Context) niro.Provider {
 		return compat.New(baseURL, "", compat.WithModel(model))
 
 	default:
-		slog.Error("unknown PROVIDER", "provider", os.Getenv("PROVIDER"),
-			"valid", "openai|anthropic|gemini|bedrock|ollama")
+		slog.Error("unknown PROVIDER", "provider", os.Getenv("PROVIDER"))
 		os.Exit(1)
-		panic("unreachable")
+		return nil
 	}
 }

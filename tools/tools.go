@@ -3,10 +3,22 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"time"
 
 	"github.com/alexedtionweb/niro-stream"
 )
+
+// HandoffSignal is returned by a tool handler to signal handoff to another agent or workflow.
+// Handoff is a tool like any other: the model calls the handoff tool with a target; the handler
+// returns HandoffSignal{Target: "name"}; the tool loop emits a KindCustom handoff frame and
+// exits without adding a tool result. The runner (e.g. DSL RunHandoff) then runs the target.
+// Use this instead of encoding handoff in result content.
+type HandoffSignal struct {
+	Target string // Agent or workflow name to hand off to
+}
+
+func (HandoffSignal) Error() string { return "handoff" }
 
 // ToolExecutor defines how to execute a tool call.
 type ToolExecutor interface {
@@ -205,6 +217,21 @@ func (tl *ToolLoop) run(ctx context.Context, provider niro.Provider, req *niro.R
 			results = tl.executeTools(ctx, toolCalls)
 		}
 
+		// If any tool returned a handoff signal (HandoffTarget set), emit a KindCustom
+		// handoff frame and exit the loop without adding tool results.
+		for i := range results {
+			tr := results[i]
+			if tr.HandoffTarget != "" {
+				if err := out.Emit(ctx, niro.Frame{
+					Kind:   niro.KindCustom,
+					Custom: &niro.ExperimentalFrame{Type: "handoff", Data: tr.HandoffTarget},
+				}); err != nil {
+					return err
+				}
+				return nil
+			}
+		}
+
 		// Group all tool results into a single RoleTool message.
 		// Anthropic requires every result for a single assistant turn to appear
 		// in one user-turn message. OpenAI and Bedrock providers split
@@ -292,6 +319,10 @@ func (tl *ToolLoop) execOne(ctx context.Context, call niro.ToolCall) niro.ToolRe
 
 	content, err := tl.executor.Execute(execCtx, call.Name, call.Args)
 	if err != nil {
+		var h HandoffSignal
+		if errors.As(err, &h) {
+			return niro.ToolResult{CallID: call.ID, HandoffTarget: h.Target}
+		}
 		return niro.ToolResult{CallID: call.ID, Content: err.Error(), IsError: true}
 	}
 	return niro.ToolResult{CallID: call.ID, Content: content}

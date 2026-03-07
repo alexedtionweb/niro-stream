@@ -92,6 +92,7 @@ Niro uses a **plugin model**: the core (`github.com/alexedtionweb/niro-stream`) 
 | AWS Bedrock       | `github.com/alexedtionweb/niro-stream/provider/bedrock`   | `go get github.com/alexedtionweb/niro-stream/provider/bedrock`   | [aws-sdk-go-v2](https://github.com/aws/aws-sdk-go-v2)                         |
 | OpenAI-compatible | `github.com/alexedtionweb/niro-stream/provider/compat`    | included in core (zero deps)                                     | stdlib HTTP + SSE                                                             |
 | Agent plugin      | `github.com/alexedtionweb/niro-stream/plugin/agent`       | `go get github.com/alexedtionweb/niro-stream/plugin/agent`       | optional component-based agent runtime                                        |
+| Agent DSL plugin  | `github.com/alexedtionweb/niro-stream/plugin/dsl`          | `go get github.com/alexedtionweb/niro-stream/plugin/dsl`         | parse/validate/compile agent + workflow JSON; Runner with RunContext, Fan/Race/Sequence |
 
 ```go
 // OpenAI — go get github.com/alexedtionweb/niro-stream/provider/openai

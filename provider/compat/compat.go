@@ -261,12 +261,12 @@ func convertMessage(msg niro.Message) chatMessage {
 	if msg.Role == niro.RoleTool && len(msg.Parts) > 0 && msg.Parts[0].Result != nil {
 		r := msg.Parts[0].Result
 		cm.ToolCallID = r.CallID
-		cm.Content = r.Content
+		cm.Content = ensureNonEmptyText(r.Content)
 		return cm
 	}
 
 	if len(msg.Parts) == 1 && msg.Parts[0].Kind == niro.KindText {
-		cm.Content = msg.Parts[0].Text
+		cm.Content = ensureNonEmptyText(msg.Parts[0].Text)
 		return cm
 	}
 
@@ -274,7 +274,7 @@ func convertMessage(msg niro.Message) chatMessage {
 	for _, p := range msg.Parts {
 		switch p.Kind {
 		case niro.KindText:
-			parts = append(parts, chatContent{Type: "text", Text: p.Text})
+			parts = append(parts, chatContent{Type: "text", Text: ensureNonEmptyText(p.Text)})
 		case niro.KindImage:
 			url := p.URL
 			if url == "" && len(p.Data) > 0 {
@@ -309,6 +309,14 @@ func convertMessage(msg niro.Message) chatMessage {
 	}
 
 	return cm
+}
+
+// ensureNonEmptyText returns s, or " " if s is empty, for API compatibility (e.g. handoff with no classifier text).
+func ensureNonEmptyText(s string) string {
+	if s == "" {
+		return " "
+	}
+	return s
 }
 
 func audioFormat(mime string) string {

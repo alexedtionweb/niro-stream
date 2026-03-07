@@ -279,7 +279,7 @@ func (p *Provider) buildParams(model string, req *niro.Request, cacheHint niro.C
 			for _, part := range msg.Parts {
 				if part.Kind == niro.KindText {
 					params.System = append(params.System, ant.TextBlockParam{
-						Text: part.Text,
+						Text: ensureNonEmptyText(part.Text),
 					})
 				}
 			}
@@ -355,7 +355,7 @@ func convertMessage(msg niro.Message) ant.MessageParam {
 		for _, p := range msg.Parts {
 			switch p.Kind {
 			case niro.KindText:
-				blocks = append(blocks, ant.NewTextBlock(p.Text))
+				blocks = append(blocks, ant.NewTextBlock(ensureNonEmptyText(p.Text)))
 			case niro.KindImage:
 				if len(p.Data) > 0 {
 					b64 := base64.StdEncoding.EncodeToString(p.Data)
@@ -370,7 +370,7 @@ func convertMessage(msg niro.Message) ant.MessageParam {
 		for _, p := range msg.Parts {
 			switch p.Kind {
 			case niro.KindText:
-				blocks = append(blocks, ant.NewTextBlock(p.Text))
+				blocks = append(blocks, ant.NewTextBlock(ensureNonEmptyText(p.Text)))
 			case niro.KindToolCall:
 				if p.Tool != nil {
 					var input any
@@ -396,8 +396,16 @@ func convertMessage(msg niro.Message) ant.MessageParam {
 		return ant.NewUserMessage(blocks...)
 
 	default:
-		return ant.NewUserMessage(ant.NewTextBlock(extractText(msg)))
+		return ant.NewUserMessage(ant.NewTextBlock(ensureNonEmptyText(extractText(msg))))
 	}
+}
+
+// ensureNonEmptyText returns s, or " " if s is empty, for API compatibility (e.g. handoff with no classifier text).
+func ensureNonEmptyText(s string) string {
+	if s == "" {
+		return " "
+	}
+	return s
 }
 
 func extractText(msg niro.Message) string {

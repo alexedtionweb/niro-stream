@@ -50,3 +50,8 @@ func assertTrue(t *testing.T, v bool) {
 		t.Error("expected true")
 	}
 }
+
+// TestAssertHelpers exercises assertNil so it is not reported as unused.
+func TestAssertHelpers(t *testing.T) {
+	assertNil(t, nil)
+}

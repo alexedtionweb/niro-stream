@@ -963,6 +963,61 @@ func TestGenerate_ResponseFormat_JSONSchema(t *testing.T) {
 // buildConfig: ToolChoice variants
 // ---------------------------------------------------------------------------
 
+func TestGenerate_Tools_Enum(t *testing.T) {
+	// Verify that tool parameters with enum are passed through (Gemini accepts JSON Schema enum).
+	var capturedBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&capturedBody)
+		sseResponse(w, geminiFinal("ok", "STOP", 1, 1))
+	}))
+	defer srv.Close()
+
+	p := newTestProvider(t, srv.URL)
+	stream, err := p.Generate(context.Background(), &niro.Request{
+		Messages: []niro.Message{niro.UserText("hi")},
+		Tools: []niro.Tool{{
+			Name:        "get_weather",
+			Description: "Get weather",
+			Parameters:  json.RawMessage(`{"type":"object","properties":{"unit":{"type":"string","description":"Temperature unit","enum":["celsius","fahrenheit"]}},"required":["unit"]}`),
+		}},
+	})
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	for stream.Next(context.Background()) {
+	}
+
+	toolsArr, _ := capturedBody["tools"].([]any)
+	if len(toolsArr) == 0 {
+		t.Fatalf("tools = %v, expected 1 tool", capturedBody["tools"])
+	}
+	tool, _ := toolsArr[0].(map[string]any)
+	fdArr, _ := tool["functionDeclarations"].([]any)
+	if len(fdArr) == 0 {
+		t.Fatalf("functionDeclarations = %v", tool["functionDeclarations"])
+	}
+	fd, _ := fdArr[0].(map[string]any)
+	params, _ := fd["parameters"].(map[string]any)
+	if params == nil {
+		t.Fatalf("parameters = %v", fd["parameters"])
+	}
+	props, _ := params["properties"].(map[string]any)
+	if props == nil {
+		t.Fatalf("parameters.properties = %v", params["properties"])
+	}
+	unit, _ := props["unit"].(map[string]any)
+	if unit == nil {
+		t.Fatalf("properties.unit = %v", props["unit"])
+	}
+	enumVal, ok := unit["enum"].([]any)
+	if !ok || len(enumVal) != 2 {
+		t.Errorf("properties.unit.enum = %v, want [celsius, fahrenheit]", unit["enum"])
+	}
+	if unit["description"] != "Temperature unit" {
+		t.Errorf("properties.unit.description = %v", unit["description"])
+	}
+}
+
 func TestGenerate_ToolChoice_None(t *testing.T) {
 	var capturedBody map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1131,6 +1186,46 @@ func TestGenerate_AudioPart(t *testing.T) {
 	}
 	if !hasInlineData {
 		t.Error("expected inlineData part for audio")
+	}
+}
+
+// TestGenerate_EmptyAssistantText ensures we never send a Part with empty text,
+// which Gemini rejects (required oneof field 'data' must have one initialized field).
+// Handoff flows often pass history + AssistantText("") when the classifier only emitted a tool call.
+func TestGenerate_EmptyAssistantText(t *testing.T) {
+	var capturedBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&capturedBody)
+		sseResponse(w, geminiFinal("ok", "STOP", 2, 2))
+	}))
+	defer srv.Close()
+
+	p := newTestProvider(t, srv.URL)
+	stream, err := p.Generate(context.Background(), &niro.Request{
+		Messages: []niro.Message{
+			niro.UserText("help?"),
+			niro.AssistantText(""), // empty classifier reply before handoff
+		},
+	})
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	for stream.Next(context.Background()) {
+	}
+	if err := stream.Err(); err != nil {
+		t.Fatalf("stream: %v", err)
+	}
+
+	contents, _ := capturedBody["contents"].([]any)
+	for i, c := range contents {
+		cm, _ := c.(map[string]any)
+		parts, _ := cm["parts"].([]any)
+		for j, part := range parts {
+			pm, _ := part.(map[string]any)
+			if text, ok := pm["text"].(string); ok && text == "" {
+				t.Errorf("contents[%d].parts[%d] has empty text (Gemini rejects this); use non-empty placeholder", i, j)
+			}
+		}
 	}
 }
 

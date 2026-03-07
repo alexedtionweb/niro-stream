@@ -6,6 +6,7 @@ toolchain go1.24.2
 
 require (
 	github.com/alexedtionweb/niro-stream v0.0.0
+	github.com/alexedtionweb/niro-stream/plugin/dsl v0.0.0
 	github.com/alexedtionweb/niro-stream/provider/anthropic v0.0.0
 	github.com/alexedtionweb/niro-stream/provider/bedrock v0.0.0-00010101000000-000000000000
 	github.com/alexedtionweb/niro-stream/provider/elevenlabs v0.0.0
@@ -34,6 +35,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/ssooidc v1.26.4 // indirect
 	github.com/aws/aws-sdk-go-v2/service/sts v1.30.3 // indirect
 	github.com/aws/smithy-go v1.24.1 // indirect
+	github.com/expr-lang/expr v1.16.1 // indirect
 	github.com/golang/groupcache v0.0.0-20210331224755-41bb18bfe9da // indirect
 	github.com/google/go-cmp v0.6.0 // indirect
 	github.com/google/s2a-go v0.1.8 // indirect
@@ -41,6 +43,7 @@ require (
 	github.com/googleapis/enterprise-certificate-proxy v0.3.4 // indirect
 	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/openai/openai-go v0.1.0-beta.10 // indirect
+	github.com/theory/jsonpath v0.11.0 // indirect
 	github.com/tidwall/gjson v1.18.0 // indirect
 	github.com/tidwall/match v1.1.1 // indirect
 	github.com/tidwall/pretty v1.2.1 // indirect
@@ -59,6 +62,7 @@ require (
 
 replace (
 	github.com/alexedtionweb/niro-stream => ..
+	github.com/alexedtionweb/niro-stream/plugin/dsl => ../plugin/dsl
 	github.com/alexedtionweb/niro-stream/provider/anthropic => ../provider/anthropic
 	github.com/alexedtionweb/niro-stream/provider/bedrock => ../provider/bedrock
 	github.com/alexedtionweb/niro-stream/provider/elevenlabs => ../provider/elevenlabs

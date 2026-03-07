@@ -622,14 +622,18 @@ func convertToContent(msg niro.Message) *genai.Content {
 }
 
 // convertParts converts message parts to []*genai.Part.
-// An empty text part is added when the converted list would otherwise be empty
-// to satisfy the SDK requirement of at least one part per Content.
+// Gemini requires each Part to have one of the oneof "data" fields initialized;
+// empty string is treated as unset, so we use a single space when text would be empty.
 func convertParts(msg niro.Message) []*genai.Part {
 	var parts []*genai.Part
 	for _, p := range msg.Parts {
 		switch p.Kind {
 		case niro.KindText:
-			parts = append(parts, &genai.Part{Text: p.Text})
+			text := p.Text
+			if text == "" {
+				text = " "
+			}
+			parts = append(parts, &genai.Part{Text: text})
 
 		case niro.KindImage, niro.KindAudio, niro.KindVideo:
 			if len(p.Data) > 0 {
@@ -675,7 +679,7 @@ func convertParts(msg niro.Message) []*genai.Part {
 		}
 	}
 	if len(parts) == 0 {
-		parts = append(parts, &genai.Part{Text: ""})
+		parts = append(parts, &genai.Part{Text: " "})
 	}
 	return parts
 }

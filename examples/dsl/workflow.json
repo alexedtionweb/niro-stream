@@ -1,0 +1,15 @@
+{
+  "workflows": {
+    "chat": {
+      "description": "Classifier routes to address_agent or general_agent via handoff",
+      "type": "sequence",
+      "agent": "classifier"
+    },
+    "debate": {
+      "description": "Two LLMs (optimist + skeptic) answer in parallel, then synthesizer concludes",
+      "type": "fan_then",
+      "agents": ["optimist_agent", "skeptic_agent"],
+      "then_agent": "synthesizer_agent"
+    }
+  }
+}

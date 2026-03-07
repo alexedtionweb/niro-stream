@@ -98,7 +98,7 @@ func TestRequestValidation(t *testing.T) {
 		}
 		err := req.Validate()
 		assertTrue(t, err != nil)
-		assertTrue(t, strings.Contains(err.Message, "Temperature"))
+		assertTrue(t, strings.Contains(err.Message, "temperature"))
 	})
 
 	t.Run("InvalidMessage", func(t *testing.T) {
@@ -222,6 +222,17 @@ func TestToolValidation(t *testing.T) {
 			Name:        "weather",
 			Description: "Get weather",
 			Parameters:  json.RawMessage(`{"type":"object"}`),
+		}
+		err := tool.Validate()
+		assertNil(t, err)
+	})
+
+	t.Run("ValidToolWithEnum", func(t *testing.T) {
+		// Parameters with enum (JSON Schema) must be accepted and passed through to providers.
+		tool := niro.Tool{
+			Name:        "get_weather",
+			Description: "Get weather",
+			Parameters:  json.RawMessage(`{"type":"object","properties":{"unit":{"type":"string","description":"Temperature unit","enum":["celsius","fahrenheit"]}},"required":["unit"]}`),
 		}
 		err := tool.Validate()
 		assertNil(t, err)
@@ -418,6 +429,20 @@ func TestRequestWithToolValidation(t *testing.T) {
 		}
 		err := req.Validate()
 		assertNotNil(t, err)
+	})
+
+	t.Run("RequestWithToolEnum", func(t *testing.T) {
+		req := &niro.Request{
+			Messages: []niro.Message{niro.UserText("hi")},
+			Tools: []niro.Tool{{
+				Name:        "get_weather",
+				Description: "Get weather",
+				Parameters:  json.RawMessage(`{"type":"object","properties":{"unit":{"type":"string","enum":["celsius","fahrenheit"]}},"required":["unit"]}`),
+			}},
+			ToolChoice: niro.ToolChoiceAuto,
+		}
+		err := req.Validate()
+		assertNil(t, err)
 	})
 
 	t.Run("InvalidTool", func(t *testing.T) {

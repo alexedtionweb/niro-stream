@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+
+	"github.com/alexedtionweb/niro-stream"
 )
 
 // AgentDefinition describes an agent declaratively.
@@ -15,20 +17,14 @@ type AgentDefinition struct {
 
 // Step represents a single orchestration step.
 type Step struct {
-	// Type: "llm" | "tool" | "peer" | "sleep"
+	// Type: "llm" | "tool" | "peer"
 	Type string `json:"type"`
 
-	// Input is the explicit input for this step. Takes priority over Messages[0].
-	// Supports variable substitution: {{.LastText}}, {{.VarName}}.
-	// If both Input and Messages are empty, the previous step's output is used.
+	// Input is the step input. If empty, the previous step's output is used.
 	Input string `json:"input,omitempty"`
 
-	// OutputVar captures this step's output into a named variable.
-	// Subsequent steps can reference it via {{.VarName}} in their Input.
+	// OutputVar optionally names this step's output (stored for reference; not used in input resolution).
 	OutputVar string `json:"output_var,omitempty"`
-
-	// LLM step fields
-	Messages []string `json:"messages,omitempty"`
 
 	// Tool step fields
 	ToolName string          `json:"tool_name,omitempty"`
@@ -36,9 +32,6 @@ type Step struct {
 
 	// Peer step fields
 	PeerName string `json:"peer_name,omitempty"`
-
-	// Sleep (seconds)
-	SleepSeconds int `json:"sleep_seconds,omitempty"`
 }
 
 // LoadAgentDefinition loads a JSON agent definition from disk.
@@ -48,7 +41,7 @@ func LoadAgentDefinition(path string) (*AgentDefinition, error) {
 		return nil, fmt.Errorf("load agent def: %w", err)
 	}
 	var d AgentDefinition
-	if err := json.Unmarshal(b, &d); err != nil {
+	if err := niro.JSONUnmarshal(b, &d); err != nil {
 		return nil, fmt.Errorf("parse agent def: %w", err)
 	}
 	return &d, nil

@@ -365,19 +365,19 @@ func convertMessages(msg niro.Message) []oai.ChatCompletionMessageParamUnion {
 func convertMessage(msg niro.Message) oai.ChatCompletionMessageParamUnion {
 	switch msg.Role {
 	case niro.RoleSystem:
-		return oai.SystemMessage(extractText(msg))
+		return oai.SystemMessage(ensureNonEmptyText(extractText(msg)))
 
 	case niro.RoleUser:
 		// Single text part — use simple constructor
 		if len(msg.Parts) == 1 && msg.Parts[0].Kind == niro.KindText {
-			return oai.UserMessage(msg.Parts[0].Text)
+			return oai.UserMessage(ensureNonEmptyText(msg.Parts[0].Text))
 		}
 		// Multimodal — build content parts
 		var parts []oai.ChatCompletionContentPartUnionParam
 		for _, p := range msg.Parts {
 			switch p.Kind {
 			case niro.KindText:
-				parts = append(parts, oai.TextContentPart(p.Text))
+				parts = append(parts, oai.TextContentPart(ensureNonEmptyText(p.Text)))
 			case niro.KindImage:
 				url := p.URL
 				if url == "" && len(p.Data) > 0 {
@@ -391,7 +391,7 @@ func convertMessage(msg niro.Message) oai.ChatCompletionMessageParamUnion {
 		return oai.UserMessage(parts)
 
 	case niro.RoleAssistant:
-		text := extractText(msg)
+		text := ensureNonEmptyText(extractText(msg))
 		m := oai.AssistantMessage(text)
 		// Attach tool calls if present
 		if m.OfAssistant != nil {
@@ -413,12 +413,12 @@ func convertMessage(msg niro.Message) oai.ChatCompletionMessageParamUnion {
 	case niro.RoleTool:
 		if len(msg.Parts) > 0 && msg.Parts[0].Result != nil {
 			r := msg.Parts[0].Result
-			return oai.ToolMessage(r.Content, r.CallID)
+			return oai.ToolMessage(ensureNonEmptyText(r.Content), r.CallID)
 		}
-		return oai.ToolMessage(extractText(msg), "")
+		return oai.ToolMessage(ensureNonEmptyText(extractText(msg)), "")
 
 	default:
-		return oai.UserMessage(extractText(msg))
+		return oai.UserMessage(ensureNonEmptyText(extractText(msg)))
 	}
 }
 
@@ -429,6 +429,14 @@ func extractText(msg niro.Message) string {
 		}
 	}
 	return ""
+}
+
+// ensureNonEmptyText returns s, or " " if s is empty, so APIs that reject empty content (e.g. handoff with no classifier text) stay compatible.
+func ensureNonEmptyText(s string) string {
+	if s == "" {
+		return " "
+	}
+	return s
 }
 
 func dataURI(data []byte, mime string) string {

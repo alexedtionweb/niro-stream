@@ -90,6 +90,13 @@ func JSONMarshal(v any) ([]byte, error) { return JSON().Marshal(v) }
 // JSONUnmarshal unmarshals data into v using the configured JSON library.
 func JSONUnmarshal(data []byte, v any) error { return JSON().Unmarshal(data, v) }
 
+// UnmarshalTo unmarshals data into a new T and returns it. Use when the target type is known.
+func UnmarshalTo[T any](data []byte) (T, error) {
+	var v T
+	err := JSON().Unmarshal(data, &v)
+	return v, err
+}
+
 // JSONValid reports whether data is valid JSON using the configured library.
 func JSONValid(data []byte) bool { return JSON().Valid(data) }
 

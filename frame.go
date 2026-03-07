@@ -178,9 +178,10 @@ type ToolCall struct {
 
 // ToolResult represents the outcome of a tool invocation.
 type ToolResult struct {
-	CallID  string // Matches ToolCall.ID
-	Content string // Result content (may be JSON or plain text)
-	IsError bool   // Whether this result represents an error
+	CallID        string // Matches ToolCall.ID
+	Content       string // Result content (may be JSON or plain text)
+	IsError       bool   // Whether this result represents an error
+	HandoffTarget string // If non-empty, signals handoff to this agent/workflow (do not add to conversation)
 }
 
 // Tool defines a tool that can be provided to an LLM.

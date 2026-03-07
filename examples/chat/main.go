@@ -147,7 +147,12 @@ func main() {
 			Model:        modelName,
 			SystemPrompt: systemPrompt,
 			Messages:     history,
-			Options:      niro.Options{MaxTokens: 1024, Temperature: niro.Temp(0.7)},
+			Options: niro.Options{MaxTokens: 1024, Temperature: niro.Temp(0.7),
+				Cache: &niro.CacheOptions{
+					Scope: niro.CacheScopePrefix,
+					Mode:  niro.CacheAuto,
+					TTL:   time.Hour,
+				}},
 		})
 
 		stream, err := loop.GenerateWithTools(ctx, llm, req)
@@ -306,7 +311,7 @@ func compactJSON(raw json.RawMessage) string {
 		return ""
 	}
 	var m map[string]any
-	if json.Unmarshal(raw, &m) != nil {
+	if niro.JSONUnmarshal(raw, &m) != nil {
 		s := string(raw)
 		if len(s) > 60 {
 			s = s[:57] + "…"
@@ -319,7 +324,7 @@ func compactJSON(raw json.RawMessage) string {
 	// Single-value shorthand: show just the value, not the key.
 	if len(m) == 1 {
 		for _, v := range m {
-			b, _ := json.Marshal(v)
+			b, _ := niro.JSONMarshal(v)
 			s := strings.Trim(string(b), `"`)
 			if len(s) > 60 {
 				s = s[:57] + "…"
@@ -327,7 +332,7 @@ func compactJSON(raw json.RawMessage) string {
 			return s
 		}
 	}
-	b, _ := json.Marshal(m)
+	b, _ := niro.JSONMarshal(m)
 	s := string(b)
 	if len(s) > 80 {
 		s = s[:77] + "…"
@@ -339,18 +344,21 @@ func compactJSON(raw json.RawMessage) string {
 
 func buildToolset() *tools.Toolset {
 	ts := tools.NewToolset()
+	registerTimeTool(ts)
+	registerCalculatorTool(ts)
+	registerWebFetchTool(ts)
+	return ts
+}
 
-	// ── get_current_time ──────────────────────────────────────────────────
-	timeDef, _ := tools.NewToolDefinitionAny(
+func registerTimeTool(ts *tools.Toolset) {
+	def, _ := tools.NewToolDefinitionAny(
 		"get_current_time",
 		"Return the current date and time. Optionally specify an IANA timezone "+
 			"(e.g. 'America/New_York', 'Asia/Tokyo', 'Europe/London'). Defaults to local time.",
 		json.RawMessage(`{"type":"object","properties":{"timezone":{"type":"string","description":"IANA timezone name, e.g. America/New_York or Asia/Tokyo. Defaults to local time."}}}`),
 		func(ctx context.Context, args json.RawMessage) (any, error) {
-			var a struct {
-				Timezone string `json:"timezone"`
-			}
-			_ = json.Unmarshal(args, &a)
+			var a struct{ Timezone string `json:"timezone"` }
+			_ = niro.JSONUnmarshal(args, &a)
 			loc := time.Local
 			if a.Timezone != "" {
 				l, err := time.LoadLocation(a.Timezone)
@@ -369,10 +377,11 @@ func buildToolset() *tools.Toolset {
 			}, nil
 		},
 	)
-	ts.MustRegister(timeDef)
+	ts.MustRegister(def)
+}
 
-	// ── calculator ────────────────────────────────────────────────────────
-	calcDef, _ := tools.NewToolDefinitionAny(
+func registerCalculatorTool(ts *tools.Toolset) {
+	def, _ := tools.NewToolDefinitionAny(
 		"calculator",
 		"Evaluate a mathematical expression. "+
 			"Supports +, -, *, /, ^ (power), parentheses, and the functions: "+
@@ -380,10 +389,8 @@ func buildToolset() *tools.Toolset {
 			"Constants: pi, e. Examples: 'sqrt(2) * pi', '2^10', 'sin(pi/6)'.",
 		json.RawMessage(`{"type":"object","properties":{"expression":{"type":"string","description":"Mathematical expression to evaluate, e.g. sqrt(2)*pi or 2^10"}},"required":["expression"]}`),
 		func(ctx context.Context, args json.RawMessage) (any, error) {
-			var a struct {
-				Expression string `json:"expression"`
-			}
-			if err := json.Unmarshal(args, &a); err != nil || a.Expression == "" {
+			var a struct{ Expression string `json:"expression"` }
+			if err := niro.JSONUnmarshal(args, &a); err != nil || a.Expression == "" {
 				return nil, errors.New("expression is required")
 			}
 			result, err := evalExpr(a.Expression)
@@ -396,68 +403,52 @@ func buildToolset() *tools.Toolset {
 			} else {
 				formatted = strconv.FormatFloat(result, 'g', 12, 64)
 			}
-			return map[string]string{
-				"expression": a.Expression,
-				"result":     formatted,
-			}, nil
+			return map[string]string{"expression": a.Expression, "result": formatted}, nil
 		},
 	)
-	ts.MustRegister(calcDef)
+	ts.MustRegister(def)
+}
 
-	// ── web_fetch ─────────────────────────────────────────────────────────
-	webDef, _ := tools.NewToolDefinitionAny(
+func registerWebFetchTool(ts *tools.Toolset) {
+	def, _ := tools.NewToolDefinitionAny(
 		"web_fetch",
 		"Fetch a public URL and return its text content (HTML tags stripped). "+
 			"Useful for reading documentation, GitHub READMEs, Wikipedia articles, or any public page. "+
 			"Returns up to 3000 characters of content.",
 		json.RawMessage(`{"type":"object","properties":{"url":{"type":"string","description":"The fully-qualified public URL to fetch, e.g. https://example.com"}},"required":["url"]}`),
 		func(ctx context.Context, args json.RawMessage) (any, error) {
-			var a struct {
-				URL string `json:"url"`
-			}
-			if err := json.Unmarshal(args, &a); err != nil || a.URL == "" {
+			var a struct{ URL string `json:"url"` }
+			if err := niro.JSONUnmarshal(args, &a); err != nil || a.URL == "" {
 				return nil, errors.New("url is required")
 			}
 			fetchCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 			defer cancel()
-
 			req, err := http.NewRequestWithContext(fetchCtx, http.MethodGet, a.URL, nil)
 			if err != nil {
 				return nil, fmt.Errorf("invalid URL: %w", err)
 			}
 			req.Header.Set("User-Agent", "niro-chat/1.0 (demo)")
 			req.Header.Set("Accept", "text/html,text/plain,*/*")
-
 			resp, err := http.DefaultClient.Do(req)
 			if err != nil {
 				return nil, fmt.Errorf("fetch failed: %w", err)
 			}
 			defer resp.Body.Close()
-
 			if resp.StatusCode >= 400 {
 				return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, resp.Status)
 			}
-
 			body, err := io.ReadAll(io.LimitReader(resp.Body, 128*1024))
 			if err != nil {
 				return nil, fmt.Errorf("read body: %w", err)
 			}
-
 			text := stripHTML(string(body))
 			if len(text) > 3000 {
 				text = text[:2997] + "…"
 			}
-			return map[string]any{
-				"url":    a.URL,
-				"status": resp.StatusCode,
-				"chars":  len(text),
-				"text":   text,
-			}, nil
+			return map[string]any{"url": a.URL, "status": resp.StatusCode, "chars": len(text), "text": text}, nil
 		},
 	)
-	ts.MustRegister(webDef)
-
-	return ts
+	ts.MustRegister(def)
 }
 
 // stripHTML removes HTML/XML tags and collapses whitespace.
@@ -827,6 +818,6 @@ func mustProvider(ctx context.Context) (niro.Provider, string, string) {
 		fmt.Fprintf(os.Stderr, col(colRed, "unknown PROVIDER=%q — valid: openai|anthropic|gemini|bedrock|ollama\n"),
 			os.Getenv("PROVIDER"))
 		os.Exit(1)
-		panic("unreachable")
+		return nil, "", ""
 	}
 }

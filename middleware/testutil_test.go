@@ -67,3 +67,9 @@ func assertTrue(t *testing.T, v bool) {
 		t.Error("expected true")
 	}
 }
+
+// TestAssertHelpers ensures assertNil/assertNotNil are exercised (used by other tests in this package).
+func TestAssertHelpers(t *testing.T) {
+	assertNil(t, nil)
+	assertNotNil(t, &retryHintProviderMock{})
+}

@@ -5,16 +5,33 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/alexedtionweb/niro-stream"
 	"github.com/alexedtionweb/niro-stream/component"
 )
 
-// Memory stores conversation state by session ID.
-// Implementations can be in-memory, DB-backed, Redis, MCP-backed, etc.
+// Memory is the storage primitive for conversation history by session ID.
+// Implement it to inject any backend (SQL, NoSQL, Redis, file); the runtime only calls Load and Save.
+//
+//   - Load: return full history (oldest to newest). Optional: implement [BoundedLoader] so the runtime can call LoadLast for better performance.
+//   - Save: replace stored history for that session. Should be idempotent (same input → same state) for fault-tolerant retries.
+//
+// Use WithMemory(mem). For stateless use nil or [StatelessMemory]. For fault tolerance the runtime retries Load/Save with backoff (see [WithMemoryRetry]).
 type Memory interface {
 	Load(ctx context.Context, sessionID string) ([]niro.Message, error)
 	Save(ctx context.Context, sessionID string, history []niro.Message) error
+}
+
+// BoundedLoader is an optional extension of [Memory]. When implemented, the runtime may call LoadLast
+// instead of Load when the [HistoryPolicy] reports a message cap (e.g. [SlidingWindow](20)), so the backend
+// can fetch only the last N messages (e.g. SQL ORDER BY id DESC LIMIT N, Redis LRANGE -N -1).
+// Fallback: if LoadLast is not implemented or maxMessages <= 0, the runtime uses Load and trims in memory.
+type BoundedLoader interface {
+	Memory
+	// LoadLast returns up to maxMessages most recent messages (oldest to newest).
+	// If maxMessages <= 0, return the same as Load (full history).
+	LoadLast(ctx context.Context, sessionID string, maxMessages int) ([]niro.Message, error)
 }
 
 // MCPMemory is an optional extension for memory providers backed by MCP.
@@ -74,9 +91,25 @@ func WithMiddleware(fn func(niro.Provider) niro.Provider) Option {
 	}
 }
 
-// WithMemory attaches session memory.
+// WithMemory attaches the history store. Implement [Memory] with SQL, NoSQL, Redis, etc.
+// Omit or pass nil for stateless; or use [StatelessMemory]. See [WithMemoryRetry] for fault tolerance.
 func WithMemory(mem Memory) Option {
 	return func(rt *Runtime) { rt.memory = mem }
+}
+
+// WithMemoryRetry configures retries for Load and Save (transient failures). attempts is max tries (1 = no retry); initialBackoff is the first delay.
+// Default when unset: 3 attempts, 50ms initial backoff, exponential backoff. Set attempts <= 1 to disable retry.
+func WithMemoryRetry(attempts int, initialBackoff time.Duration) Option {
+	return func(rt *Runtime) {
+		rt.memoryRetryAttempts = attempts
+		rt.memoryRetryBackoff = initialBackoff
+	}
+}
+
+// WithHistoryPolicy sets how conversation history is trimmed before each request (e.g. SlidingWindow, NoHistory).
+// Memory still stores full history; the policy only limits what is sent to the model.
+func WithHistoryPolicy(policy HistoryPolicy) Option {
+	return func(rt *Runtime) { rt.historyPolicy = policy }
 }
 
 // WithPeer registers an agent peer.
@@ -107,11 +140,14 @@ func WithComponent(c Component) Option {
 // Core remains agent-agnostic; this module composes provider + memory + peers
 // and plugin components to execute conversational turns.
 type Runtime struct {
-	provider       niro.Provider
-	model          string
-	systemPrompt   string
-	defaultOptions niro.Options
-	memory         Memory
+	provider              niro.Provider
+	model                 string
+	systemPrompt          string
+	defaultOptions        niro.Options
+	memory                Memory
+	historyPolicy         HistoryPolicy
+	memoryRetryAttempts   int           // max attempts for Load/Save (1 = no retry)
+	memoryRetryBackoff    time.Duration // first backoff duration
 	peers          map[string]Peer
 	components     []Component
 	host           *component.Host
@@ -136,6 +172,12 @@ func New(provider niro.Provider, opts ...Option) (*Runtime, error) {
 	}
 	for _, o := range opts {
 		o(rt)
+	}
+	if rt.memoryRetryAttempts <= 0 {
+		rt.memoryRetryAttempts = 3
+	}
+	if rt.memoryRetryBackoff <= 0 {
+		rt.memoryRetryBackoff = 50 * time.Millisecond
 	}
 
 	for _, c := range rt.components {
@@ -183,14 +225,93 @@ func (rt *Runtime) SystemPrompt() string {
 	return rt.systemPrompt
 }
 
-// loadMessages returns the full message slice for a turn: history + the new
-// user message. It is the single place that touches session memory on load.
+// loadWithRetry runs fn up to memoryRetryAttempts with exponential backoff. Returns the last error if all fail.
+func (rt *Runtime) loadWithRetry(ctx context.Context, fn func() ([]niro.Message, error)) ([]niro.Message, error) {
+	attempts := rt.memoryRetryAttempts
+	if attempts <= 1 {
+		return fn()
+	}
+	backoff := rt.memoryRetryBackoff
+	var lastErr error
+	for i := 0; i < attempts; i++ {
+		out, err := fn()
+		if err == nil {
+			return out, nil
+		}
+		lastErr = err
+		if i < attempts-1 {
+			timer := time.NewTimer(backoff)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return nil, ctx.Err()
+			case <-timer.C:
+			}
+			backoff *= 2
+		}
+	}
+	return nil, lastErr
+}
+
+// saveWithRetry runs Save up to memoryRetryAttempts with exponential backoff. Returns the last error if all fail.
+func (rt *Runtime) saveWithRetry(ctx context.Context, sessionID string, history []niro.Message) error {
+	if rt.memory == nil {
+		return nil
+	}
+	attempts := rt.memoryRetryAttempts
+	if attempts <= 1 {
+		return rt.memory.Save(ctx, sessionID, history)
+	}
+	backoff := rt.memoryRetryBackoff
+	var lastErr error
+	for i := 0; i < attempts; i++ {
+		err := rt.memory.Save(ctx, sessionID, history)
+		if err == nil {
+			return nil
+		}
+		lastErr = err
+		if i < attempts-1 {
+			timer := time.NewTimer(backoff)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return ctx.Err()
+			case <-timer.C:
+			}
+			backoff *= 2
+		}
+	}
+	return lastErr
+}
+
+// loadMessages returns the message slice for a turn: history (optionally trimmed by HistoryPolicy) + the new user message.
+// If memory implements [BoundedLoader] and historyPolicy implements [BoundedHistoryPolicy] with MaxMessages() > 0,
+// the runtime calls LoadLast for better performance; otherwise it uses Load and trims in memory.
 func (rt *Runtime) loadMessages(ctx context.Context, sessionID, input string) ([]niro.Message, error) {
 	messages := make([]niro.Message, 0, 8)
 	if rt.memory != nil && sessionID != "" {
-		history, err := rt.memory.Load(ctx, sessionID)
+		var history []niro.Message
+		var err error
+		if bl, ok := rt.memory.(BoundedLoader); ok && rt.historyPolicy != nil {
+			if bp, ok := rt.historyPolicy.(BoundedHistoryPolicy); ok && bp.MaxMessages() > 0 {
+				history, err = rt.loadWithRetry(ctx, func() ([]niro.Message, error) {
+					return bl.LoadLast(ctx, sessionID, bp.MaxMessages())
+				})
+			} else {
+				history, err = rt.loadWithRetry(ctx, func() ([]niro.Message, error) {
+					return rt.memory.Load(ctx, sessionID)
+				})
+			}
+		} else {
+			history, err = rt.loadWithRetry(ctx, func() ([]niro.Message, error) {
+				return rt.memory.Load(ctx, sessionID)
+			})
+		}
 		if err != nil {
 			return nil, err
+		}
+		if rt.historyPolicy != nil {
+			history = rt.historyPolicy.TrimForRequest(history)
 		}
 		messages = append(messages, history...)
 	}
@@ -234,7 +355,10 @@ func (rt *Runtime) Run(ctx context.Context, sessionID string, input string) (Tur
 
 	if rt.memory != nil && sessionID != "" {
 		nextHistory := append(messages, niro.AssistantText(text))
-		if err := rt.memory.Save(ctx, sessionID, nextHistory); err != nil {
+		if p, ok := rt.historyPolicy.(HistorySavePolicy); ok && p != nil {
+			nextHistory = p.TrimForSave(nextHistory)
+		}
+		if err := rt.saveWithRetry(ctx, sessionID, nextHistory); err != nil {
 			return TurnResult{}, err
 		}
 	}
@@ -310,8 +434,12 @@ func (rt *Runtime) RunStream(ctx context.Context, sessionID string, input string
 		// Save memory only after the full response has been delivered.
 		if rt.memory != nil && sessionID != "" {
 			nextHistory := append(messages, niro.AssistantText(buf.String()))
-			// Ignore save errors — the stream has already been delivered.
-			_ = rt.memory.Save(ctx, sessionID, nextHistory)
+			if p, ok := rt.historyPolicy.(HistorySavePolicy); ok && p != nil {
+				nextHistory = p.TrimForSave(nextHistory)
+			}
+			if err := rt.saveWithRetry(ctx, sessionID, nextHistory); err != nil {
+				emitter.Error(err)
+			}
 		}
 	}()
 	return out, nil
@@ -329,7 +457,17 @@ func (rt *Runtime) CallPeer(ctx context.Context, peerName string, sessionID stri
 	return peer.Ask(ctx, sessionID, input)
 }
 
-// InMemoryMemory is a simple in-process memory plugin.
+// StatelessMemory implements [Memory] with no persistence: Load always returns nil,
+// Save is a no-op. Use when you want explicit "no history" (e.g. WithMemory(agent.StatelessMemory())).
+var StatelessMemory Memory = statelessMemory{}
+
+type statelessMemory struct{}
+
+func (statelessMemory) Load(context.Context, string) ([]niro.Message, error) { return nil, nil }
+func (statelessMemory) Save(context.Context, string, []niro.Message) error   { return nil }
+
+// InMemoryMemory is a simple in-process memory store (map by session ID).
+// Use for local/dev; for production inject SQL, NoSQL, Redis, etc. via [Memory].
 type InMemoryMemory struct {
 	mu       sync.RWMutex
 	sessions map[string][]niro.Message
@@ -358,4 +496,22 @@ func (m *InMemoryMemory) Save(ctx context.Context, sessionID string, history []n
 	copy(out, history)
 	m.sessions[sessionID] = out
 	return nil
+}
+
+// LoadLast implements [BoundedLoader]: returns up to maxMessages most recent messages (oldest to newest).
+// If maxMessages <= 0, returns full history like Load.
+func (m *InMemoryMemory) LoadLast(ctx context.Context, sessionID string, maxMessages int) ([]niro.Message, error) {
+	_ = ctx
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	h := m.sessions[sessionID]
+	if maxMessages <= 0 || len(h) <= maxMessages {
+		out := make([]niro.Message, len(h))
+		copy(out, h)
+		return out, nil
+	}
+	start := len(h) - maxMessages
+	out := make([]niro.Message, maxMessages)
+	copy(out, h[start:])
+	return out, nil
 }

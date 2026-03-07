@@ -115,7 +115,7 @@ func TestOptionsValidate_CacheScopeUnsupported(t *testing.T) {
 	}
 
 	err := o.Validate()
-	assertErrorContains(t, err, "Cache")
+	assertErrorContains(t, err, "cache")
 }
 
 func TestNormalizeCacheOptions_RequireTenantNamespace(t *testing.T) {
@@ -357,9 +357,9 @@ func TestOptionsValidate_CacheInvalidValues(t *testing.T) {
 
 	invalidTTL := niro.Options{Cache: &niro.CacheOptions{TTL: -time.Second}}
 	err := invalidTTL.Validate()
-	assertErrorContains(t, err, "TTL")
+	assertErrorContains(t, err, "ttl")
 
 	invalidKey := niro.Options{Cache: &niro.CacheOptions{Key: "tenant:key"}}
 	err = invalidKey.Validate()
-	assertErrorContains(t, err, "Key")
+	assertErrorContains(t, err, "key")
 }

@@ -856,11 +856,11 @@ func validateCacheOptions(c *CacheOptions) error {
 	}
 
 	if c.TTL < 0 {
-		return fmt.Errorf("TTL must be >= 0")
+		return fmt.Errorf("ttl must be >= 0")
 	}
 
 	if strings.Contains(c.Key, ":") {
-		return fmt.Errorf("Key must not contain ':' (tenant namespace is prepended by runtime)")
+		return fmt.Errorf("key must not contain ':' (tenant namespace is prepended by runtime)")
 	}
 
 	return nil

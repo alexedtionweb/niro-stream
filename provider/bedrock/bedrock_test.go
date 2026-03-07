@@ -16,6 +16,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream"
 	eventstreamapi "github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream/eventstreamapi"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
+	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
 	smithyhttp "github.com/aws/smithy-go/transport/http"
 
 	"github.com/alexedtionweb/niro-stream"
@@ -701,6 +702,48 @@ func TestGenerate_ExtrasHook(t *testing.T) {
 // ---------------------------------------------------------------------------
 // Request building
 // ---------------------------------------------------------------------------
+
+func TestGenerate_Tools_Enum(t *testing.T) {
+	// Verify that tool parameters with enum are passed through to the request (Bedrock accepts JSON Schema enum).
+	// We capture the built ConverseStreamInput and assert the first tool has InputSchema set (enum is inside it).
+	var capturedInput *bedrockruntime.ConverseStreamInput
+	p := newProvider(func(r *http.Request) (*http.Response, error) {
+		return streamResp(textDelta(0, "ok"), blockStop(0), msgStop("end_turn"), metadataEvt(1, 1)), nil
+	}, WithRequestHook(func(in *bedrockruntime.ConverseStreamInput) {
+		capturedInput = in
+	}))
+
+	stream, err := p.Generate(context.Background(), &niro.Request{
+		Messages: []niro.Message{niro.UserText("hi")},
+		Tools: []niro.Tool{{
+			Name:        "get_weather",
+			Description: "Get weather",
+			Parameters:  json.RawMessage(`{"type":"object","properties":{"unit":{"type":"string","description":"Temperature unit","enum":["celsius","fahrenheit"]}},"required":["unit"]}`),
+		}},
+	})
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	mustDrain(t, stream)
+
+	if capturedInput == nil || capturedInput.ToolConfig == nil || len(capturedInput.ToolConfig.Tools) == 0 {
+		t.Fatalf("expected tool config with tools in captured input")
+	}
+	tool := capturedInput.ToolConfig.Tools[0]
+	spec, ok := tool.(*types.ToolMemberToolSpec)
+	if !ok {
+		t.Fatalf("expected first tool to be *ToolMemberToolSpec")
+	}
+	if spec.Value.Name == nil || aws.ToString(spec.Value.Name) != "get_weather" {
+		t.Errorf("tool name = %v, want get_weather", spec.Value.Name)
+	}
+	if spec.Value.InputSchema == nil {
+		t.Fatal("expected tool InputSchema to be set")
+	}
+	if _, ok := spec.Value.InputSchema.(*types.ToolInputSchemaMemberJson); !ok {
+		t.Errorf("expected InputSchema to be *ToolInputSchemaMemberJson (enum is in the schema passed to the SDK)")
+	}
+}
 
 func TestGenerate_SystemPrompt_SentInSystemField(t *testing.T) {
 	var gotBody map[string]any

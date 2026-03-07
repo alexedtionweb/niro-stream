@@ -147,7 +147,9 @@ func toolCalling(ctx context.Context, llm niro.Provider) {
 		stockArgs{},
 		func(ctx context.Context, raw json.RawMessage) (any, error) {
 			var args stockArgs
-			json.Unmarshal(raw, &args) //nolint:errcheck
+			if err := niro.JSONUnmarshal(raw, &args); err != nil {
+				return nil, err
+			}
 			prices := map[string]float64{
 				"AMZN": 185.42, "GOOG": 172.18, "MSFT": 415.66, "NVDA": 875.39,
 			}
