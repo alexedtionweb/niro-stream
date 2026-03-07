@@ -162,12 +162,11 @@ func (p *Provider) Generate(ctx context.Context, req *niro.Request) (*niro.Strea
 	if req == nil {
 		return nil, niro.NewError(niro.ErrCodeInvalidRequest, "niro/bedrock: nil request").WithProvider("bedrock")
 	}
+	if len(req.Messages) == 0 {
+		return nil, niro.NewError(niro.ErrCodeInvalidRequest, "messages required").WithProvider("bedrock")
+	}
 	if req.Options.ExperimentalReasoning {
 		return nil, niro.NewError(niro.ErrCodeInvalidRequest, "niro/bedrock: experimental reasoning is not supported").WithProvider("bedrock")
-	}
-
-	if err := req.Validate(); err != nil {
-		return nil, err
 	}
 
 	model := req.Model

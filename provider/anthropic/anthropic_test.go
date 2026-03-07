@@ -656,8 +656,8 @@ func TestGenerate_StreamError_400(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected stream error, got nil")
 	}
-	if !strings.Contains(err.Error(), "niro/anthropic: stream:") {
-		t.Errorf("error should contain 'niro/anthropic: stream:', got: %v", err)
+	if !strings.Contains(err.Error(), "stream:") {
+		t.Errorf("error should contain 'stream:', got: %v", err)
 	}
 }
 

@@ -28,8 +28,6 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
-	"errors"
-	"fmt"
 	"sync"
 	"sync/atomic"
 
@@ -162,7 +160,7 @@ func (p *SonicProvider) Session(ctx context.Context, cfg niro.RealtimeConfig) (n
 		},
 	)
 	if err != nil {
-		return nil, fmt.Errorf("sonic: open stream: %w", err)
+		return nil, niro.WrapError(niro.ErrCodeProviderError, "open stream", err)
 	}
 
 	recv, recvEmit := niro.NewStream(niro.RealtimeStreamBuffer)
@@ -186,7 +184,7 @@ func (p *SonicProvider) Session(ctx context.Context, cfg niro.RealtimeConfig) (n
 		},
 	}}); err != nil {
 		out.GetStream().Close()
-		return nil, fmt.Errorf("sonic: sessionStart: %w", err)
+		return nil, niro.WrapError(niro.ErrCodeProviderError, "sessionStart", err)
 	}
 
 	// Start the receive loop.
@@ -245,7 +243,7 @@ func (s *SonicSession) Send(ctx context.Context, f niro.Frame) error {
 		return s.sendText(ctx, f.Text)
 	case niro.KindToolResult:
 		if f.Result == nil {
-			return errors.New("sonic: Send: nil ToolResult")
+			return niro.NewError(niro.ErrCodeInvalidRequest, "Send: nil ToolResult")
 		}
 		return s.sendToolResult(ctx, f.Result)
 	case niro.KindControl:
@@ -458,7 +456,7 @@ func (s *SonicSession) sendToolResult(ctx context.Context, result *niro.ToolResu
 	s.mu.Unlock()
 
 	if promptID == "" {
-		return errors.New("sonic: no active prompt for tool result")
+		return niro.NewError(niro.ErrCodeInvalidRequest, "no active prompt for tool result")
 	}
 
 	contentID := uuid.NewString()
@@ -765,7 +763,7 @@ func (s *SonicSession) sendEvent(ev sonicEvent) error {
 	}
 	data, err := json.Marshal(ev)
 	if err != nil {
-		return fmt.Errorf("sonic: marshal event: %w", err)
+		return niro.WrapError(niro.ErrCodeProviderError, "marshal event", err)
 	}
 	return s.es.Writer.Send(context.Background(),
 		&bedrocktypes.InvokeModelWithBidirectionalStreamInputMemberChunk{
@@ -779,7 +777,7 @@ func (s *SonicSession) sendEvent(ev sonicEvent) error {
 func (s *SonicSession) sendForce(ev sonicEvent) error {
 	data, err := json.Marshal(ev)
 	if err != nil {
-		return fmt.Errorf("sonic: marshal event: %w", err)
+		return niro.WrapError(niro.ErrCodeProviderError, "marshal event", err)
 	}
 	return s.es.Writer.Send(context.Background(),
 		&bedrocktypes.InvokeModelWithBidirectionalStreamInputMemberChunk{

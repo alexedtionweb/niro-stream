@@ -25,7 +25,6 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
-	"fmt"
 	"time"
 
 	ant "github.com/anthropics/anthropic-sdk-go"
@@ -125,10 +124,10 @@ func (p *Provider) CacheCaps() niro.CacheCapabilities {
 // Generate implements niro.Provider.
 func (p *Provider) Generate(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
 	if req == nil {
-		return nil, fmt.Errorf("niro/anthropic: nil request")
+		return nil, niro.NewError(niro.ErrCodeInvalidRequest, "nil request")
 	}
 	if req.Options.ExperimentalReasoning {
-		return nil, fmt.Errorf("niro/anthropic: experimental reasoning is not supported")
+		return nil, niro.NewError(niro.ErrCodeInvalidRequest, "experimental reasoning is not supported")
 	}
 
 	model := req.Model
@@ -193,7 +192,7 @@ func (p *Provider) consume(
 	}
 
 	if err := sdk.Err(); err != nil {
-		out.Error(fmt.Errorf("niro/anthropic: stream: %w", err))
+		out.Error(niro.WrapError(niro.ErrCodeStreamError, "stream", err))
 		return
 	}
 
@@ -335,7 +334,7 @@ func validateRequireTTL(ttl time.Duration) error {
 	if ttl == 0 || ttl == 5*time.Minute || ttl == time.Hour {
 		return nil
 	}
-	return fmt.Errorf("niro/anthropic: cache require supports TTL 5m or 1h only")
+	return niro.NewError(niro.ErrCodeInvalidRequest, "cache require supports TTL 5m or 1h only")
 }
 
 func mapAnthropicTTL(ttl time.Duration) ant.CacheControlEphemeralTTL {

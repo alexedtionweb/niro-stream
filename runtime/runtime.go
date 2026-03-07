@@ -66,6 +66,9 @@ func (r *Runtime) Generate(ctx context.Context, req *niro.Request) (*niro.Stream
 	if req == nil {
 		return nil, niro.NewError(niro.ErrCodeInvalidRequest, "request is nil")
 	}
+	if err := req.Validate(); err != nil {
+		return nil, err
+	}
 
 	start := time.Now()
 

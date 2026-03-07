@@ -51,31 +51,31 @@ type Peer interface {
 	Ask(ctx context.Context, sessionID string, input string) (string, error)
 }
 
-// Component is an agent plugin component mounted into Runtime.
+// Component is an agent plugin component mounted into Agent.
 type Component interface {
 	component.Component
-	Apply(rt *Runtime) error
+	Apply(rt *Agent) error
 }
 
-// Option configures Runtime.
-type Option func(*Runtime)
+// Option configures Agent.
+type Option func(*Agent)
 
 // WithModel sets the runtime default model.
 func WithModel(model string) Option {
-	return func(rt *Runtime) { rt.model = model }
+	return func(rt *Agent) { rt.model = model }
 }
 
 // WithSystemPrompt sets a system prompt sent on every turn.
 // This is the primary way to give an agent its persona and instructions.
 func WithSystemPrompt(prompt string) Option {
-	return func(rt *Runtime) { rt.systemPrompt = prompt }
+	return func(rt *Agent) { rt.systemPrompt = prompt }
 }
 
 // WithOptions sets default generation parameters (temperature, max tokens, etc.)
 // applied to every turn. Per-request overrides are not yet exposed — use
 // RunRequest for full control.
 func WithOptions(opts niro.Options) Option {
-	return func(rt *Runtime) { rt.defaultOptions = opts }
+	return func(rt *Agent) { rt.defaultOptions = opts }
 }
 
 // WithMiddleware wraps the provider with a middleware function.
@@ -89,7 +89,7 @@ func WithOptions(opts niro.Options) Option {
 // Components applied via WithComponent are then layered on top of all
 // WithMiddleware wrappers.
 func WithMiddleware(fn func(niro.Provider) niro.Provider) Option {
-	return func(rt *Runtime) {
+	return func(rt *Agent) {
 		if fn != nil {
 			rt.provider = fn(rt.provider)
 		}
@@ -99,13 +99,13 @@ func WithMiddleware(fn func(niro.Provider) niro.Provider) Option {
 // WithMemory attaches the history store. Implement [Memory] with SQL, NoSQL, Redis, etc.
 // Omit or pass nil for stateless; or use [StatelessMemory]. See [WithMemoryRetry] for fault tolerance.
 func WithMemory(mem Memory) Option {
-	return func(rt *Runtime) { rt.memory = mem }
+	return func(rt *Agent) { rt.memory = mem }
 }
 
 // WithMemoryRetry configures retries for Load and Save (transient failures). attempts is max tries (1 = no retry); initialBackoff is the first delay.
 // Default when unset: 3 attempts, 50ms initial backoff, exponential backoff. Set attempts <= 1 to disable retry.
 func WithMemoryRetry(attempts int, initialBackoff time.Duration) Option {
-	return func(rt *Runtime) {
+	return func(rt *Agent) {
 		rt.memoryRetryAttempts = attempts
 		rt.memoryRetryBackoff = initialBackoff
 	}
@@ -114,12 +114,12 @@ func WithMemoryRetry(attempts int, initialBackoff time.Duration) Option {
 // WithHistoryPolicy sets how conversation history is trimmed before each request (e.g. SlidingWindow, NoHistory).
 // Memory still stores full history; the policy only limits what is sent to the model.
 func WithHistoryPolicy(policy HistoryPolicy) Option {
-	return func(rt *Runtime) { rt.historyPolicy = policy }
+	return func(rt *Agent) { rt.historyPolicy = policy }
 }
 
 // WithPeer registers an agent peer.
 func WithPeer(peer Peer) Option {
-	return func(rt *Runtime) {
+	return func(rt *Agent) {
 		if peer == nil {
 			return
 		}
@@ -132,7 +132,7 @@ func WithPeer(peer Peer) Option {
 
 // WithComponent registers a plugin component.
 func WithComponent(c Component) Option {
-	return func(rt *Runtime) {
+	return func(rt *Agent) {
 		if c == nil {
 			return
 		}
@@ -140,11 +140,10 @@ func WithComponent(c Component) Option {
 	}
 }
 
-// Runtime is an optional agent layer built on top of niro core primitives.
-//
-// Core remains agent-agnostic; this module composes provider + memory + peers
-// and plugin components to execute conversational turns.
-type Runtime struct {
+// Agent is the conversational agent runtime: provider, memory, history policy,
+// peers, and plugin components to execute turns. Distinct from [runtime.Runtime],
+// which is a thin provider wrapper with hooks and pipeline.
+type Agent struct {
 	provider              niro.Provider
 	model                 string
 	systemPrompt          string
@@ -165,12 +164,12 @@ type TurnResult struct {
 	Response *niro.ResponseMeta
 }
 
-// New creates an agent runtime plugin.
-func New(provider niro.Provider, opts ...Option) (*Runtime, error) {
+// New creates a conversational Agent.
+func New(provider niro.Provider, opts ...Option) (*Agent, error) {
 	if provider == nil {
 		return nil, fmt.Errorf("agent: provider is nil")
 	}
-	rt := &Runtime{
+	rt := &Agent{
 		provider: provider,
 		peers:    make(map[string]Peer),
 		host:     component.NewHost(),
@@ -198,15 +197,15 @@ func New(provider niro.Provider, opts ...Option) (*Runtime, error) {
 }
 
 // Start starts all registered components.
-func (rt *Runtime) Start(ctx context.Context) error {
+func (rt *Agent) Start(ctx context.Context) error {
 	if rt == nil {
-		return fmt.Errorf("agent: runtime is nil")
+		return fmt.Errorf("agent: agent is nil")
 	}
 	return rt.host.StartAll(ctx)
 }
 
 // Close closes all registered components.
-func (rt *Runtime) Close() error {
+func (rt *Agent) Close() error {
 	if rt == nil {
 		return nil
 	}
@@ -215,7 +214,7 @@ func (rt *Runtime) Close() error {
 
 // Provider returns the current (possibly middleware-wrapped) provider.
 // Useful for extensions and tests that need to inspect the provider chain.
-func (rt *Runtime) Provider() niro.Provider {
+func (rt *Agent) Provider() niro.Provider {
 	if rt == nil {
 		return nil
 	}
@@ -223,7 +222,7 @@ func (rt *Runtime) Provider() niro.Provider {
 }
 
 // SystemPrompt returns the system prompt configured on this runtime.
-func (rt *Runtime) SystemPrompt() string {
+func (rt *Agent) SystemPrompt() string {
 	if rt == nil {
 		return ""
 	}
@@ -231,7 +230,7 @@ func (rt *Runtime) SystemPrompt() string {
 }
 
 // loadWithRetry runs fn up to memoryRetryAttempts with exponential backoff. Returns the last error if all fail.
-func (rt *Runtime) loadWithRetry(ctx context.Context, fn func() ([]niro.Message, error)) ([]niro.Message, error) {
+func (rt *Agent) loadWithRetry(ctx context.Context, fn func() ([]niro.Message, error)) ([]niro.Message, error) {
 	attempts := rt.memoryRetryAttempts
 	if attempts <= 1 {
 		return fn()
@@ -259,7 +258,7 @@ func (rt *Runtime) loadWithRetry(ctx context.Context, fn func() ([]niro.Message,
 }
 
 // saveWithRetry runs Save up to memoryRetryAttempts with exponential backoff. Returns the last error if all fail.
-func (rt *Runtime) saveWithRetry(ctx context.Context, sessionID string, history []niro.Message) error {
+func (rt *Agent) saveWithRetry(ctx context.Context, sessionID string, history []niro.Message) error {
 	if rt.memory == nil {
 		return nil
 	}
@@ -292,7 +291,7 @@ func (rt *Runtime) saveWithRetry(ctx context.Context, sessionID string, history 
 // loadMessages returns the message slice for a turn: history (optionally trimmed by HistoryPolicy) + the new user message.
 // If memory implements [BoundedLoader] and historyPolicy implements [BoundedHistoryPolicy] with MaxMessages() > 0,
 // the runtime calls LoadLast for better performance; otherwise it uses Load and trims in memory.
-func (rt *Runtime) loadMessages(ctx context.Context, sessionID, input string) ([]niro.Message, error) {
+func (rt *Agent) loadMessages(ctx context.Context, sessionID, input string) ([]niro.Message, error) {
 	messages := make([]niro.Message, 0, 8)
 	if rt.memory != nil && sessionID != "" {
 		var history []niro.Message
@@ -326,7 +325,7 @@ func (rt *Runtime) loadMessages(ctx context.Context, sessionID, input string) ([
 
 // Run executes one conversational turn and blocks until the full response is
 // collected. Use RunStream when you need to emit tokens as they arrive.
-func (rt *Runtime) Run(ctx context.Context, sessionID string, input string) (TurnResult, error) {
+func (rt *Agent) Run(ctx context.Context, sessionID string, input string) (TurnResult, error) {
 	if rt == nil || rt.provider == nil {
 		return TurnResult{}, fmt.Errorf("agent: runtime/provider is nil")
 	}
@@ -385,7 +384,7 @@ func (rt *Runtime) Run(ctx context.Context, sessionID string, input string) (Tur
 //	for stream.Next(ctx) {
 //		fmt.Fprint(w, stream.Frame().Text)
 //	}
-func (rt *Runtime) RunStream(ctx context.Context, sessionID string, input string) (*niro.Stream, error) {
+func (rt *Agent) RunStream(ctx context.Context, sessionID string, input string) (*niro.Stream, error) {
 	if rt == nil || rt.provider == nil {
 		return nil, fmt.Errorf("agent: runtime/provider is nil")
 	}
@@ -451,7 +450,7 @@ func (rt *Runtime) RunStream(ctx context.Context, sessionID string, input string
 }
 
 // CallPeer executes an agent-to-agent call.
-func (rt *Runtime) CallPeer(ctx context.Context, peerName string, sessionID string, input string) (string, error) {
+func (rt *Agent) CallPeer(ctx context.Context, peerName string, sessionID string, input string) (string, error) {
 	if rt == nil {
 		return "", fmt.Errorf("agent: runtime is nil")
 	}

@@ -79,3 +79,73 @@ func TestRouteNilSink(t *testing.T) {
 		t.Error("Route with nil sink should return original stream")
 	}
 }
+
+func TestRouteAgentAttribution(t *testing.T) {
+	ctx := context.Background()
+	const agentName = "test-agent"
+
+	var startAgent string
+	var textAgents, endAgents []string
+
+	sink := &Sink{
+		OnAgentStart: func(ctx context.Context, agent string) error {
+			startAgent = agent
+			if got := AgentFromContext(ctx); got != agentName {
+				t.Errorf("OnAgentStart: AgentFromContext = %q, want %q", got, agentName)
+			}
+			return nil
+		},
+		OnText: func(ctx context.Context, text string) error {
+			textAgents = append(textAgents, AgentFromContext(ctx))
+			return nil
+		},
+		OnEnd: func(ctx context.Context, u niro.Usage, resp *niro.ResponseMeta) error {
+			endAgents = append(endAgents, AgentFromContext(ctx))
+			return nil
+		},
+	}
+
+	frames := []niro.Frame{niro.TextFrame("hello"), niro.TextFrame(" world")}
+	src := niro.StreamFromSlice(frames)
+	routed := RouteAgent(ctx, src, sink, agentName)
+
+	for routed.Next(ctx) {
+	}
+	if err := routed.Err(); err != nil {
+		t.Fatal(err)
+	}
+
+	if startAgent != agentName {
+		t.Errorf("OnAgentStart agent = %q, want %q", startAgent, agentName)
+	}
+	if len(textAgents) != 2 || textAgents[0] != agentName || textAgents[1] != agentName {
+		t.Errorf("OnText agents = %v, want [%q, %q]", textAgents, agentName, agentName)
+	}
+	if len(endAgents) != 1 || endAgents[0] != agentName {
+		t.Errorf("OnEnd agents = %v, want [%q]", endAgents, agentName)
+	}
+}
+
+func TestRouteAgentEmpty(t *testing.T) {
+	ctx := context.Background()
+	var started bool
+	sink := &Sink{
+		OnAgentStart: func(ctx context.Context, agent string) error {
+			started = true
+			return nil
+		},
+		OnText: func(ctx context.Context, text string) error {
+			if got := AgentFromContext(ctx); got != "" {
+				t.Errorf("AgentFromContext = %q, want empty", got)
+			}
+			return nil
+		},
+	}
+	src := niro.StreamFromSlice([]niro.Frame{niro.TextFrame("x")})
+	routed := RouteAgent(ctx, src, sink, "")
+	for routed.Next(ctx) {
+	}
+	if started {
+		t.Error("OnAgentStart should not be called when agent is empty")
+	}
+}

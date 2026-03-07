@@ -875,7 +875,7 @@ out, err := rt.Run(ctx, "session-1", "plan trip to tokyo")
 fmt.Println(out.Text)
 ```
 
-`agent.Runtime` also supports peer calls via `WithPeer(...)` and `CallPeer(...)` for agent-to-agent workflows.
+`agent.Agent` also supports peer calls via `WithPeer(...)` and `CallPeer(...)` for agent-to-agent workflows.
 
 ## Migration Notes (Cache)
 

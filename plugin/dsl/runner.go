@@ -160,7 +160,7 @@ func (r *Runner) Stream(ctx context.Context, runCtx *RunContext, agentName strin
 
 	stream = hook.WrapStream(ctx, stream, r.hook, cfg.Model, start)
 	if r.outputSink != nil {
-		stream = output.Route(ctx, stream, r.outputSink)
+		stream = output.RouteAgent(ctx, stream, r.outputSink, agentName)
 	}
 	stream = r.resolveHandoff(ctx, stream, runCtx, sessionID)
 	return stream, nil
@@ -175,6 +175,7 @@ func (r *Runner) resolveHandoff(ctx context.Context, src *niro.Stream, runCtx *R
 	go func() {
 		defer em.Close()
 		var classifierText strings.Builder
+		handoffDone := false
 
 		for src.Next(ctx) {
 			f := src.Frame()
@@ -201,6 +202,7 @@ func (r *Runner) resolveHandoff(ctx context.Context, src *niro.Stream, runCtx *R
 					em.Error(err)
 					return
 				}
+				handoffDone = true
 				continue
 			}
 
@@ -213,8 +215,12 @@ func (r *Runner) resolveHandoff(ctx context.Context, src *niro.Stream, runCtx *R
 			em.Error(err)
 			return
 		}
-		if resp := src.Response(); resp != nil {
-			em.SetResponse(resp)
+		// Only set the source's ResponseMeta when no handoff occurred;
+		// streamHandoff already set the final agent's ResponseMeta on em.
+		if !handoffDone {
+			if resp := src.Response(); resp != nil {
+				em.SetResponse(resp)
+			}
 		}
 		usage := src.Usage()
 		if usage.InputTokens > 0 || usage.OutputTokens > 0 || usage.TotalTokens > 0 {
@@ -241,7 +247,12 @@ func (r *Runner) streamHandoff(ctx context.Context, em *niro.Emitter, runCtx *Ru
 			return err
 		}
 		if stream != nil {
-			return niro.Forward(ctx, stream, em)
+			if err := niro.Forward(ctx, stream, em); err != nil {
+				return err
+			}
+			if resp := stream.Response(); resp != nil {
+				em.SetResponse(resp)
+			}
 		}
 		return nil
 	}
@@ -252,7 +263,13 @@ func (r *Runner) streamHandoff(ctx context.Context, em *niro.Emitter, runCtx *Ru
 		if err != nil {
 			return err
 		}
-		return niro.Forward(ctx, stream, em)
+		if err := niro.Forward(ctx, stream, em); err != nil {
+			return err
+		}
+		if resp := stream.Response(); resp != nil {
+			em.SetResponse(resp)
+		}
+		return nil
 	}
 
 	return niro.NewErrorf(niro.ErrCodeInvalidRequest, "dsl: handoff target %q not found", target)
@@ -476,43 +493,44 @@ func (r *Runner) Fan(ctx context.Context, runCtx *RunContext, sessionID string, 
 }
 
 // FanCollect runs the given agents in parallel and returns each agent's full text and usage.
-// Used by fan_then to gather parallel results before running the synthesizer.
+// Results are indexed to match agentNames order regardless of completion order.
 func (r *Runner) FanCollect(ctx context.Context, runCtx *RunContext, sessionID string, agentNames []string) (texts []string, usages []niro.Usage, err error) {
 	if len(agentNames) == 0 {
 		return nil, nil, nil
 	}
 	type result struct {
+		idx   int
 		text  string
 		usage niro.Usage
 		err   error
 	}
 	ch := make(chan result, len(agentNames))
-	for _, name := range agentNames {
-		name := name
+	for i, name := range agentNames {
+		i, name := i, name
 		go func() {
 			stream, err := r.Stream(ctx, runCtx, name, sessionID)
 			if err != nil {
-				ch <- result{err: err}
+				ch <- result{idx: i, err: err}
 				return
 			}
 			text, collectErr := niro.CollectText(ctx, stream)
 			usage := stream.Usage()
 			if collectErr != nil {
-				ch <- result{err: collectErr}
+				ch <- result{idx: i, err: collectErr}
 				return
 			}
-			ch <- result{text: text, usage: usage}
+			ch <- result{idx: i, text: text, usage: usage}
 		}()
 	}
 	texts = make([]string, len(agentNames))
 	usages = make([]niro.Usage, len(agentNames))
-	for i := range agentNames {
+	for range agentNames {
 		res := <-ch
 		if res.err != nil {
 			return nil, nil, res.err
 		}
-		texts[i] = res.text
-		usages[i] = res.usage
+		texts[res.idx] = res.text
+		usages[res.idx] = res.usage
 	}
 	return texts, usages, nil
 }

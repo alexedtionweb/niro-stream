@@ -563,6 +563,9 @@ func (p *ToolingProvider) Generate(ctx context.Context, req *niro.Request) (*nir
 	if req == nil {
 		return nil, niro.NewError(niro.ErrCodeInvalidRequest, "request is nil")
 	}
+	if err := req.Validate(); err != nil {
+		return nil, err
+	}
 	r := p.set.Apply(req)
 	loop := NewToolLoopWithOptions(p.set, p.opts)
 	return loop.GenerateWithTools(ctx, p.base, r)

@@ -240,7 +240,7 @@ func New(ctx context.Context, opts ...Option) (*Provider, error) {
 
 	client, err := texttospeech.NewClient(ctx, cfg.clientOpts...)
 	if err != nil {
-		return nil, fmt.Errorf("niro/googlespeech: create client: %w", err)
+		return nil, niro.WrapError(niro.ErrCodeProviderError, "create client", err)
 	}
 	p.client = clientWrapper{Client: client}
 	return p, nil
@@ -271,14 +271,14 @@ func (p *Provider) Close() error {
 // to batch synthesis automatically.
 func (p *Provider) Synthesize(ctx context.Context, req *niro.TTSRequest) (*niro.Stream, error) {
 	if p == nil || p.client == nil {
-		return nil, fmt.Errorf("niro/googlespeech: provider not initialized")
+		return nil, niro.NewError(niro.ErrCodeInvalidRequest, "provider not initialized")
 	}
 	if req == nil {
-		return nil, fmt.Errorf("niro/googlespeech: nil request")
+		return nil, niro.NewError(niro.ErrCodeInvalidRequest, "nil request")
 	}
 	text := strings.TrimSpace(req.Text)
 	if text == "" {
-		return nil, fmt.Errorf("niro/googlespeech: empty text")
+		return nil, niro.NewError(niro.ErrCodeInvalidRequest, "empty text")
 	}
 
 	voice, lang, enc, sampleRate, speed, pitch, volume := p.resolveParams(req)
@@ -309,13 +309,13 @@ func (p *Provider) Synthesize(ctx context.Context, req *niro.TTSRequest) (*niro.
 // frames as results arrive. For single-shot `Audio`, it uses Recognize.
 func (p *Provider) Transcribe(ctx context.Context, req *niro.STTRequest) (*niro.Stream, error) {
 	if p == nil {
-		return nil, fmt.Errorf("niro/googlespeech: provider not initialized")
+		return nil, niro.NewError(niro.ErrCodeInvalidRequest, "provider not initialized")
 	}
 	if req == nil {
-		return nil, fmt.Errorf("niro/googlespeech: nil request")
+		return nil, niro.NewError(niro.ErrCodeInvalidRequest, "nil request")
 	}
 	if req.AudioStream == nil && len(req.Audio) == 0 {
-		return nil, fmt.Errorf("niro/googlespeech: empty audio")
+		return nil, niro.NewError(niro.ErrCodeInvalidRequest, "empty audio")
 	}
 
 	client, err := p.ensureSTTClient(ctx)
@@ -369,7 +369,7 @@ func (p *Provider) batchSynthesize(
 		},
 	})
 	if err != nil {
-		return fmt.Errorf("niro/googlespeech: synthesize: %w", err)
+		return niro.WrapError(niro.ErrCodeProviderError, "synthesize", err)
 	}
 
 	audio := resp.GetAudioContent()
@@ -398,10 +398,10 @@ func (p *Provider) streamSynthesize(
 	_ float64,
 ) error {
 	if !streamingVoiceSupported(voice) {
-		return fmt.Errorf("streaming unsupported for voice %q", voice)
+		return niro.NewError(niro.ErrCodeInvalidRequest, "streaming unsupported for voice "+voice)
 	}
 	if enc != texttospeechpb.AudioEncoding_OGG_OPUS {
-		return fmt.Errorf("streaming currently requires OGG_OPUS")
+		return niro.NewError(niro.ErrCodeInvalidRequest, "streaming currently requires OGG_OPUS")
 	}
 
 	stream, err := p.client.StreamingSynthesize(ctx)
@@ -473,7 +473,7 @@ func (p *Provider) transcribeBatch(
 		},
 	})
 	if err != nil {
-		return fmt.Errorf("niro/googlespeech: recognize: %w", err)
+		return niro.WrapError(niro.ErrCodeProviderError, "recognize", err)
 	}
 	for _, result := range resp.GetResults() {
 		alts := result.GetAlternatives()
@@ -500,7 +500,7 @@ func (p *Provider) transcribeStreaming(
 ) error {
 	stream, err := client.StreamingRecognize(ctx)
 	if err != nil {
-		return fmt.Errorf("niro/googlespeech: streaming recognize: %w", err)
+		return niro.WrapError(niro.ErrCodeProviderError, "streaming recognize", err)
 	}
 	if err := stream.Send(&speechpb.StreamingRecognizeRequest{
 		StreamingRequest: &speechpb.StreamingRecognizeRequest_StreamingConfig{
@@ -512,7 +512,7 @@ func (p *Provider) transcribeStreaming(
 		},
 	}); err != nil {
 		_ = stream.CloseSend()
-		return fmt.Errorf("niro/googlespeech: send stt config: %w", err)
+		return niro.WrapError(niro.ErrCodeProviderError, "send stt config", err)
 	}
 
 	sendErr := make(chan error, 1)
@@ -546,11 +546,11 @@ func (p *Provider) transcribeStreaming(
 		if recvErr != nil {
 			if recvErr == io.EOF {
 				if err := <-sendErr; err != nil {
-					return fmt.Errorf("niro/googlespeech: send audio: %w", err)
+					return niro.WrapError(niro.ErrCodeProviderError, "send audio", err)
 				}
 				return nil
 			}
-			return fmt.Errorf("niro/googlespeech: recv transcript: %w", recvErr)
+			return niro.WrapError(niro.ErrCodeProviderError, "recv transcript", recvErr)
 		}
 		for _, result := range resp.GetResults() {
 			alts := result.GetAlternatives()
@@ -919,7 +919,7 @@ func (p *Provider) ensureSTTClient(ctx context.Context) (sttClient, error) {
 	}
 	client, err := speech.NewClient(ctx, p.sttClientOpts...)
 	if err != nil {
-		return nil, fmt.Errorf("niro/googlespeech: create speech client: %w", err)
+		return nil, niro.WrapError(niro.ErrCodeProviderError, "create speech client", err)
 	}
 	p.sttClient = sttClientWrapper{Client: client}
 	return p.sttClient, nil

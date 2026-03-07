@@ -44,7 +44,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
-	"fmt"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -249,11 +248,11 @@ func New(apiKey string, opts ...Option) *Provider {
 // Context cancellation aborts the HTTP request immediately.
 func (p *Provider) Synthesize(ctx context.Context, req *niro.TTSRequest) (*niro.Stream, error) {
 	if req == nil {
-		return nil, fmt.Errorf("niro/elevenlabs: nil request")
+		return nil, niro.NewError(niro.ErrCodeInvalidRequest, "nil request")
 	}
 	text := strings.TrimSpace(req.Text)
 	if text == "" {
-		return nil, fmt.Errorf("niro/elevenlabs: empty text")
+		return nil, niro.NewError(niro.ErrCodeInvalidRequest, "empty text")
 	}
 
 	voice := req.Voice
@@ -288,12 +287,12 @@ func (p *Provider) Synthesize(ctx context.Context, req *niro.TTSRequest) (*niro.
 	raw, err := niro.JSONMarshal(tb)
 	releaseTTSBody(tb)
 	if err != nil {
-		return nil, fmt.Errorf("niro/elevenlabs: marshal: %w", err)
+		return nil, niro.WrapError(niro.ErrCodeInvalidRequest, "marshal", err)
 	}
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, u, bytes.NewReader(raw))
 	if err != nil {
-		return nil, fmt.Errorf("niro/elevenlabs: %w", err)
+		return nil, niro.WrapError(niro.ErrCodeProviderError, "request", err)
 	}
 	httpReq.Header.Set("xi-api-key", p.apiKey)
 	httpReq.Header.Set("Content-Type", "application/json")
@@ -309,7 +308,7 @@ func (p *Provider) Synthesize(ctx context.Context, req *niro.TTSRequest) (*niro.
 
 	resp, err := p.client.Do(httpReq)
 	if err != nil {
-		return nil, fmt.Errorf("niro/elevenlabs: %w", err)
+		return nil, niro.WrapError(niro.ErrCodeProviderError, "do", err)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, readAPIError(resp)
@@ -345,7 +344,7 @@ func (p *Provider) consumeTTS(ctx context.Context, body io.ReadCloser, out *niro
 		}
 		if err != nil {
 			if err != io.EOF {
-				out.Error(fmt.Errorf("niro/elevenlabs: read: %w", err))
+				out.Error(niro.WrapError(niro.ErrCodeStreamError, "read", err))
 			}
 			return
 		}
@@ -368,7 +367,7 @@ func (p *Provider) consumeTTS(ctx context.Context, body io.ReadCloser, out *niro
 // (WebSocket mode only; ignored for batch).
 func (p *Provider) Transcribe(ctx context.Context, req *niro.STTRequest) (*niro.Stream, error) {
 	if req == nil {
-		return nil, fmt.Errorf("niro/elevenlabs: nil request")
+		return nil, niro.NewError(niro.ErrCodeInvalidRequest, "nil request")
 	}
 	if req.AudioStream != nil {
 		return p.transcribeStream(ctx, req)
@@ -381,7 +380,7 @@ func (p *Provider) Transcribe(ctx context.Context, req *niro.STTRequest) (*niro.
 func (p *Provider) transcribeBatch(ctx context.Context, req *niro.STTRequest) (*niro.Stream, error) {
 	audio := req.Audio
 	if len(audio) == 0 {
-		return nil, fmt.Errorf("niro/elevenlabs: empty audio")
+		return nil, niro.NewError(niro.ErrCodeInvalidRequest, "empty audio")
 	}
 
 	model := req.Model
@@ -399,30 +398,30 @@ func (p *Provider) transcribeBatch(ctx context.Context, req *niro.STTRequest) (*
 	w := multipart.NewWriter(&body)
 
 	if err := w.WriteField("model_id", model); err != nil {
-		return nil, fmt.Errorf("niro/elevenlabs: multipart model_id: %w", err)
+		return nil, niro.WrapError(niro.ErrCodeInvalidRequest, "multipart model_id", err)
 	}
 	if lang != "" {
 		if err := w.WriteField("language_code", lang); err != nil {
-			return nil, fmt.Errorf("niro/elevenlabs: multipart language_code: %w", err)
+			return nil, niro.WrapError(niro.ErrCodeInvalidRequest, "multipart language_code", err)
 		}
 	}
 
 	ext := extFromMIME(req.InputFormat)
 	part, err := w.CreateFormFile("file", "audio"+ext)
 	if err != nil {
-		return nil, fmt.Errorf("niro/elevenlabs: %w", err)
+		return nil, niro.WrapError(niro.ErrCodeProviderError, "do", err)
 	}
 	if _, err := part.Write(audio); err != nil {
-		return nil, fmt.Errorf("niro/elevenlabs: multipart file write: %w", err)
+		return nil, niro.WrapError(niro.ErrCodeProviderError, "multipart file write", err)
 	}
 	if err := w.Close(); err != nil {
-		return nil, fmt.Errorf("niro/elevenlabs: multipart close: %w", err)
+		return nil, niro.WrapError(niro.ErrCodeProviderError, "multipart close", err)
 	}
 
 	u := p.baseURL + "/speech-to-text"
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, u, &body)
 	if err != nil {
-		return nil, fmt.Errorf("niro/elevenlabs: %w", err)
+		return nil, niro.WrapError(niro.ErrCodeProviderError, "do", err)
 	}
 	httpReq.Header.Set("xi-api-key", p.apiKey)
 	httpReq.Header.Set("Content-Type", w.FormDataContentType())
@@ -437,7 +436,7 @@ func (p *Provider) transcribeBatch(ctx context.Context, req *niro.STTRequest) (*
 
 	resp, err := p.client.Do(httpReq)
 	if err != nil {
-		return nil, fmt.Errorf("niro/elevenlabs: %w", err)
+		return nil, niro.WrapError(niro.ErrCodeProviderError, "do", err)
 	}
 	defer resp.Body.Close()
 
@@ -447,7 +446,7 @@ func (p *Provider) transcribeBatch(ctx context.Context, req *niro.STTRequest) (*
 
 	var result sttResponse
 	if err := niro.JSONNewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("niro/elevenlabs: decode: %w", err)
+		return nil, niro.WrapError(niro.ErrCodeProviderError, "decode", err)
 	}
 
 	text := strings.TrimSpace(result.Text)
@@ -471,7 +470,7 @@ func (p *Provider) transcribeStream(ctx context.Context, req *niro.STTRequest) (
 
 	u, err := url.Parse(p.wsURL)
 	if err != nil {
-		return nil, fmt.Errorf("niro/elevenlabs: bad ws url: %w", err)
+		return nil, niro.WrapError(niro.ErrCodeInvalidRequest, "bad ws url", err)
 	}
 	q := u.Query()
 	q.Set("model_id", model)
@@ -495,7 +494,7 @@ func (p *Provider) transcribeStream(ctx context.Context, req *niro.STTRequest) (
 	}
 	conn, _, err := dialer.DialContext(ctx, u.String(), header)
 	if err != nil {
-		return nil, fmt.Errorf("niro/elevenlabs: ws dial: %w", err)
+		return nil, niro.WrapError(niro.ErrCodeProviderError, "ws dial", err)
 	}
 
 	stream, emitter := niro.NewStream(niro.DefaultStreamBuffer)
@@ -528,7 +527,7 @@ func (p *Provider) sttReadLoop(ctx context.Context, conn *websocket.Conn, out *n
 				websocket.CloseNormalClosure,
 				websocket.CloseGoingAway,
 			) {
-				out.Error(fmt.Errorf("niro/elevenlabs: ws read: %w", err))
+				out.Error(niro.WrapError(niro.ErrCodeStreamError, "ws read", err))
 			}
 			return
 		}
@@ -587,14 +586,14 @@ func (p *Provider) sttWriteLoop(ctx context.Context, cancel context.CancelFunc, 
 
 		if err := conn.WriteMessage(websocket.TextMessage, msg); err != nil {
 			if ctx.Err() == nil {
-				out.Error(fmt.Errorf("niro/elevenlabs: ws write: %w", err))
+				out.Error(niro.WrapError(niro.ErrCodeStreamError, "ws write", err))
 			}
 			return
 		}
 	}
 
 	if err := src.Err(); err != nil {
-		out.Error(fmt.Errorf("niro/elevenlabs: audio stream: %w", err))
+		out.Error(niro.WrapError(niro.ErrCodeStreamError, "audio stream", err))
 		return
 	}
 
@@ -602,7 +601,7 @@ func (p *Provider) sttWriteLoop(ctx context.Context, cancel context.CancelFunc, 
 		websocket.CloseMessage,
 		websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""),
 	); err != nil && ctx.Err() == nil {
-		out.Error(fmt.Errorf("niro/elevenlabs: ws close: %w", err))
+		out.Error(niro.WrapError(niro.ErrCodeStreamError, "ws close", err))
 	}
 }
 
@@ -622,7 +621,7 @@ func isFinalMessageType(t string) bool {
 func readAPIError(resp *http.Response) error {
 	defer resp.Body.Close()
 	b, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-	return fmt.Errorf("niro/elevenlabs: status %d: %s", resp.StatusCode, bytes.TrimSpace(b))
+	return niro.NewErrorf(niro.ConvertHTTPStatusToCode(resp.StatusCode), "status %d: %s", resp.StatusCode, string(bytes.TrimSpace(b)))
 }
 
 // mimeFromFormat converts an ElevenLabs output_format parameter to a MIME type.

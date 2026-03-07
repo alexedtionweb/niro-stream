@@ -210,10 +210,6 @@ func (p *Provider) Generate(ctx context.Context, req *niro.Request) (*niro.Strea
 		return nil, niro.NewError(niro.ErrCodeInvalidRequest, "niro/google: experimental reasoning is not supported").WithProvider("google")
 	}
 
-	if err := req.Validate(); err != nil {
-		return nil, err
-	}
-
 	modelName := req.Model
 	if modelName == "" {
 		modelName = p.model
@@ -506,6 +502,10 @@ func buildConfig(req *niro.Request) *genai.GenerateContentConfig {
 
 	if req.Options.MaxTokens > 0 {
 		cfg.MaxOutputTokens = int32(req.Options.MaxTokens)
+	}
+	if req.Options.ThinkingBudget != nil {
+		budget := int32(*req.Options.ThinkingBudget)
+		cfg.ThinkingConfig = &genai.ThinkingConfig{ThinkingBudget: &budget}
 	}
 	if req.Options.Temperature != nil {
 		t := float32(*req.Options.Temperature)

@@ -27,7 +27,6 @@ package openai
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"strings"
 
 	oai "github.com/openai/openai-go"
@@ -141,10 +140,10 @@ func (p *Provider) CacheCaps() niro.CacheCapabilities {
 // Generate implements niro.Provider.
 func (p *Provider) Generate(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
 	if req == nil {
-		return nil, fmt.Errorf("niro/openai: nil request")
+		return nil, niro.NewError(niro.ErrCodeInvalidRequest, "nil request")
 	}
 	if req.Options.ExperimentalReasoning {
-		return nil, fmt.Errorf("niro/openai: experimental reasoning is not supported")
+		return nil, niro.NewError(niro.ErrCodeInvalidRequest, "experimental reasoning is not supported")
 	}
 
 	model := req.Model
@@ -233,7 +232,7 @@ func consume(
 	}
 
 	if err := sdk.Err(); err != nil {
-		out.Error(fmt.Errorf("niro/openai: stream: %w", err))
+		out.Error(niro.WrapError(niro.ErrCodeStreamError, "stream", err))
 		return
 	}
 

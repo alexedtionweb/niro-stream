@@ -618,8 +618,8 @@ func TestGenerate_StreamError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected stream error, got nil")
 	}
-	if !strings.Contains(err.Error(), "niro/openai: stream:") {
-		t.Errorf("error should contain 'niro/openai: stream:', got: %v", err)
+	if !strings.Contains(err.Error(), "stream:") {
+		t.Errorf("error should contain 'stream:', got: %v", err)
 	}
 }
 

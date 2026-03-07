@@ -24,7 +24,6 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -89,10 +88,10 @@ func New(baseURL, apiKey string, opts ...Option) *Provider {
 // Generate implements niro.Provider.
 func (p *Provider) Generate(ctx context.Context, req *niro.Request) (*niro.Stream, error) {
 	if req == nil {
-		return nil, fmt.Errorf("niro/compat: nil request")
+		return nil, niro.NewError(niro.ErrCodeInvalidRequest, "nil request")
 	}
 	if req.Options.ExperimentalReasoning {
-		return nil, fmt.Errorf("niro/compat: experimental reasoning is not supported")
+		return nil, niro.NewError(niro.ErrCodeInvalidRequest, "experimental reasoning is not supported")
 	}
 
 	model := req.Model
@@ -102,13 +101,13 @@ func (p *Provider) Generate(ctx context.Context, req *niro.Request) (*niro.Strea
 
 	body, err := niro.JSONMarshal(buildRequest(model, req))
 	if err != nil {
-		return nil, fmt.Errorf("niro/compat: marshal: %w", err)
+		return nil, niro.WrapError(niro.ErrCodeInvalidRequest, "marshal", err)
 	}
 
 	httpReq, err := http.NewRequestWithContext(ctx, "POST",
 		p.baseURL+"/chat/completions", bytes.NewReader(body))
 	if err != nil {
-		return nil, fmt.Errorf("niro/compat: request: %w", err)
+		return nil, niro.WrapError(niro.ErrCodeInvalidRequest, "request", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "text/event-stream")
@@ -121,12 +120,12 @@ func (p *Provider) Generate(ctx context.Context, req *niro.Request) (*niro.Strea
 
 	resp, err := p.client.Do(httpReq)
 	if err != nil {
-		return nil, fmt.Errorf("niro/compat: do: %w", err)
+		return nil, niro.WrapError(niro.ErrCodeProviderError, "do", err)
 	}
 	if resp.StatusCode != http.StatusOK {
 		defer resp.Body.Close()
 		b, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("niro/compat: status %d: %s", resp.StatusCode, b)
+		return nil, niro.NewErrorf(niro.ConvertHTTPStatusToCode(resp.StatusCode), "status %d: %s", resp.StatusCode, string(b))
 	}
 
 	stream, emitter := niro.NewStream(niro.DefaultStreamBuffer)
@@ -147,13 +146,13 @@ func consume(ctx context.Context, body io.ReadCloser, out *niro.Emitter) {
 			break
 		}
 		if err != nil {
-			out.Error(fmt.Errorf("niro/compat: sse: %w", err))
+			out.Error(niro.WrapError(niro.ErrCodeStreamError, "sse", err))
 			return
 		}
 
 		var c chunk
 		if err := niro.JSONUnmarshal(ev.Data, &c); err != nil {
-			out.Error(fmt.Errorf("niro/compat: decode: %w", err))
+			out.Error(niro.WrapError(niro.ErrCodeStreamError, "decode", err))
 			return
 		}
 

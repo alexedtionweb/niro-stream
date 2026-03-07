@@ -62,7 +62,7 @@ type TimeoutProvider struct {
 // NewTimeoutProvider creates a Provider that enforces generation timeouts.
 func NewTimeoutProvider(p Provider, timeout time.Duration) *TimeoutProvider {
 	if timeout <= 0 {
-		timeout = 5 * time.Minute
+		timeout = DefaultTimeoutConfig().GenerationTimeout
 	}
 	return &TimeoutProvider{provider: p, timeout: timeout}
 }

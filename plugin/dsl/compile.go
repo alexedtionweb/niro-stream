@@ -109,8 +109,9 @@ func compileAgents(def *DSLDefinition) (map[string]*CompiledAgentConfig, error) 
 			Output:         cfg.Output,
 		}
 		compiled.Options = niro.Options{
-			MaxTokens:   cfg.ModelConfig.MaxTokens,
-			Temperature: cfg.ModelConfig.Temperature,
+			MaxTokens:      cfg.ModelConfig.MaxTokens,
+			Temperature:    cfg.ModelConfig.Temperature,
+			ThinkingBudget: cfg.ModelConfig.ThinkingBudget,
 		}
 		compiled.ToolChoice = parseToolChoice(cfg.ToolChoice)
 		out[name] = compiled

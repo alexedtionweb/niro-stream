@@ -77,7 +77,7 @@ func col(c, s string) string {
 var noColour = os.Getenv("NO_COLOR") != "" || os.Getenv("TERM") == "dumb"
 
 // stepLog logs one pipeline step. Message is the step name; attrs are key=value. All steps use Info so the flow is visible by default.
-// Steps: startup, turn_start, agent_start, tool_call, tool_result, stream_end, agent_end, handoff_start, handoff_end, turn_end, error.
+// Steps: startup, turn_start, agent_start (per-agent from stream), tool_call, tool_result, stream_end (with agent), handoff_start, agent_end, turn_end, error.
 func stepLog(step string, attrs ...any) { slog.Info(step, attrs...) }
 
 // ── Config & paths ────────────────────────────────────────────────────────────
@@ -187,60 +187,83 @@ type replState struct {
 }
 
 // replSink prints LLM output (response, thinking, tool calls) to stdout via the output.Sink API.
+// It uses a buffered stdout writer and flushes after each text chunk so streamed tokens
+// appear immediately in the terminal (avoids line-buffering).
+// Agent identity is provided by output.RouteAgent via context; retrieve with output.AgentFromContext.
 type replSink struct {
 	printedAI bool
 	col       func(c, s string) string
+	out       *bufio.Writer
 }
 
 func newReplSink(col func(c, s string) string) *replSink {
-	return &replSink{col: col}
+	return &replSink{col: col, out: bufio.NewWriter(os.Stdout)}
 }
 
 func (s *replSink) Reset() { s.printedAI = false }
 
+// flush writes any buffered stdout so streamed output appears immediately.
+func (s *replSink) flush() { _ = s.out.Flush() }
+
 func (s *replSink) Sink() *output.Sink {
 	return &output.Sink{
+		OnAgentStart: func(ctx context.Context, agent string) error {
+			stepLog("agent_start", "agent", agent)
+			return nil
+		},
 		OnText: func(ctx context.Context, text string) error {
 			if !s.printedAI {
-				fmt.Print(s.col(colBold+colCyan, "AI   › "))
+				agent := output.AgentFromContext(ctx)
+				if agent != "" {
+					_, _ = fmt.Fprintf(s.out, "%s ", s.col(colDim, "["+agent+"]"))
+				}
+				_, _ = fmt.Fprint(s.out, s.col(colBold+colCyan, "AI   › "))
 				s.printedAI = true
 			}
-			fmt.Print(text)
+			_, _ = fmt.Fprint(s.out, text)
+			s.flush()
 			return nil
 		},
 		OnThinking: func(ctx context.Context, text string) error {
 			if !s.printedAI {
-				fmt.Print(s.col(colBold+colCyan, "AI   › "))
+				_, _ = fmt.Fprint(s.out, s.col(colBold+colCyan, "AI   › "))
 				s.printedAI = true
 			}
-			fmt.Println()
-			fmt.Print(s.col(colDim, "Think› "))
-			fmt.Println(text)
+			_, _ = fmt.Fprint(s.out, "\n")
+			_, _ = fmt.Fprint(s.out, s.col(colDim, "Think› "))
+			_, _ = fmt.Fprint(s.out, text)
+			_, _ = fmt.Fprint(s.out, "\n")
+			s.flush()
 			return nil
 		},
 		OnToolCall: func(ctx context.Context, call *niro.ToolCall) error {
+			agent := output.AgentFromContext(ctx)
 			if !s.printedAI {
-				fmt.Print(s.col(colBold+colCyan, "AI   › "))
+				_, _ = fmt.Fprint(s.out, s.col(colBold+colCyan, "AI   › "))
 				s.printedAI = true
 			}
-			fmt.Println()
+			_, _ = fmt.Fprint(s.out, "\n")
+			s.flush()
 			argsStr := string(call.Args)
-			stepLog("tool_call", "name", call.Name, "args", argsStr)
+			stepLog("tool_call", "agent", agent, "name", call.Name, "args", argsStr)
 			args := compactJSON(call.Args)
 			if args != "" {
 				args = "(" + args + ")"
 			}
-			fmt.Println(s.col(colYellow, "  🔧 "+call.Name+args))
+			_, _ = fmt.Fprintln(s.out, s.col(colYellow, "  🔧 "+call.Name+args))
+			s.flush()
 			return nil
 		},
 		OnToolResult: func(ctx context.Context, res *niro.ToolResult) error {
-			stepLog("tool_result", "call_id", res.CallID, "is_error", res.IsError, "content", truncateForLog(res.Content, maxLogContentLen))
+			agent := output.AgentFromContext(ctx)
+			stepLog("tool_result", "agent", agent, "call_id", res.CallID, "is_error", res.IsError, "content", truncateForLog(res.Content, maxLogContentLen))
 			preview := truncateForLog(res.Content, maxPreviewLen)
 			if res.IsError {
-				fmt.Println(s.col(colRed, "  ← err: "+preview))
+				_, _ = fmt.Fprintln(s.out, s.col(colRed, "  ← err: "+preview))
 			} else {
-				fmt.Println(s.col(colDim, "  ← "+preview))
+				_, _ = fmt.Fprintln(s.out, s.col(colDim, "  ← "+preview))
 			}
+			s.flush()
 			return nil
 		},
 		OnCustom: func(ctx context.Context, typ string, data any) error {
@@ -250,9 +273,20 @@ func (s *replSink) Sink() *output.Sink {
 			}
 			return nil
 		},
-		OnEnd: func(ctx context.Context, u niro.Usage) error {
-			stepLog("stream_end", "in", u.InputTokens, "out", u.OutputTokens, "total", u.TotalTokens)
-			fmt.Println()
+		OnEnd: func(ctx context.Context, u niro.Usage, resp *niro.ResponseMeta) error {
+			agent := output.AgentFromContext(ctx)
+			// Flush a newline to stdout BEFORE the log line so the text
+			// doesn't visually merge with the slog output on stderr.
+			if s.printedAI {
+				_, _ = fmt.Fprint(s.out, "\n")
+				s.flush()
+			}
+			var fr string
+			if resp != nil {
+				fr = resp.FinishReason
+			}
+			stepLog("stream_end", "agent", agent, "in", u.InputTokens, "out", u.OutputTokens, "total", u.TotalTokens, "finish_reason", fr)
+			s.printedAI = false
 			return nil
 		},
 	}
@@ -317,7 +351,6 @@ func runUserMessage(ctx context.Context, input, chatAgent, session string, runne
 	runCtx.Set("messages", state.history)
 	runCtx.Set("event", map[string]any{"text": input})
 
-	stepLog("agent_start", "session", session, "agent", chatAgent)
 	state.sink.Reset()
 	stream, err := runner.Stream(ctx, runCtx, chatAgent, session)
 	if err != nil {
@@ -334,10 +367,17 @@ func runUserMessage(ctx context.Context, input, chatAgent, session string, runne
 	}
 
 	u := stream.Usage()
-	stepLog("agent_end", "session", session, "agent", chatAgent, "reply_len", len(reply), "in", u.InputTokens, "out", u.OutputTokens)
+	var finishReason string
+	if r := stream.Response(); r != nil {
+		finishReason = r.FinishReason
+	}
+	stepLog("agent_end", "session", session, "agent", chatAgent, "reply_len", len(reply), "in", u.InputTokens, "out", u.OutputTokens, "finish_reason", finishReason)
 
 	if reply != "" {
 		state.history = append(state.history, niro.AssistantText(reply))
+	} else if niro.IsRefusalOrBlock(finishReason) {
+		msg := "Resposta bloqueada ou recusada pelo modelo (finish_reason: " + finishReason + ")."
+		fmt.Fprintln(os.Stderr, col(colRed, msg))
 	}
 	state.totalIn += u.InputTokens
 	state.totalOut += u.OutputTokens

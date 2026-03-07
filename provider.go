@@ -125,6 +125,11 @@ type Options struct {
 	FrequencyPenalty *float64 // Frequency penalty (OpenAI)
 	PresencePenalty  *float64 // Presence penalty (OpenAI)
 	Stop             []string // Stop sequences
+	// ThinkingBudget controls the token budget for model-internal reasoning
+	// (e.g. Gemini 2.5 "thinking"). Nil = provider default, 0 = disable thinking.
+	// When MaxTokens is set on a thinking model, the thinking budget is deducted
+	// from MaxTokens; set ThinkingBudget explicitly to avoid truncated output.
+	ThinkingBudget *int
 	// Cache configures provider-agnostic input cache intent.
 	// Nil means cache is disabled with zero hot-path overhead.
 	Cache *CacheOptions

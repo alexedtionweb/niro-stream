@@ -34,8 +34,6 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
-	"errors"
-	"fmt"
 	"net/http"
 	"strings"
 	"sync"
@@ -148,7 +146,7 @@ func (p *Provider) Session(ctx context.Context, cfg niro.RealtimeConfig) (niro.R
 	dialer := websocket.Dialer{HandshakeTimeout: handshakeTimeout}
 	conn, _, err := dialer.DialContext(ctx, url, headers)
 	if err != nil {
-		return nil, fmt.Errorf("realtime: dial %s: %w", url, err)
+		return nil, niro.WrapError(niro.ErrCodeProviderError, "dial "+url, err)
 	}
 
 	recv, recvEmit := niro.NewStream(niro.RealtimeStreamBuffer)
@@ -226,7 +224,7 @@ func (s *Session) Send(ctx context.Context, f niro.Frame) error {
 		return s.sendTextMessage(f.Text)
 	case niro.KindToolResult:
 		if f.Result == nil {
-			return errors.New("realtime: Send: nil ToolResult")
+			return niro.NewError(niro.ErrCodeInvalidRequest, "Send: nil ToolResult")
 		}
 		return s.sendToolResult(f.Result)
 	case niro.KindControl:
@@ -356,7 +354,7 @@ func (s *Session) sendToolResult(result *niro.ToolResult) error {
 func (s *Session) enqueue(ev rtClientEvent) error {
 	data, err := json.Marshal(ev)
 	if err != nil {
-		return fmt.Errorf("realtime: marshal: %w", err)
+		return niro.WrapError(niro.ErrCodeProviderError, "marshal", err)
 	}
 	select {
 	case <-s.closed:
@@ -374,7 +372,7 @@ func (s *Session) waitSessionCreated(ctx context.Context) error {
 		for {
 			_, msg, err := s.conn.ReadMessage()
 			if err != nil {
-				done <- fmt.Errorf("realtime: waiting for session.created: %w", err)
+				done <- niro.WrapError(niro.ErrCodeStreamError, "waiting for session.created", err)
 				return
 			}
 			var ev rtServerEvent
@@ -383,7 +381,7 @@ func (s *Session) waitSessionCreated(ctx context.Context) error {
 				return
 			}
 			if ev.Type == "error" {
-				done <- fmt.Errorf("realtime: server error on connect: %s", ev.Error.Message)
+				done <- niro.NewError(niro.ErrCodeProviderError, "server error on connect: "+ev.Error.Message)
 				return
 			}
 		}
@@ -601,7 +599,7 @@ func (s *Session) handleServerEvent(ev rtServerEvent) {
 
 	// ── Errors ────────────────────────────────────────────────────────────
 	case "error":
-		err := fmt.Errorf("realtime: server error [%s]: %s", ev.Error.Code, ev.Error.Message)
+		err := niro.NewErrorf(niro.ErrCodeProviderError, "server error [%s]: %s", ev.Error.Code, ev.Error.Message)
 		s.storeErr(err)
 		s.recvEmit.Error(err)
 	}

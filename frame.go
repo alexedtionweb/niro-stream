@@ -293,6 +293,23 @@ func (u *Usage) Reset() {
 	}
 }
 
+// Well-known FinishReason values from providers.
+// Use these when checking ResponseMeta.FinishReason (e.g. to show a message on empty reply).
+const (
+	FinishReasonStop          = "stop"           // Normal end or stop sequence
+	FinishReasonLength        = "length"         // Max tokens reached
+	FinishReasonToolCalls     = "tool_calls"     // Model requested tool use
+	FinishReasonContentFilter = "content_filter" // Blocked by safety/refusal
+	FinishReasonOther         = "other"          // Provider-specific (e.g. malformed)
+)
+
+// IsRefusalOrBlock returns true when FinishReason indicates the model produced no output
+// due to safety/refusal or similar (content_filter, other). Use to show a user-visible message
+// when stream has no text but the turn completed without error.
+func IsRefusalOrBlock(finishReason string) bool {
+	return finishReason == FinishReasonContentFilter || finishReason == FinishReasonOther
+}
+
 // ResponseMeta carries metadata about a completed generation.
 // Available after the stream is fully consumed via Stream.Response().
 type ResponseMeta struct {
@@ -300,7 +317,7 @@ type ResponseMeta struct {
 	Model string
 
 	// FinishReason indicates why generation stopped.
-	// Common values: "stop", "length", "tool_calls", "content_filter".
+	// Use the FinishReason* constants or IsRefusalOrBlock for refusal/block.
 	FinishReason string
 
 	// ID is the provider-assigned response ID.

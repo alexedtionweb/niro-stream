@@ -12,7 +12,7 @@ import (
 
 func TestDefaultTimeoutConfig(t *testing.T) {
 	t.Parallel()
-	cfg := middleware.DefaultTimeoutConfig()
+	cfg := niro.DefaultTimeoutConfig()
 	assertEqual(t, cfg.GenerationTimeout, 5*time.Minute)
 	assertEqual(t, cfg.FrameTimeout, 30*time.Second)
 	assertEqual(t, cfg.ToolTimeout, 1*time.Minute)

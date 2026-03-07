@@ -30,10 +30,11 @@ type AgentConfig struct {
 	Limits      LimitsConfig  `json:"limits"`
 }
 
-// ModelConfig maps to niro.Options (temperature, max_tokens).
+// ModelConfig maps to niro.Options (temperature, max_tokens, thinking_budget).
 type ModelConfig struct {
-	Temperature *float64 `json:"temperature"`
-	MaxTokens   int      `json:"max_tokens"`
+	Temperature    *float64 `json:"temperature"`
+	MaxTokens      int      `json:"max_tokens"`
+	ThinkingBudget *int     `json:"thinking_budget"`
 }
 
 // PromptConfig holds the system prompt; Template is a Go text/template string (RunContext as data).

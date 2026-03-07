@@ -163,7 +163,7 @@ func (c *mockComponent) Name() string                         { return c.name }
 func (c *mockComponent) Capabilities() []component.Capability { return nil }
 func (c *mockComponent) Start(ctx context.Context) error      { return nil }
 func (c *mockComponent) Close() error                         { return nil }
-func (c *mockComponent) Apply(rt *agent.Runtime) error {
+func (c *mockComponent) Apply(rt *agent.Agent) error {
 	c.applied = true
 	return c.applyErr
 }
@@ -321,7 +321,7 @@ func TestRuntimeNilChecks(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 
-	var rt *agent.Runtime
+	var rt *agent.Agent
 
 	err := rt.Start(ctx)
 	assertErrorContains(t, err, "nil")
@@ -951,7 +951,7 @@ func TestRuntimeRunStreamNilProvider(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 
-	var rt *agent.Runtime
+	var rt *agent.Agent
 	_, err := rt.RunStream(ctx, "", "hi")
 	assertTrue(t, err != nil)
 }
@@ -1277,7 +1277,7 @@ func TestMiddlewareComponentNilFn(t *testing.T) {
 	c := &agent.MiddlewareComponent{Name_: "nofn"}
 	// Apply requires a runtime with a provider, but Fn is nil → should fail before
 	// hitting provider check. The error includes the component name.
-	// Note: passing &agent.Runtime{} has nil provider so it hits "runtime/provider is nil" first.
+	// Note: passing &agent.Agent{} has nil provider so it hits "runtime/provider is nil" first.
 	// To test the Fn-nil path we need a valid runtime.
 	rt, _ := agent.New(echoProvider("x"))
 	err := c.Apply(rt)

@@ -8,15 +8,15 @@ import (
 	"github.com/alexedtionweb/niro-stream/tools"
 )
 
-// Orchestrator executes a declarative agent definition using a Runtime
+// Orchestrator executes a declarative agent definition using an Agent
 // and optional Toolset for direct tool invocation.
 type Orchestrator struct {
-	Runtime *Runtime
+	Runtime *Agent
 	Toolset *tools.Toolset
 }
 
-// NewOrchestrator creates an orchestrator bound to an agent runtime.
-func NewOrchestrator(rt *Runtime, ts *tools.Toolset) *Orchestrator {
+// NewOrchestrator creates an orchestrator bound to an agent.
+func NewOrchestrator(rt *Agent, ts *tools.Toolset) *Orchestrator {
 	return &Orchestrator{Runtime: rt, Toolset: ts}
 }
 

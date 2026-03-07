@@ -1,9 +1,15 @@
 // Package output provides stream-first routing of LLM output to typed sinks.
 //
-// Use [Route] to tee a [niro.Stream] into one or more sinks so that response text,
-// thinking/reasoning, tool calls, and custom frames are dispatched as they arrive
-// without buffering. The same stream is still forwarded to the caller so existing
-// consumers see identical frames in the same order.
+// Use [Route] or [RouteAgent] to tee a [niro.Stream] into a sink so that response
+// text, thinking/reasoning, tool calls, and custom frames are dispatched as they
+// arrive without buffering. The same stream is still forwarded to the caller so
+// existing consumers see identical frames in the same order.
+//
+// # Agent identity
+//
+// [RouteAgent] injects the agent name into the context passed to every callback.
+// Retrieve it with [AgentFromContext]. This allows sinks to attribute frames to the
+// correct agent even when multiple agents stream in parallel through the same sink.
 //
 // # Sinks
 //
@@ -22,9 +28,28 @@ import (
 	"github.com/alexedtionweb/niro-stream"
 )
 
+type agentKey struct{}
+
+// ContextWithAgent returns a child context carrying the agent name.
+func ContextWithAgent(ctx context.Context, agent string) context.Context {
+	return context.WithValue(ctx, agentKey{}, agent)
+}
+
+// AgentFromContext returns the agent name stored by [ContextWithAgent] (or "").
+func AgentFromContext(ctx context.Context) string {
+	if v, ok := ctx.Value(agentKey{}).(string); ok {
+		return v
+	}
+	return ""
+}
+
 // Sink receives LLM output as it streams. All fields are optional; nil callbacks are not called.
 // Implementations should be fast and non-blocking; dispatch heavy work to another goroutine.
 type Sink struct {
+	// OnAgentStart is called once at the beginning of routing when an agent name is
+	// provided via [RouteAgent]. Use it to log or display which agent is about to stream.
+	OnAgentStart func(ctx context.Context, agent string) error
+
 	// OnText is called for each [niro.KindText] frame (main assistant response for the user).
 	OnText func(ctx context.Context, text string) error
 
@@ -42,27 +67,49 @@ type Sink struct {
 	OnCustom func(ctx context.Context, typ string, data any) error
 
 	// OnEnd is called when the stream ends successfully (after last frame, before close).
-	// Usage is the accumulated usage from the stream.
-	OnEnd func(ctx context.Context, usage niro.Usage) error
+	// Usage is the accumulated usage; resp may be nil when the provider didn't set metadata.
+	OnEnd func(ctx context.Context, usage niro.Usage, resp *niro.ResponseMeta) error
 }
 
 // Route tees src into sink and returns a new stream that forwards all frames in order.
-// Frames are dispatched to the sink's callbacks (by kind and, for KindCustom, by Type)
-// as they are read; then the frame is emitted to the returned stream. Single-pass,
-// no extra buffering — stream-first for minimal latency.
+// Equivalent to RouteAgent(ctx, src, sink, "").
+func Route(ctx context.Context, src *niro.Stream, sink *Sink) *niro.Stream {
+	return RouteAgent(ctx, src, sink, "")
+}
+
+// RouteAgent tees src into sink with agent attribution.
+// If agent is non-empty, the context passed to every callback carries the agent name
+// (retrievable via [AgentFromContext]) and [Sink.OnAgentStart] is called before the
+// first frame. Frames are dispatched to the sink's callbacks (by kind and, for
+// KindCustom, by Type) as they are read; then the frame is emitted to the returned
+// stream. Single-pass, no extra buffering — stream-first for minimal latency.
 //
 // If any sink callback returns a non-nil error, the returned stream is closed with that error.
 // OnEnd is called when the source stream is exhausted without error (sink sees usage there).
-func Route(ctx context.Context, src *niro.Stream, sink *Sink) *niro.Stream {
+func RouteAgent(ctx context.Context, src *niro.Stream, sink *Sink, agent string) *niro.Stream {
 	if sink == nil {
 		return src
 	}
+
+	cbCtx := ctx
+	if agent != "" {
+		cbCtx = ContextWithAgent(ctx, agent)
+	}
+
 	out, em := niro.NewStream(niro.DefaultStreamBuffer)
 	go func() {
 		defer em.Close()
+
+		if agent != "" && sink.OnAgentStart != nil {
+			if err := sink.OnAgentStart(cbCtx, agent); err != nil {
+				em.Error(err)
+				return
+			}
+		}
+
 		for src.Next(ctx) {
 			f := src.Frame()
-			if err := dispatch(ctx, sink, f); err != nil {
+			if err := dispatch(cbCtx, sink, f); err != nil {
 				em.Error(err)
 				return
 			}
@@ -74,7 +121,8 @@ func Route(ctx context.Context, src *niro.Stream, sink *Sink) *niro.Stream {
 			em.Error(err)
 			return
 		}
-		if resp := src.Response(); resp != nil {
+		resp := src.Response()
+		if resp != nil {
 			em.SetResponse(resp)
 		}
 		usage := src.Usage()
@@ -83,7 +131,7 @@ func Route(ctx context.Context, src *niro.Stream, sink *Sink) *niro.Stream {
 			_ = em.Emit(ctx, niro.UsageFrame(&uCopy))
 		}
 		if sink.OnEnd != nil {
-			if err := sink.OnEnd(ctx, usage); err != nil {
+			if err := sink.OnEnd(cbCtx, usage, resp); err != nil {
 				em.Error(err)
 			}
 		}

@@ -31,7 +31,7 @@ func (c *ToolingComponent) Capabilities() []component.Capability {
 func (c *ToolingComponent) Start(ctx context.Context) error { _ = ctx; return nil }
 func (c *ToolingComponent) Close() error                    { return nil }
 
-func (c *ToolingComponent) Apply(rt *Runtime) error {
+func (c *ToolingComponent) Apply(rt *Agent) error {
 	if rt == nil || rt.provider == nil {
 		return fmt.Errorf("agent.tooling: runtime/provider is nil")
 	}
@@ -56,7 +56,7 @@ func (c *MultiTenantComponent) Capabilities() []component.Capability { return ni
 func (c *MultiTenantComponent) Start(ctx context.Context) error      { _ = ctx; return nil }
 func (c *MultiTenantComponent) Close() error                         { return nil }
 
-func (c *MultiTenantComponent) Apply(rt *Runtime) error {
+func (c *MultiTenantComponent) Apply(rt *Agent) error {
 	if rt == nil {
 		return fmt.Errorf("agent.multitenancy: runtime is nil")
 	}
@@ -88,7 +88,7 @@ func (c *RetryComponent) Capabilities() []component.Capability { return nil }
 func (c *RetryComponent) Start(ctx context.Context) error      { _ = ctx; return nil }
 func (c *RetryComponent) Close() error                         { return nil }
 
-func (c *RetryComponent) Apply(rt *Runtime) error {
+func (c *RetryComponent) Apply(rt *Agent) error {
 	if rt == nil || rt.provider == nil {
 		return fmt.Errorf("agent.retry: runtime/provider is nil")
 	}
@@ -122,7 +122,7 @@ func (c *CacheComponent) Capabilities() []component.Capability { return nil }
 func (c *CacheComponent) Start(ctx context.Context) error      { _ = ctx; return nil }
 func (c *CacheComponent) Close() error                         { return nil }
 
-func (c *CacheComponent) Apply(rt *Runtime) error {
+func (c *CacheComponent) Apply(rt *Agent) error {
 	if rt == nil || rt.provider == nil {
 		return fmt.Errorf("agent.cache: runtime/provider is nil")
 	}
@@ -142,7 +142,7 @@ func (c *CacheComponent) Apply(rt *Runtime) error {
 //	)
 type TimeoutComponent struct {
 	// Timeout is the maximum duration for a single Generate call.
-	// Defaults to middleware.DefaultTimeoutConfig().GenerationTimeout (5 min).
+	// Defaults to niro.DefaultTimeoutConfig().GenerationTimeout (5 min).
 	Timeout time.Duration
 }
 
@@ -151,13 +151,13 @@ func (c *TimeoutComponent) Capabilities() []component.Capability { return nil }
 func (c *TimeoutComponent) Start(ctx context.Context) error      { _ = ctx; return nil }
 func (c *TimeoutComponent) Close() error                         { return nil }
 
-func (c *TimeoutComponent) Apply(rt *Runtime) error {
+func (c *TimeoutComponent) Apply(rt *Agent) error {
 	if rt == nil || rt.provider == nil {
 		return fmt.Errorf("agent.timeout: runtime/provider is nil")
 	}
 	d := c.Timeout
 	if d <= 0 {
-		d = middleware.DefaultTimeoutConfig().GenerationTimeout
+		d = niro.DefaultTimeoutConfig().GenerationTimeout
 	}
 	rt.provider = middleware.NewTimeoutProvider(rt.provider, d)
 	return nil
@@ -197,7 +197,7 @@ func (c *MiddlewareComponent) Capabilities() []component.Capability { return nil
 func (c *MiddlewareComponent) Start(ctx context.Context) error      { _ = ctx; return nil }
 func (c *MiddlewareComponent) Close() error                         { return nil }
 
-func (c *MiddlewareComponent) Apply(rt *Runtime) error {
+func (c *MiddlewareComponent) Apply(rt *Agent) error {
 	if rt == nil || rt.provider == nil {
 		return fmt.Errorf("%s: runtime/provider is nil", c.Name())
 	}
