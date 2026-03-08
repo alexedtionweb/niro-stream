@@ -926,8 +926,9 @@ niro.SetJSON(&niro.JSONLibrary{
 
 | Document | Description |
 |----------|-------------|
-| [docs/INTEGRATION.md](docs/INTEGRATION.md) | **Integration guide** — dependencies, minimal setup, validation, errors, hooks, tools, middleware, registry, orchestration, structured output, configuration, testing. Use this to hook Niro into another project. |
+| [docs/INTEGRATION.md](docs/INTEGRATION.md) | **Integration guide** — dependencies, minimal setup, validation, errors, hooks, tools, middleware, registry, orchestration, structured output, **agent plugin** (memory, components, peers, orchestrator), configuration, testing. Use this to hook Niro into another project. |
 | [docs/API_REFERENCE.md](docs/API_REFERENCE.md) | **API overview** — packages and main types (Provider, Request, Stream, runtime, hook, tools, output, middleware, registry, structured, plugins). |
+| [docs/DSL_JSON_REFERENCE.md](docs/DSL_JSON_REFERENCE.md) | **DSL & workflow JSON** — every field for agent definitions (tools, agents, model_config, prompt, when/unless), tool types (code, http, handoff), workflows (fan, race, sequence, fan_then), and Orchestrator steps. |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Internal design — Frame, Stream, Pipeline, Provider adapters, Hook lifecycle, orchestration. |
 | [CAPABILITIES.md](CAPABILITIES.md) | Feature list — streaming, tools, cache, registry, multi-tenancy, etc. |
 | [pkg.go.dev](https://pkg.go.dev/github.com/alexedtionweb/niro-stream) | Full Go doc for all packages. |

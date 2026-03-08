@@ -152,14 +152,26 @@ Quick reference to packages and main types for integration and navigation. For f
 
 ## Package: `plugin/agent`
 
+Conversational agent layer: wraps a Provider with **memory** (per-session history), **system prompt**, **components** (e.g. tools), and **peers** (other agents). Each turn: load history → trim (HistoryPolicy) → append user message → Generate → save updated history.
+
 | Symbol | Description |
 |--------|-------------|
-| **Agent** | Runtime with memory, components, peers. |
-| **New(provider, opts)** | Creates agent. |
-| **WithMemory**, **WithComponent**, **WithPeer** | Options. |
-| **Memory** | Load(sessionID), Save(sessionID, messages). |
-| **Run**, **RunStream** | Execute turn. |
-| **Orchestrator** | Runs declarative agent definitions. |
+| **Agent** | Runtime: provider + memory + history policy + components + peers. |
+| **New(provider, opts)** | Build agent; components are applied and started. |
+| **Run(ctx, sessionID, input)** | One turn; returns response text (and runs tool loop if component mounted). |
+| **RunStream(ctx, sessionID, input)** | One turn; returns stream for token-by-token consumption; history saved after stream ends. |
+| **Memory** | Interface: Load(ctx, sessionID), Save(ctx, sessionID, messages). Implement for SQL/Redis/etc.; use StatelessMemory or nil for stateless. |
+| **BoundedLoader** | Optional: LoadLast(ctx, sessionID, maxMessages) for efficient sliding-window backends. |
+| **HistoryPolicy** | TrimForRequest(history); e.g. SlidingWindow(N), NoHistory. |
+| **WithMemory**, **WithMemoryRetry**, **WithHistoryPolicy** | Attach store and retry/trim behavior. |
+| **WithSystemPrompt**, **WithModel**, **WithOptions**, **WithMiddleware** | Prompt and generation defaults. |
+| **WithComponent(c)**, **WithPeer(peer)** | Plugin components (e.g. ToolingComponent) and agent-to-agent Peer. |
+| **Component** | Implement Apply(rt *Agent); registered at New, started via host. |
+| **Peer** | Name(), Ask(ctx, sessionID, input); CallPeer(ctx, peerName, sessionID, input) from agent. |
+| **Orchestrator** | RunDefinition(ctx, sessionID, def): runs steps in order (llm → tool → peer). |
+| **AgentDefinition** | Name, Steps (JSON or Go). |
+| **Step** | Type: "llm" \| "tool" \| "peer"; Input or previous output; ToolName/ToolArgs or PeerName. |
+| **LoadAgentDefinition(path)** | Load AgentDefinition from JSON file. |
 
 ---
 

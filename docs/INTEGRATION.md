@@ -232,7 +232,105 @@ result, resp, usage, err := structured.GenerateStructured[Result](ctx, p, &niro.
 
 ---
 
-## 11. Configuration
+## 11. Agent plugin
+
+The **agent plugin** (`plugin/agent`) adds a conversational layer on top of a Niro provider: **memory** (per-session history), **system prompt**, **components** (e.g. tools), and **peers** (other agents). It is optional; use it when you need stateful, multi-turn conversations with a single agent identity.
+
+### What the Agent is
+
+- **Agent** wraps a `Provider` and adds:
+  - **Memory**: load/save conversation history by `sessionID` (you implement the backend: SQL, Redis, in-memory, etc.).
+  - **History policy**: how much history is sent each turn (e.g. sliding window, no history).
+  - **System prompt**: fixed instructions for every turn.
+  - **Components**: plugins that run at startup and can inject tools or behavior (e.g. `ToolingComponent`).
+  - **Peers**: named agents you can call from this agent via `CallPeer(ctx, peerName, sessionID, input)`.
+
+- Each **turn** works as: load history for `sessionID` → trim with history policy → append new user message → call provider → stream or collect response → append assistant message to history → save.
+
+### Basic usage
+
+```go
+import (
+    "github.com/alexedtionweb/niro-stream/plugin/agent"
+)
+
+// Stateless (no memory)
+ag, err := agent.New(llm,
+    agent.WithModel("gpt-4o"),
+    agent.WithSystemPrompt("You are a helpful assistant."),
+)
+// One turn
+result, err := ag.Run(ctx, "session-1", "What is 2+2?")
+
+// With memory (e.g. in-memory for dev)
+mem := agent.NewInMemoryMemory()
+ag, err = agent.New(llm,
+    agent.WithMemory(mem),
+    agent.WithSystemPrompt("You are a helpful assistant."),
+    agent.WithHistoryPolicy(agent.SlidingWindow(20)),
+)
+result, err = ag.Run(ctx, "session-1", "Remember my name is Alice.")
+// Next turn: history includes previous exchange
+result, err = ag.Run(ctx, "session-1", "What is my name?")
+```
+
+- **Run(ctx, sessionID, input)** returns full response text (and runs the tool loop if a tooling component is mounted).
+- **RunStream(ctx, sessionID, input)** returns a `*niro.Stream` so you can consume tokens as they arrive; history is still loaded and saved after the stream ends.
+
+### Memory and history
+
+- Implement **Memory** (Load, Save) for your store. Use **StatelessMemory** or `nil` for no persistence.
+- **HistoryPolicy** (e.g. **SlidingWindow**(N)) trims how many messages are sent to the model; the full history can still be stored. If your Memory implements **BoundedLoader** and the policy implements **BoundedHistoryPolicy** with a cap, the runtime calls **LoadLast**(sessionID, max) so the backend can fetch only the last N messages.
+- **WithMemoryRetry** configures retries for Load/Save (default 3 attempts, exponential backoff). Make Save idempotent for safe retries.
+
+### Components and peers
+
+- **WithComponent(c)** registers a component; at **New**, each component is registered with the agent’s **ComponentHost**, started, and **Apply(rt)** is called so it can attach tools or middleware to the Agent.
+- **ToolingComponent** (from the agent package) attaches a **tools.Toolset** and optional **ToolExecutor** to the agent so **Run** / **RunStream** use the tool loop automatically.
+- **WithPeer(peer)** registers a **Peer** (Name, Ask(ctx, sessionID, input)). Use **CallPeer(ctx, peerName, sessionID, input)** from inside the agent (or from an Orchestrator step) to delegate to another agent.
+
+### Orchestrator (declarative steps)
+
+The **Orchestrator** runs an **AgentDefinition**: a list of steps (JSON or Go structs). Steps run in order; each step’s input is **Step.Input** if set, otherwise the previous step’s output.
+
+- **Step types**: **"llm"** (agent.Run), **"tool"** (Toolset.ExecuteCall), **"peer"** (CallPeer).
+- Use this for fixed workflows (e.g. “call LLM → call tool → call peer”) without writing a custom loop.
+
+```go
+def := &agent.AgentDefinition{
+    Name: "helper",
+    Steps: []agent.Step{
+        {Type: "llm", Input: "Summarize the user request in one line."},
+        {Type: "tool", ToolName: "fetch_data", ToolArgs: []byte(`{"id":"123"}`)},
+        {Type: "llm"}, // input = previous step output
+    },
+}
+orch := agent.NewOrchestrator(ag, toolset)
+out, err := orch.RunDefinition(ctx, sessionID, def)
+```
+
+- **LoadAgentDefinition(path)** loads from a JSON file; see **AgentDefinition** and **Step** in `plugin/agent`.
+
+### Relation to the DSL plugin
+
+- **plugin/agent**: programmatic API (Agent, Memory, Orchestrator, components, peers).
+- **plugin/dsl**: parses and compiles **JSON** agent and workflow definitions and runs them (including multi-step and multi-agent flows); it can use the same concepts (agents, tools, steps) from config. Use the agent package when you build agents in Go; use the DSL when you drive behavior from JSON/YAML.
+
+---
+
+## 12. DSL and workflow (JSON)
+
+Agents and workflows can be defined entirely in JSON. Two formats exist:
+
+1. **DSL agent definition** (`plugin/dsl`): one JSON with **tools**, **schemas**, and **agents**. Each agent has model, prompt (Go template), tools (with optional when/unless expr), tool_choice, output, limits. Tools can be type **code** (handlers in Go), **http** (URL, method, headers, cases, retry), or **handoff** (route to another agent/workflow). Parse with `ParseDSL` / `ParseDSLFile`, then `Validate` and `Compile(opts)` to get a `NiroDefinition` and `Runner`.
+2. **Workflow definition** (`plugin/dsl`): separate JSON describing how agents are composed — **fan** (parallel), **race** (first wins), **sequence** (chain), or **fan_then** (parallel then synthesizer agent). Single-workflow form: top-level `type` + `agents`; multi-workflow form: **workflows** map with nodes that can set **agent**, **agents**, and for **fan_then** **then_agent**. Parse with `ParseWorkflow`, validate with `ValidateWorkflow(wf, agentNames)`, compile with `CompileWorkflow(agentNames)`.
+3. **Agent definition for Orchestrator** (`plugin/agent`): JSON with **name**, **description**, and **steps**. Each step: **type** `"llm"` | `"tool"` | `"peer"`, optional **input** (or previous output), and for tool/peer **tool_name**/**tool_args** or **peer_name**. Load with `LoadAgentDefinition(path)` and run with `Orchestrator.RunDefinition(ctx, sessionID, def)`.
+
+**Full field-by-field reference:** every key, type, required/optional, and allowed values are documented in **[DSL_JSON_REFERENCE.md](DSL_JSON_REFERENCE.md)** — agent config (model_config, prompt, tools, output, limits), tool specs (code, http, handoff), workflow nodes (single vs multi, fan/race/sequence/fan_then), RunContext (templates and when/unless expr), and Orchestrator steps.
+
+---
+
+## 13. Configuration
 
 - **API keys**: Env vars only; never commit.
 - **Model**: `Request.Model` or provider default.
@@ -241,7 +339,7 @@ result, resp, usage, err := structured.GenerateStructured[Result](ctx, p, &niro.
 
 ---
 
-## 12. Testing
+## 14. Testing
 
 - Mock provider with `niro.ProviderFunc`.
 - Call `req.Validate()` in tests.
@@ -249,11 +347,11 @@ result, resp, usage, err := structured.GenerateStructured[Result](ctx, p, &niro.
 
 ---
 
-## 13. Checklist
+## 15. Checklist
 
 1. `go get github.com/alexedtionweb/niro-stream` + one provider.
 2. Call `provider.Generate(ctx, req)`, iterate `stream.Next(ctx)`, check `stream.Err()` and `stream.Usage()`.
-3. Optionally: `req.Validate()`, runtime + hook, output.Route, tools.NewToolLoop, middleware.
+3. Optionally: `req.Validate()`, runtime + hook, output.Route, tools.NewToolLoop, middleware, plugin/agent for stateful agents.
 4. Handle errors with `niro.IsRetryable` / `IsRateLimited` / `IsAuthError` and `stream.Response().FinishReason`.
 
 See [README.md](../README.md), [ARCHITECTURE.md](../ARCHITECTURE.md), and [pkg.go.dev](https://pkg.go.dev/github.com/alexedtionweb/niro-stream).
