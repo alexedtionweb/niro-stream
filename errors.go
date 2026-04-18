@@ -97,12 +97,20 @@ func (e *Error) LogValue() slog.Value {
 }
 
 // Is implements errors.Is for semantic error matching.
+//
+// Two *Error values match when their Codes are equal. For non-*Error targets
+// we return false so that the standard library's errors.Is walks Unwrap()
+// instead of relying on a brittle pointer comparison against the wrapped
+// error (the previous implementation returned `e.Err == target`, which
+// short-circuited multi-level wrap chains and hid wrapped sentinels).
 func (e *Error) Is(target error) bool {
-	t, ok := target.(*Error)
-	if !ok {
-		return e.Err == target
+	if e == nil || target == nil {
+		return e == nil && target == nil
 	}
-	return e.Code == t.Code
+	if t, ok := target.(*Error); ok {
+		return e.Code == t.Code
+	}
+	return false
 }
 
 // --- Error constructor helpers ---

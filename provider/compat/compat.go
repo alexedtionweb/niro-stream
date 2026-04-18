@@ -33,6 +33,19 @@ import (
 	"github.com/alexedtionweb/niro-stream/transport"
 )
 
+const (
+	// maxErrorBodyBytes caps how much of a non-2xx response body we read into
+	// the returned error message. A misbehaving (or hostile) gateway can stream
+	// gigabytes; we only want enough context to debug the failure.
+	maxErrorBodyBytes = 64 << 10 // 64 KiB
+
+	// maxToolCallsPerChunk bounds the per-chunk tool-call index we trust from
+	// the upstream stream. OpenAI tops out at ~256 parallel tool calls; using a
+	// generous cap protects us from a malformed response that claims an
+	// astronomical Index value and would otherwise allocate gigabytes.
+	maxToolCallsPerChunk = 1024
+)
+
 // Provider implements niro.Provider using raw HTTP + SSE.
 // Compatible with any OpenAI-style chat completions API.
 type Provider struct {
@@ -124,7 +137,7 @@ func (p *Provider) Generate(ctx context.Context, req *niro.Request) (*niro.Strea
 	}
 	if resp.StatusCode != http.StatusOK {
 		defer resp.Body.Close()
-		b, _ := io.ReadAll(resp.Body)
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBodyBytes))
 		return nil, niro.NewErrorf(niro.ConvertHTTPStatusToCode(resp.StatusCode), "status %d: %s", resp.StatusCode, string(b))
 	}
 
@@ -178,6 +191,14 @@ func consume(ctx context.Context, body io.ReadCloser, out *niro.Emitter) {
 		}
 
 		for _, tc := range choice.Delta.ToolCalls {
+			// Defend against malformed or hostile upstream responses that
+			// claim an enormous Index — without this guard, the for-loop
+			// below allocates ~Index*sizeof(toolAccum) bytes.
+			if tc.Index < 0 || tc.Index >= maxToolCallsPerChunk {
+				out.Error(niro.NewErrorf(niro.ErrCodeStreamError,
+					"tool_call index %d out of range [0,%d)", tc.Index, maxToolCallsPerChunk))
+				return
+			}
 			for tc.Index >= len(tools) {
 				tools = append(tools, toolAccum{})
 			}
