@@ -544,3 +544,64 @@ func TestCompatConcurrentRequests(t *testing.T) {
 		}
 	}
 }
+
+// TestCompatProviderRejectsHugeToolIndex guards against an OOM where a
+// malformed (or hostile) upstream stream claims a very large tool_call
+// index, causing the per-chunk accumulator slice to be grown to billions
+// of entries before any tool data is actually written.
+func TestCompatProviderRejectsHugeToolIndex(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		flusher, _ := w.(http.Flusher)
+		// Claim an outrageous tool_call index — > 1e9.
+		fmt.Fprintf(w, "data: %s\n\n",
+			`{"id":"x","model":"m","choices":[{"index":0,"delta":{"tool_calls":[{"index":2000000000,"id":"call_1","function":{"name":"x","arguments":"{}"}}]}}]}`)
+		flusher.Flush()
+	}))
+	defer srv.Close()
+
+	llm := compat.New(srv.URL, "k", compat.WithModel("m"))
+	stream, err := llm.Generate(context.Background(), &niro.Request{
+		Messages: []niro.Message{niro.UserText("hi")},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for stream.Next(context.Background()) {
+		// drain
+	}
+	if stream.Err() == nil {
+		t.Fatalf("expected error for out-of-range tool_call index")
+	}
+	if !strings.Contains(stream.Err().Error(), "out of range") {
+		t.Fatalf("expected 'out of range' message, got %v", stream.Err())
+	}
+}
+
+// TestCompatProviderErrorBodyBounded ensures that an upstream returning a
+// massive non-2xx body cannot OOM the caller — only a bounded prefix is
+// echoed in the returned error message.
+func TestCompatProviderErrorBodyBounded(t *testing.T) {
+	t.Parallel()
+
+	const big = 2 << 20 // 2 MiB
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+		_, _ = w.Write([]byte(strings.Repeat("E", big)))
+	}))
+	defer srv.Close()
+
+	llm := compat.New(srv.URL, "k")
+	_, err := llm.Generate(context.Background(), &niro.Request{
+		Messages: []niro.Message{niro.UserText("hi")},
+	})
+	if err == nil {
+		t.Fatal("expected error for non-2xx response")
+	}
+	// 64 KiB cap + framing overhead — definitely not 2 MiB.
+	if got := len(err.Error()); got > (128 << 10) {
+		t.Fatalf("error message not bounded: %d bytes", got)
+	}
+}

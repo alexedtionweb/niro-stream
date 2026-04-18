@@ -21,9 +21,27 @@ type Reader struct {
 	sc *bufio.Scanner
 }
 
-// NewReader creates an SSE Reader.
+// MaxLineSize is the maximum SSE line length accepted by [NewReader].
+//
+// The default bufio.Scanner buffer (64 KiB) is too small for streaming LLM
+// responses: a single SSE chunk can carry a fully-accumulated tool-call
+// arguments blob or a long structured-output JSON value, which routinely
+// exceeds 64 KiB. When the limit is reached, [Reader.Next] returns
+// bufio.ErrTooLong and the stream is permanently broken.
+//
+// 4 MiB is high enough to absorb the largest payloads emitted by the
+// production providers we target while still capping memory per connection.
+const MaxLineSize = 4 << 20 // 4 MiB
+
+// NewReader creates an SSE Reader that supports lines up to [MaxLineSize].
+//
+// The buffer grows on demand from a small initial size; the cap protects
+// the process from a hostile or buggy server that never terminates a line.
 func NewReader(r io.Reader) *Reader {
-	return &Reader{sc: bufio.NewScanner(r)}
+	sc := bufio.NewScanner(r)
+	// Start small to keep idle connections cheap; allow growth up to MaxLineSize.
+	sc.Buffer(make([]byte, 0, 64<<10), MaxLineSize)
+	return &Reader{sc: sc}
 }
 
 var (

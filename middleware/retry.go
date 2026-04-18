@@ -40,16 +40,32 @@ func (eb ExponentialBackoff) Delay(attempt int) time.Duration {
 	if eb.MaxDelay <= 0 {
 		eb.MaxDelay = 5 * time.Minute
 	}
+	if attempt < 0 {
+		attempt = 0
+	}
 
-	delay := time.Duration(float64(eb.InitialDelay) * math.Pow(eb.Multiplier, float64(attempt)))
+	// Compute in float64 then guard against overflow / NaN before casting to
+	// time.Duration. With multiplier=2 and attempt≈63 we already exceed the
+	// int64 nanosecond range, which would silently wrap to a negative duration
+	// and bypass the MaxDelay clamp below.
+	scaled := float64(eb.InitialDelay) * math.Pow(eb.Multiplier, float64(attempt))
+	maxF := float64(eb.MaxDelay)
+	if math.IsNaN(scaled) || math.IsInf(scaled, 1) || scaled > maxF {
+		scaled = maxF
+	}
+	delay := time.Duration(scaled)
 	if delay > eb.MaxDelay {
 		delay = eb.MaxDelay
 	}
 
-	if eb.Jitter && delay > 0 {
+	// rand.Int64N panics on a non-positive bound; skip jitter when the delay
+	// is too small to derive a meaningful jitter window (delay < 2ns).
+	if eb.Jitter && delay > 1 {
 		jitterAmount := delay / 2
-		jitterValue := time.Duration(rand.Int64N(int64(jitterAmount)))
-		delay = delay - jitterAmount/2 + jitterValue
+		if jitterAmount > 0 {
+			jitterValue := time.Duration(rand.Int64N(int64(jitterAmount)))
+			delay = delay - jitterAmount/2 + jitterValue
+		}
 	}
 
 	return delay
