@@ -3,8 +3,8 @@ module github.com/alexedtionweb/niro-stream/provider/google
 go 1.24.0
 
 require (
-	google.golang.org/genai v1.48.0
 	github.com/alexedtionweb/niro-stream v0.0.0
+	google.golang.org/genai v1.48.0
 )
 
 require (

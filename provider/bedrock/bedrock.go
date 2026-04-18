@@ -253,6 +253,17 @@ func consume(
 				if delta.Value.Input != nil {
 					toolArgsBuf = append(toolArgsBuf, []byte(*delta.Value.Input)...)
 				}
+			case *types.ContentBlockDeltaMemberReasoningContent:
+				// Extended thinking deltas (Claude 3.7+ on Bedrock).
+				// Surface as KindCustom so consumers can render or hide
+				// them — never as KindText, which would mix internal
+				// reasoning into the user-visible answer.
+				if rd, ok := delta.Value.(*types.ReasoningContentBlockDeltaMemberText); ok {
+					_ = out.Emit(ctx, niro.CustomFrame(&niro.ExperimentalFrame{
+						Type: niro.CustomThinking,
+						Data: rd.Value,
+					}))
+				}
 			}
 
 		case *types.ConverseStreamOutputMemberContentBlockStart:
@@ -287,10 +298,19 @@ func consume(
 				u := ev.Value.Usage
 				cacheRead := int(aws.ToInt32(u.CacheReadInputTokens))
 				cacheWriteTokens := int(aws.ToInt32(u.CacheWriteInputTokens))
+				inputT := int(aws.ToInt32(u.InputTokens))
+				outputT := int(aws.ToInt32(u.OutputTokens))
+				totalT := int(aws.ToInt32(u.TotalTokens))
+				// Bedrock occasionally omits TotalTokens for some models —
+				// derive it locally so downstream cost/usage accounting
+				// doesn't silently see a zero total.
+				if totalT == 0 && (inputT > 0 || outputT > 0) {
+					totalT = inputT + outputT
+				}
 				usage := &niro.Usage{
-					InputTokens:  int(aws.ToInt32(u.InputTokens)),
-					OutputTokens: int(aws.ToInt32(u.OutputTokens)),
-					TotalTokens:  int(aws.ToInt32(u.TotalTokens)),
+					InputTokens:  inputT,
+					OutputTokens: outputT,
+					TotalTokens:  totalT,
 				}
 				niro.SetCacheUsageDetail(usage, cacheAttempted, cacheRead > 0, cacheWriteTokens > 0, cacheRead, 0)
 				if usage.Detail != nil {
@@ -499,7 +519,11 @@ func (p *Provider) buildInput(
 	}
 
 	// Tools
-	if len(req.Tools) > 0 {
+	//
+	// Bedrock has no native "none" tool-choice mode. To honor the caller's
+	// intent — "do not call any tool" — we drop the entire ToolConfig so
+	// the model is not even told the tools exist on this turn.
+	if len(req.Tools) > 0 && req.ToolChoice != niro.ToolChoiceNone {
 		var toolSpecs []types.Tool
 		for _, tool := range req.Tools {
 			spec := &types.ToolMemberToolSpec{
@@ -525,8 +549,6 @@ func (p *Provider) buildInput(
 		switch req.ToolChoice {
 		case niro.ToolChoiceRequired:
 			toolCfg.ToolChoice = &types.ToolChoiceMemberAny{Value: types.AnyToolChoice{}}
-		case niro.ToolChoiceNone:
-			// Bedrock has no "none" mode; omit ToolChoice to let the model decide.
 		default:
 			if name := strings.TrimPrefix(string(req.ToolChoice), niro.ToolChoiceFuncPrefix); name != "" && name != string(req.ToolChoice) {
 				toolCfg.ToolChoice = &types.ToolChoiceMemberTool{
@@ -558,13 +580,26 @@ func convertMessage(msg niro.Message) types.Message {
 			})
 
 		case niro.KindImage:
-			if len(p.Data) > 0 {
-				format := imageFormat(p.Mime)
+			format := imageFormat(p.Mime)
+			switch {
+			case len(p.Data) > 0:
 				blocks = append(blocks, &types.ContentBlockMemberImage{
 					Value: types.ImageBlock{
 						Format: format,
 						Source: &types.ImageSourceMemberBytes{
 							Value: p.Data,
+						},
+					},
+				})
+			case strings.HasPrefix(p.URL, "s3://"):
+				// Bedrock supports direct S3-hosted image references for
+				// models that opt in to it; this avoids the round-trip of
+				// downloading and re-uploading the bytes through the caller.
+				blocks = append(blocks, &types.ContentBlockMemberImage{
+					Value: types.ImageBlock{
+						Format: format,
+						Source: &types.ImageSourceMemberS3Location{
+							Value: types.S3Location{Uri: aws.String(p.URL)},
 						},
 					},
 				})
