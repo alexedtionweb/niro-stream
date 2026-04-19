@@ -335,7 +335,17 @@ func consume(
 
 		for _, part := range cand.Content.Parts {
 			if part.Text != "" {
-				if err := out.Emit(ctx, niro.TextFrame(part.Text)); err != nil {
+				// Gemini 2.5 thinking-enabled requests can return parts with
+				// Thought=true mixed in with regular text. Surface them as a
+				// KindCustom frame so consumers can render or hide them
+				// independently — emitting them as plain text would pollute
+				// the user-visible answer.
+				if part.Thought {
+					_ = out.Emit(ctx, niro.CustomFrame(&niro.ExperimentalFrame{
+						Type: niro.CustomThinking,
+						Data: part.Text,
+					}))
+				} else if err := out.Emit(ctx, niro.TextFrame(part.Text)); err != nil {
 					return
 				}
 			} else if part.FunctionCall != nil {
@@ -519,6 +529,14 @@ func buildConfig(req *niro.Request) *genai.GenerateContentConfig {
 		k := float32(*req.Options.TopK)
 		cfg.TopK = &k
 	}
+	if req.Options.FrequencyPenalty != nil {
+		f := float32(*req.Options.FrequencyPenalty)
+		cfg.FrequencyPenalty = &f
+	}
+	if req.Options.PresencePenalty != nil {
+		p := float32(*req.Options.PresencePenalty)
+		cfg.PresencePenalty = &p
+	}
 	if len(req.Options.Stop) > 0 {
 		cfg.StopSequences = req.Options.Stop
 	}
@@ -589,12 +607,25 @@ func buildConfig(req *niro.Request) *genai.GenerateContentConfig {
 // System messages are handled via GenerateContentConfig.SystemInstruction
 // and are excluded from the content array.
 func buildContents(req *niro.Request) []*genai.Content {
+	// Build a CallID → tool-name lookup from the entire history. Gemini
+	// requires FunctionResponse.Name to match the FunctionDeclaration name
+	// of the originating call. niro.ToolResult only carries CallID, so we
+	// recover the name by matching against the assistant's earlier ToolCall.
+	callIDToName := map[string]string{}
+	for _, msg := range req.Messages {
+		for _, p := range msg.Parts {
+			if p.Kind == niro.KindToolCall && p.Tool != nil && p.Tool.ID != "" {
+				callIDToName[p.Tool.ID] = p.Tool.Name
+			}
+		}
+	}
+
 	var contents []*genai.Content
 	for _, msg := range req.Messages {
 		if msg.Role == niro.RoleSystem {
 			continue
 		}
-		c := convertToContent(msg)
+		c := convertToContent(msg, callIDToName)
 		if c != nil {
 			contents = append(contents, c)
 		}
@@ -608,12 +639,12 @@ func buildContents(req *niro.Request) []*genai.Content {
 //   - RoleUser      → "user"
 //   - RoleAssistant → "model"
 //   - RoleTool      → "user"  (FunctionResponse must be in a "user" turn per SDK)
-func convertToContent(msg niro.Message) *genai.Content {
+func convertToContent(msg niro.Message, callIDToName map[string]string) *genai.Content {
 	role := "user"
 	if msg.Role == niro.RoleAssistant {
 		role = "model"
 	}
-	parts := convertParts(msg)
+	parts := convertParts(msg, callIDToName)
 	if len(parts) == 0 {
 		return nil
 	}
@@ -623,7 +654,7 @@ func convertToContent(msg niro.Message) *genai.Content {
 // convertParts converts message parts to []*genai.Part.
 // Gemini requires each Part to have one of the oneof "data" fields initialized;
 // empty string is treated as unset, so we use a single space when text would be empty.
-func convertParts(msg niro.Message) []*genai.Part {
+func convertParts(msg niro.Message, callIDToName map[string]string) []*genai.Part {
 	var parts []*genai.Part
 	for _, p := range msg.Parts {
 		switch p.Kind {
@@ -635,9 +666,16 @@ func convertParts(msg niro.Message) []*genai.Part {
 			parts = append(parts, &genai.Part{Text: text})
 
 		case niro.KindImage, niro.KindAudio, niro.KindVideo:
-			if len(p.Data) > 0 {
+			switch {
+			case len(p.Data) > 0:
 				parts = append(parts, &genai.Part{
 					InlineData: &genai.Blob{MIMEType: p.Mime, Data: p.Data},
+				})
+			case p.URL != "":
+				// Gemini supports URI-referenced media (Files API uploads,
+				// gs:// URIs on Vertex, https:// for some endpoints).
+				parts = append(parts, &genai.Part{
+					FileData: &genai.FileData{MIMEType: p.Mime, FileURI: p.URL},
 				})
 			}
 
@@ -651,13 +689,18 @@ func convertParts(msg niro.Message) []*genai.Part {
 				} else {
 					response = map[string]any{"output": p.Result.Content}
 				}
+				// Recover the originating function name from the assistant's
+				// earlier ToolCall. Falling back to CallID would cause Gemini
+				// to reject the response when the SDK assigns opaque call IDs
+				// that do not match any declared function.
+				name := callIDToName[p.Result.CallID]
+				if name == "" {
+					name = p.Result.CallID
+				}
 				parts = append(parts, &genai.Part{
 					FunctionResponse: &genai.FunctionResponse{
-						// ID correlates this response with the FunctionCall.ID.
-						// Name should be the function name; we store the call ID
-						// there since it encodes the name (see consume()).
 						ID:       p.Result.CallID,
-						Name:     p.Result.CallID,
+						Name:     name,
 						Response: response,
 					},
 				})

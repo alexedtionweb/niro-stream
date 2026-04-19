@@ -1446,3 +1446,61 @@ func TestGenerate_ConcurrentRequests(t *testing.T) {
 		}
 	}
 }
+
+// TestBuildParams_ResponseFormat_JSON guards that ResponseFormat:"json"
+// is mapped to OpenAI's response_format = {"type":"json_object"}.
+// Previously this field was silently ignored.
+func TestBuildParams_ResponseFormat_JSON(t *testing.T) {
+	var body map[string]any
+	p := newProvider(t, func(r *http.Request) (int, string, string) {
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		return 200, sseBody(textChunk("id1", "gpt-4o", "{}", "stop")), ""
+	})
+
+	stream, err := p.Generate(context.Background(), &niro.Request{
+		Messages:       []niro.Message{niro.UserText("give JSON")},
+		ResponseFormat: "json",
+	})
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	_, _ = collectText(t, stream)
+
+	rf, _ := body["response_format"].(map[string]any)
+	if rf["type"] != "json_object" {
+		t.Errorf("response_format = %v, want type=json_object", body["response_format"])
+	}
+}
+
+// TestBuildParams_ResponseFormat_JSONSchema guards that ResponseFormat
+// "json_schema" is mapped with the schema attached, and that a wrapper
+// payload with "name" and "schema" is unwrapped correctly.
+func TestBuildParams_ResponseFormat_JSONSchema(t *testing.T) {
+	var body map[string]any
+	p := newProvider(t, func(r *http.Request) (int, string, string) {
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		return 200, sseBody(textChunk("id1", "gpt-4o", "{}", "stop")), ""
+	})
+
+	stream, err := p.Generate(context.Background(), &niro.Request{
+		Messages:       []niro.Message{niro.UserText("give JSON")},
+		ResponseFormat: "json_schema",
+		ResponseSchema: json.RawMessage(`{"name":"Person","schema":{"type":"object","properties":{"name":{"type":"string"}}}}`),
+	})
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	_, _ = collectText(t, stream)
+
+	rf, _ := body["response_format"].(map[string]any)
+	if rf["type"] != "json_schema" {
+		t.Fatalf("response_format = %v, want type=json_schema", body["response_format"])
+	}
+	js, _ := rf["json_schema"].(map[string]any)
+	if js["name"] != "Person" {
+		t.Errorf("json_schema.name = %v, want Person", js["name"])
+	}
+	if _, ok := js["schema"].(map[string]any); !ok {
+		t.Errorf("json_schema.schema missing or wrong type: %v", js["schema"])
+	}
+}

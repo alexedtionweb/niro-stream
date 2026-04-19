@@ -301,6 +301,27 @@ func buildParams(model string, req *niro.Request) oai.ChatCompletionNewParams {
 		}
 	}
 
+	// Response format
+	switch req.ResponseFormat {
+	case "json":
+		params.ResponseFormat = oai.ChatCompletionNewParamsResponseFormatUnion{
+			OfJSONObject: &shared.ResponseFormatJSONObjectParam{},
+		}
+	case "json_schema":
+		schemaName, schemaObj := splitJSONSchemaParams(req.ResponseSchema)
+		if schemaObj != nil {
+			params.ResponseFormat = oai.ChatCompletionNewParamsResponseFormatUnion{
+				OfJSONSchema: &shared.ResponseFormatJSONSchemaParam{
+					JSONSchema: shared.ResponseFormatJSONSchemaJSONSchemaParam{
+						Name:   schemaName,
+						Schema: schemaObj,
+						Strict: oai.Bool(true),
+					},
+				},
+			}
+		}
+	}
+
 	// Tools
 	for _, tool := range req.Tools {
 		params.Tools = append(params.Tools, oai.ChatCompletionToolParam{
@@ -452,4 +473,31 @@ func rawToMap(raw json.RawMessage) map[string]any {
 	var m map[string]any
 	_ = niro.JSONUnmarshal(raw, &m)
 	return m
+}
+
+// splitJSONSchemaParams extracts the (name, schema) pair OpenAI's structured
+// output mode requires from a niro.Request.ResponseSchema blob.
+//
+// Two shapes are accepted:
+//
+//	1. A bare JSON Schema object — name defaults to "response".
+//	2. A wrapper {"name": "...", "schema": {...}, "strict": true?} — the
+//	   wrapper's name is preserved and the schema is unwrapped. This mirrors
+//	   the OpenAI API payload shape so callers can pass it through verbatim.
+func splitJSONSchemaParams(raw json.RawMessage) (string, map[string]any) {
+	if len(raw) == 0 {
+		return "", nil
+	}
+	var m map[string]any
+	if err := niro.JSONUnmarshal(raw, &m); err != nil {
+		return "", nil
+	}
+	if inner, ok := m["schema"].(map[string]any); ok {
+		name, _ := m["name"].(string)
+		if name == "" {
+			name = "response"
+		}
+		return name, inner
+	}
+	return "response", m
 }

@@ -1890,3 +1890,181 @@ func TestGenerateConcurrentRequests(t *testing.T) {
 		}
 	}
 }
+
+// TestGenerate_ThoughtPartIsCustomFrame guards a regression where Gemini 2.5
+// "thinking" parts (Part.Thought=true) were emitted as plain text frames,
+// polluting the user-visible answer with internal reasoning.
+func TestGenerate_ThoughtPartIsCustomFrame(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		// One thought part, then one answer part.
+		fmt.Fprintf(w, "data: %s\n\n", `{"candidates":[{"content":{"role":"model","parts":[{"text":"deliberating...","thought":true}]}}]}`)
+		fmt.Fprintf(w, "data: %s\n\n", `{"candidates":[{"content":{"role":"model","parts":[{"text":"the answer"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":1,"candidatesTokenCount":3,"totalTokenCount":4}}`)
+	}))
+	defer srv.Close()
+
+	p := newTestProvider(t, srv.URL)
+	stream, err := p.Generate(context.Background(), &niro.Request{
+		Messages: []niro.Message{niro.UserText("think")},
+	})
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+
+	var text strings.Builder
+	var thinking string
+	for stream.Next(context.Background()) {
+		f := stream.Frame()
+		switch f.Kind {
+		case niro.KindText:
+			text.WriteString(f.Text)
+		case niro.KindCustom:
+			if f.Custom != nil && f.Custom.Type == niro.CustomThinking {
+				thinking, _ = f.Custom.Data.(string)
+			}
+		}
+	}
+	if err := stream.Err(); err != nil {
+		t.Fatalf("stream err: %v", err)
+	}
+	if text.String() != "the answer" {
+		t.Errorf("text frames leaked thought content: %q", text.String())
+	}
+	if thinking != "deliberating..." {
+		t.Errorf("expected thinking custom frame, got %q", thinking)
+	}
+}
+
+// TestGenerate_ToolResultUsesFunctionName guards that when a Gemini call
+// assigns its own opaque tool-call ID, the FunctionResponse we send back
+// uses the *function name* (recovered from the previous assistant turn),
+// not the call ID — Gemini rejects responses whose Name doesn't match a
+// declared function.
+func TestGenerate_ToolResultUsesFunctionName(t *testing.T) {
+	var capturedBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&capturedBody)
+		sseResponse(w, geminiFinal("ok", "STOP", 1, 1))
+	}))
+	defer srv.Close()
+
+	p := newTestProvider(t, srv.URL)
+	_, err := p.Generate(context.Background(), &niro.Request{
+		Messages: []niro.Message{
+			niro.UserText("hi"),
+			{Role: niro.RoleAssistant, Parts: []niro.Part{
+				niro.ToolCallPart(&niro.ToolCall{
+					ID:   "call_xyz_opaque",
+					Name: "get_weather",
+					Args: json.RawMessage(`{}`),
+				}),
+			}},
+			{Role: niro.RoleTool, Parts: []niro.Part{
+				niro.ToolResultPart(&niro.ToolResult{
+					CallID:  "call_xyz_opaque",
+					Content: "72F",
+				}),
+			}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+
+	contents, _ := capturedBody["contents"].([]any)
+	if len(contents) < 3 {
+		t.Fatalf("expected >=3 contents, got %d (%v)", len(contents), capturedBody["contents"])
+	}
+	toolMsg, _ := contents[2].(map[string]any)
+	parts, _ := toolMsg["parts"].([]any)
+	if len(parts) == 0 {
+		t.Fatalf("no parts in tool message: %v", toolMsg)
+	}
+	fr, _ := parts[0].(map[string]any)["functionResponse"].(map[string]any)
+	if fr == nil {
+		t.Fatalf("missing functionResponse: %v", parts[0])
+	}
+	if fr["name"] != "get_weather" {
+		t.Errorf("functionResponse.name = %v, want %q (must match declared function name, not call ID)", fr["name"], "get_weather")
+	}
+	if fr["id"] != "call_xyz_opaque" {
+		t.Errorf("functionResponse.id = %v, want preserved call ID", fr["id"])
+	}
+}
+
+// TestGenerate_ImageFromURLBecomesFileData guards that an image Part with a
+// URL but no inline bytes is forwarded as Gemini fileData rather than
+// silently dropped.
+func TestGenerate_ImageFromURLBecomesFileData(t *testing.T) {
+	var capturedBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&capturedBody)
+		sseResponse(w, geminiFinal("ok", "STOP", 1, 1))
+	}))
+	defer srv.Close()
+
+	p := newTestProvider(t, srv.URL)
+	_, err := p.Generate(context.Background(), &niro.Request{
+		Messages: []niro.Message{
+			{Role: niro.RoleUser, Parts: []niro.Part{
+				niro.TextPart("describe"),
+				niro.ImageURLPart("gs://my-bucket/photo.jpg", "image/jpeg"),
+			}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+
+	contents, _ := capturedBody["contents"].([]any)
+	if len(contents) == 0 {
+		t.Fatal("no contents")
+	}
+	parts, _ := contents[0].(map[string]any)["parts"].([]any)
+	var sawFileData bool
+	for _, p := range parts {
+		fp, _ := p.(map[string]any)
+		if fd, ok := fp["fileData"].(map[string]any); ok {
+			if fd["fileUri"] != "gs://my-bucket/photo.jpg" || fd["mimeType"] != "image/jpeg" {
+				t.Errorf("unexpected fileData payload: %v", fd)
+			}
+			sawFileData = true
+		}
+	}
+	if !sawFileData {
+		t.Errorf("expected a fileData part for URL-only image, got parts=%v", parts)
+	}
+}
+
+// TestGenerate_PenaltiesMapped guards that FrequencyPenalty / PresencePenalty
+// from niro.Options are forwarded to the Gemini generationConfig.
+func TestGenerate_PenaltiesMapped(t *testing.T) {
+	var capturedBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&capturedBody)
+		sseResponse(w, geminiFinal("ok", "STOP", 1, 1))
+	}))
+	defer srv.Close()
+
+	freq, pres := 0.4, 0.6
+	p := newTestProvider(t, srv.URL)
+	_, err := p.Generate(context.Background(), &niro.Request{
+		Messages: []niro.Message{niro.UserText("hi")},
+		Options: niro.Options{
+			FrequencyPenalty: &freq,
+			PresencePenalty:  &pres,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+
+	gc, _ := capturedBody["generationConfig"].(map[string]any)
+	if gc["frequencyPenalty"] == nil {
+		t.Errorf("frequencyPenalty missing from generationConfig: %v", gc)
+	}
+	if gc["presencePenalty"] == nil {
+		t.Errorf("presencePenalty missing from generationConfig: %v", gc)
+	}
+}

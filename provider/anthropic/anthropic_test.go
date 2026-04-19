@@ -1451,3 +1451,119 @@ func TestGenerate_ConcurrentRequests(t *testing.T) {
 		}
 	}
 }
+
+// TestBuildParams_ToolChoice guards a regression where req.ToolChoice was
+// silently ignored by the Anthropic provider. The Anthropic API accepts
+// auto / any / tool / none and we now forward each correctly.
+func TestBuildParams_ToolChoice(t *testing.T) {
+	tools := []niro.Tool{{
+		Name: "search", Description: "web", Parameters: json.RawMessage(`{"type":"object"}`),
+	}}
+
+	cases := []struct {
+		name        string
+		choice      niro.ToolChoice
+		wantTypeKey string
+		wantToolNm  string
+	}{
+		{"auto", niro.ToolChoiceAuto, "auto", ""},
+		{"required", niro.ToolChoiceRequired, "any", ""},
+		{"none", niro.ToolChoiceNone, "none", ""},
+		{"specific", niro.ToolChoiceFunc("search"), "tool", "search"},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			body := captureRequest(t, &niro.Request{
+				Messages:   []niro.Message{niro.UserText("hi")},
+				Tools:      tools,
+				ToolChoice: tc.choice,
+			})
+			tcMap, ok := body["tool_choice"].(map[string]any)
+			if !ok {
+				t.Fatalf("tool_choice missing or wrong type: %v", body["tool_choice"])
+			}
+			if tcMap["type"] != tc.wantTypeKey {
+				t.Errorf("tool_choice.type = %v, want %q", tcMap["type"], tc.wantTypeKey)
+			}
+			if tc.wantToolNm != "" && tcMap["name"] != tc.wantToolNm {
+				t.Errorf("tool_choice.name = %v, want %q", tcMap["name"], tc.wantToolNm)
+			}
+		})
+	}
+}
+
+// TestConsume_ThinkingDeltaIsCustomFrame guards that Anthropic
+// extended-thinking deltas surface as KindCustom thinking frames instead
+// of being dropped or leaking into KindText.
+func TestConsume_ThinkingDeltaIsCustomFrame(t *testing.T) {
+	body := sseEvent("message_start", map[string]any{
+		"type": "message_start",
+		"message": map[string]any{
+			"id": "id1", "type": "message", "role": "assistant",
+			"model": "claude-sonnet-4-5", "content": []any{}, "stop_reason": nil,
+			"usage": map[string]any{"input_tokens": 1, "output_tokens": 1},
+		},
+	}) +
+		sseEvent("content_block_start", map[string]any{
+			"type": "content_block_start", "index": 0,
+			"content_block": map[string]any{"type": "thinking", "thinking": ""},
+		}) +
+		sseEvent("content_block_delta", map[string]any{
+			"type": "content_block_delta", "index": 0,
+			"delta": map[string]any{"type": "thinking_delta", "thinking": "deliberating"},
+		}) +
+		sseEvent("content_block_stop", map[string]any{
+			"type": "content_block_stop", "index": 0,
+		}) +
+		sseEvent("content_block_start", map[string]any{
+			"type": "content_block_start", "index": 1,
+			"content_block": map[string]any{"type": "text", "text": ""},
+		}) +
+		sseEvent("content_block_delta", map[string]any{
+			"type": "content_block_delta", "index": 1,
+			"delta": map[string]any{"type": "text_delta", "text": "the answer"},
+		}) +
+		sseEvent("content_block_stop", map[string]any{
+			"type": "content_block_stop", "index": 1,
+		}) +
+		sseEvent("message_delta", map[string]any{
+			"type": "message_delta",
+			"delta": map[string]any{"stop_reason": "end_turn", "stop_sequence": nil},
+			"usage": map[string]any{"output_tokens": 5},
+		}) +
+		sseEvent("message_stop", map[string]any{"type": "message_stop"})
+
+	p := newProvider(t, func(r *http.Request) (int, string, string) {
+		return 200, body, ""
+	})
+	stream, err := p.Generate(context.Background(), &niro.Request{
+		Messages: []niro.Message{niro.UserText("think")},
+	})
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+
+	var text strings.Builder
+	var thinking string
+	for stream.Next(context.Background()) {
+		f := stream.Frame()
+		switch f.Kind {
+		case niro.KindText:
+			text.WriteString(f.Text)
+		case niro.KindCustom:
+			if f.Custom != nil && f.Custom.Type == niro.CustomThinking {
+				thinking, _ = f.Custom.Data.(string)
+			}
+		}
+	}
+	if err := stream.Err(); err != nil {
+		t.Fatalf("stream err: %v", err)
+	}
+	if text.String() != "the answer" {
+		t.Errorf("text frames leaked thinking: %q", text.String())
+	}
+	if thinking != "deliberating" {
+		t.Errorf("expected thinking custom frame, got %q", thinking)
+	}
+}

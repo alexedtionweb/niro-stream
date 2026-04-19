@@ -1386,6 +1386,128 @@ func TestGenerate_ConcurrentRequests(t *testing.T) {
 	}
 }
 
+// TestGenerate_ToolChoiceNone_DropsToolConfig guards that requesting
+// ToolChoiceNone actually omits the entire toolConfig from the wire
+// request. Bedrock has no native "none" mode; previously the field was
+// silently downgraded to "auto", which let the model still decide to
+// call a tool and violated the caller's intent.
+func TestGenerate_ToolChoiceNone_DropsToolConfig(t *testing.T) {
+	var captured map[string]any
+	p := newProvider(func(r *http.Request) (*http.Response, error) {
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &captured)
+		return streamResp(
+			textDelta(0, "ok"),
+			blockStop(0),
+			msgStop("end_turn"),
+			metadataEvt(1, 1),
+		), nil
+	})
+	stream, err := p.Generate(context.Background(), &niro.Request{
+		Messages: []niro.Message{niro.UserText("hi")},
+		Tools: []niro.Tool{
+			{Name: "search", Description: "web", Parameters: json.RawMessage(`{"type":"object"}`)},
+		},
+		ToolChoice: niro.ToolChoiceNone,
+	})
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	mustDrain(t, stream)
+
+	if _, ok := captured["toolConfig"]; ok {
+		t.Errorf("toolConfig leaked despite ToolChoiceNone: %v", captured["toolConfig"])
+	}
+}
+
+// TestGenerate_TotalTokensFallback guards that when Bedrock returns
+// inputTokens/outputTokens but omits totalTokens, the provider derives
+// total from in+out instead of reporting zero.
+func TestGenerate_TotalTokensFallback(t *testing.T) {
+	p := newProvider(func(r *http.Request) (*http.Response, error) {
+		// Build a metadata event without a totalTokens field.
+		md := evtSpec{"metadata", map[string]any{
+			"usage":   map[string]any{"inputTokens": 13, "outputTokens": 7},
+			"metrics": map[string]any{"latencyMs": 5},
+		}}
+		return streamResp(
+			textDelta(0, "ok"),
+			blockStop(0),
+			msgStop("end_turn"),
+			md,
+		), nil
+	})
+
+	stream, err := p.Generate(context.Background(), &niro.Request{
+		Messages: []niro.Message{niro.UserText("hi")},
+	})
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	mustDrain(t, stream)
+	resp := stream.Response()
+	if resp == nil {
+		t.Fatal("nil response")
+	}
+	if resp.Usage.InputTokens != 13 || resp.Usage.OutputTokens != 7 {
+		t.Fatalf("unexpected usage: %+v", resp.Usage)
+	}
+	if resp.Usage.TotalTokens != 20 {
+		t.Errorf("TotalTokens fallback failed: got %d, want 20", resp.Usage.TotalTokens)
+	}
+}
+
+// TestGenerate_ReasoningContentEmittedAsCustom guards that Bedrock
+// reasoning-content deltas (Claude 3.7+ extended thinking) are surfaced
+// as KindCustom thinking frames rather than dropped or leaked into text.
+func TestGenerate_ReasoningContentEmittedAsCustom(t *testing.T) {
+	reasonDelta := evtSpec{"contentBlockDelta", map[string]any{
+		"contentBlockIndex": 0,
+		"delta": map[string]any{
+			"reasoningContent": map[string]any{"text": "deliberating"},
+		},
+	}}
+	p := newProvider(func(r *http.Request) (*http.Response, error) {
+		return streamResp(
+			reasonDelta,
+			blockStop(0),
+			textDelta(1, "the answer"),
+			blockStop(1),
+			msgStop("end_turn"),
+			metadataEvt(1, 1),
+		), nil
+	})
+	stream, err := p.Generate(context.Background(), &niro.Request{
+		Messages: []niro.Message{niro.UserText("think")},
+	})
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+
+	var text strings.Builder
+	var thinking string
+	for stream.Next(context.Background()) {
+		f := stream.Frame()
+		switch f.Kind {
+		case niro.KindText:
+			text.WriteString(f.Text)
+		case niro.KindCustom:
+			if f.Custom != nil && f.Custom.Type == niro.CustomThinking {
+				thinking, _ = f.Custom.Data.(string)
+			}
+		}
+	}
+	if err := stream.Err(); err != nil {
+		t.Fatalf("stream err: %v", err)
+	}
+	if text.String() != "the answer" {
+		t.Errorf("text frames leaked reasoning: %q", text.String())
+	}
+	if thinking != "deliberating" {
+		t.Errorf("expected thinking custom frame, got %q", thinking)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------

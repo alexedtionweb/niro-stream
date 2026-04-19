@@ -25,6 +25,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"strings"
 	"time"
 
 	ant "github.com/anthropics/anthropic-sdk-go"
@@ -185,6 +186,14 @@ func (p *Provider) consume(
 				if err := out.Emit(ctx, niro.TextFrame(delta.Text)); err != nil {
 					return
 				}
+			case ant.ThinkingDelta:
+				// Extended thinking content. Surface as KindCustom so it
+				// doesn't pollute the user-visible answer; consumers can
+				// render or hide it independently.
+				_ = out.Emit(ctx, niro.CustomFrame(&niro.ExperimentalFrame{
+					Type: niro.CustomThinking,
+					Data: delta.Thinking,
+				}))
 			}
 		default:
 			// Ignore other event types (MessageStart, ContentBlockStart, etc.)
@@ -325,6 +334,23 @@ func (p *Provider) buildParams(model string, req *niro.Request, cacheHint niro.C
 				InputSchema: schema,
 			},
 		})
+	}
+
+	// ToolChoice — only meaningful when at least one tool is declared.
+	// Anthropic accepts auto / any / tool:<name> / none.
+	if len(params.Tools) > 0 {
+		switch req.ToolChoice {
+		case niro.ToolChoiceAuto, "":
+			params.ToolChoice = ant.ToolChoiceUnionParam{OfAuto: &ant.ToolChoiceAutoParam{}}
+		case niro.ToolChoiceRequired:
+			params.ToolChoice = ant.ToolChoiceUnionParam{OfAny: &ant.ToolChoiceAnyParam{}}
+		case niro.ToolChoiceNone:
+			params.ToolChoice = ant.ToolChoiceUnionParam{OfNone: &ant.ToolChoiceNoneParam{}}
+		default:
+			if name := strings.TrimPrefix(string(req.ToolChoice), niro.ToolChoiceFuncPrefix); name != "" && name != string(req.ToolChoice) {
+				params.ToolChoice = ant.ToolChoiceParamOfTool(name)
+			}
+		}
 	}
 
 	return params
