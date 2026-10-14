@@ -40,6 +40,10 @@ Quick reference to packages and main types for integration and navigation. For f
 | **BytePool**, **DefaultBytePool** | Buffer pooling. |
 | **Transport()**, **DefaultHTTPClient** | HTTP transport. |
 | **GenerateStructured**, **StreamStructured** | In structured package. |
+| **VAD**, **VADFunc** | `Push(ctx, pcm) ([]SpeechMark, error)`. Optional modules implement it. |
+| **TurnDetector**, **TurnFunc** | `Predict(ctx, TurnInput) (TurnScore, error)`. |
+| **SpeechMark**, **SpeechKind** | `SpeechStart`, `SpeechEnd`. |
+| **TurnInput**, **TurnScore** | Transcript, silence, optional PCM. `End` is the finish probability. |
 
 ---
 
@@ -187,6 +191,19 @@ Conversational agent layer: wraps a Provider with **memory** (per-session histor
 | **RunContext** | Get/Set for template and expr. |
 | **NewRunContext** | Creates context. |
 | **CompiledWorkflow** | Run(ctx, runCtx, sessionID); Fan, Race, Sequence, FanThen. |
+
+---
+
+## Package: `provider/energy`, `provider/turn`, `provider/audiomodel`
+
+Separate modules. The core does not import them.
+
+| Symbol | Module | Description |
+|--------|--------|-------------|
+| **energy.New**, **energy.Detector** | `provider/energy` | RMS VAD. `Config.Threshold`, `Silence`, `Rate`. |
+| **turn.Silence** | `provider/turn` | End probability from quiet time. `End` is 1 at `After`. |
+| **audiomodel.Speech** | `provider/audiomodel` | HTTP VAD. POST `{"audio","sample_rate"}`, response `{"speech"}`. |
+| **audiomodel.Endpoint** | `provider/audiomodel` | HTTP turn model. POST `{"text","silence_ms"}`, response `{"end"}`. |
 
 ---
 

@@ -37,6 +37,11 @@ Core has **zero external dependencies**. It defines `Provider`, `Request`, `Stre
 - **Structured output**: `structured`
 - **Agent plugin**: `plugin/agent`
 - **DSL plugin**: `plugin/dsl`
+- **Local VAD**: `go get github.com/alexedtionweb/niro-stream/provider/energy`
+- **Local turn detector**: `go get github.com/alexedtionweb/niro-stream/provider/turn`
+- **VAD and turn models (HTTP)**: `go get github.com/alexedtionweb/niro-stream/provider/audiomodel`
+
+The core types are `VAD` and `TurnDetector`. See [AUDIO.md](AUDIO.md) for the model request shape.
 
 ---
 

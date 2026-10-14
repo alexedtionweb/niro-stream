@@ -38,9 +38,19 @@ const MaxLineSize = 4 << 20 // 4 MiB
 // The buffer grows on demand from a small initial size; the cap protects
 // the process from a hostile or buggy server that never terminates a line.
 func NewReader(r io.Reader) *Reader {
+	return NewReaderLimit(r, MaxLineSize)
+}
+
+// NewReaderLimit is [NewReader] with an explicit per-line cap.
+// max <= 0 uses [MaxLineSize]. Omni audio chunks use a higher cap than the
+// chat default because one SSE line can carry a base64 waveform.
+func NewReaderLimit(r io.Reader, max int) *Reader {
+	if max <= 0 {
+		max = MaxLineSize
+	}
 	sc := bufio.NewScanner(r)
-	// Start small to keep idle connections cheap; allow growth up to MaxLineSize.
-	sc.Buffer(make([]byte, 0, 64<<10), MaxLineSize)
+	// Start small to keep idle connections cheap; allow growth up to max.
+	sc.Buffer(make([]byte, 0, 64<<10), max)
 	return &Reader{sc: sc}
 }
 

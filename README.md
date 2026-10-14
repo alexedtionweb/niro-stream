@@ -91,6 +91,11 @@ Niro uses a **plugin model**: the core (`github.com/alexedtionweb/niro-stream`) 
 | Google Speech TTS/STT | `github.com/alexedtionweb/niro-stream/provider/googlespeech` | `go get github.com/alexedtionweb/niro-stream/provider/googlespeech` | [cloud.google.com/go/texttospeech](https://pkg.go.dev/cloud.google.com/go/texttospeech/apiv1), [cloud.google.com/go/speech](https://pkg.go.dev/cloud.google.com/go/speech/apiv1) |
 | AWS Bedrock       | `github.com/alexedtionweb/niro-stream/provider/bedrock`   | `go get github.com/alexedtionweb/niro-stream/provider/bedrock`   | [aws-sdk-go-v2](https://github.com/aws/aws-sdk-go-v2)                         |
 | OpenAI-compatible | `github.com/alexedtionweb/niro-stream/provider/compat`    | included in core (zero deps)                                     | stdlib HTTP + SSE                                                             |
+| vLLM-Omni         | `github.com/alexedtionweb/niro-stream/provider/vllmomni`  | included in core (zero deps)                                     | stdlib HTTP + SSE (chat); realtime via `provider/realtime`                    |
+| OpenAI Realtime   | `github.com/alexedtionweb/niro-stream/provider/realtime`  | `go get github.com/alexedtionweb/niro-stream/provider/realtime`  | WebSocket, GA Realtime API and vLLM-Omni `/v1/realtime`                       |
+| Energy VAD        | `github.com/alexedtionweb/niro-stream/provider/energy`       | `go get github.com/alexedtionweb/niro-stream/provider/energy`       | Local PCM speech boundaries. No model file                                    |
+| Silence turns     | `github.com/alexedtionweb/niro-stream/provider/turn`         | `go get github.com/alexedtionweb/niro-stream/provider/turn`         | Local end-of-turn score from quiet time                                       |
+| VAD and turn models | `github.com/alexedtionweb/niro-stream/provider/audiomodel`      | `go get github.com/alexedtionweb/niro-stream/provider/audiomodel`        | HTTP client for a VAD model and a turn-detection model                        |
 | Agent plugin      | `github.com/alexedtionweb/niro-stream/plugin/agent`       | `go get github.com/alexedtionweb/niro-stream/plugin/agent`       | optional component-based agent runtime                                        |
 | Agent DSL plugin  | `github.com/alexedtionweb/niro-stream/plugin/dsl`          | `go get github.com/alexedtionweb/niro-stream/plugin/dsl`         | parse/validate/compile agent + workflow JSON; Runner with RunContext, Fan/Race/Sequence |
 
@@ -110,9 +115,32 @@ llm := bedrock.New(cfg) // from aws-sdk-go-v2 config
 // Any OpenAI-compatible endpoint (Ollama, vLLM, LiteLLM, etc.)
 // Included in core — no extra install needed
 llm := compat.New("http://localhost:11434/v1", "")
+
+// vLLM-Omni chat. Modalities default to text; add "audio" to run the talker.
+llm := vllmomni.New(os.Getenv("VLLM_BASE_URL"), "", vllmomni.WithModel(os.Getenv("MODEL")))
+
+// vLLM-Omni realtime
+voice := realtime.NewOmni(os.Getenv("VLLM_BASE_URL"), realtime.WithModel(os.Getenv("MODEL")))
 ```
 
 All providers implement the same `niro.Provider` interface. Swap providers by changing one line.
+
+### Voice activity and turn detection
+
+`VAD` and `TurnDetector` live in the core module and have no implementations there. Install the module that matches how you want to decide turns. Details and the model JSON contract are in [docs/AUDIO.md](docs/AUDIO.md).
+
+```go
+// Local energy VAD — go get github.com/alexedtionweb/niro-stream/provider/energy
+vad := energy.New(energy.Config{})
+marks, err := vad.Push(ctx, pcm16)
+
+// Local silence turn — go get github.com/alexedtionweb/niro-stream/provider/turn
+score, err := turn.Silence{}.Predict(ctx, niro.TurnInput{Silence: quietFor})
+
+// Your VAD model and turn model — go get github.com/alexedtionweb/niro-stream/provider/audiomodel
+speech := &audiomodel.Speech{URL: "http://127.0.0.1:9000/vad"}
+end, err := audiomodel.Endpoint{URL: "http://127.0.0.1:9000/turn"}.Predict(ctx, niro.TurnInput{Text: transcript})
+```
 
 ### Custom Providers
 
@@ -927,6 +955,7 @@ niro.SetJSON(&niro.JSONLibrary{
 | Document | Description |
 |----------|-------------|
 | [docs/INTEGRATION.md](docs/INTEGRATION.md) | **Integration guide** — dependencies, minimal setup, validation, errors, hooks, tools, middleware, registry, orchestration, structured output, **agent plugin** (memory, components, peers, orchestrator), configuration, testing. Use this to hook Niro into another project. |
+| [docs/AUDIO.md](docs/AUDIO.md) | **VAD and turn detection** — core interfaces, which module to install, and the HTTP model contract. |
 | [docs/API_REFERENCE.md](docs/API_REFERENCE.md) | **API overview** — packages and main types (Provider, Request, Stream, runtime, hook, tools, output, middleware, registry, structured, plugins). |
 | [docs/DSL_JSON_REFERENCE.md](docs/DSL_JSON_REFERENCE.md) | **DSL & workflow JSON** — every field for agent definitions (tools, agents, model_config, prompt, when/unless), tool types (code, http, handoff), workflows (fan, race, sequence, fan_then), and Orchestrator steps. |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Internal design — Frame, Stream, Pipeline, Provider adapters, Hook lifecycle, orchestration. |
@@ -946,7 +975,7 @@ niro.SetJSON(&niro.JSONLibrary{
 | [gemini](examples/gemini/main.go) | Gemini streaming, structured output, multi-turn |
 | [bedrock](examples/bedrock/main.go) | Bedrock chat, multi-turn, tool calling |
 | [hitl](examples/hitl/main.go) | Human-in-the-loop tool approval |
-| [realtime](examples/realtime/main.go) | OpenAI Realtime API (voice) |
+| [realtime](examples/realtime/main.go) | vLLM-Omni realtime (voice) |
 | [sonic](examples/sonic/main.go) | Bedrock Sonic (realtime audio) |
 | [elevenlabs](examples/elevenlabs/main.go) | ElevenLabs TTS and STT |
 

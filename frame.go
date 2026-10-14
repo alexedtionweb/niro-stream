@@ -200,13 +200,31 @@ type ToolResult struct {
 	Content       string // Result content (may be JSON or plain text)
 	IsError       bool   // Whether this result represents an error
 	HandoffTarget string // If non-empty, signals handoff to this agent/workflow (do not add to conversation)
+	// Parts is media captured for this call. A video tool returns the frames
+	// the camera has produced since the model asked to look.
+	Parts []Part
 }
+
+// ToolKind tells the client how to answer a tool call.
+// The model still sees every tool as a function; Kind is not sent to the server.
+type ToolKind string
+
+const (
+	// ToolKindFunction is a normal call answered with text.
+	ToolKindFunction ToolKind = ""
+	// ToolKindVideo is a live capture. The result's Parts are image frames
+	// or a video clip of what is happening now.
+	ToolKindVideo ToolKind = "video"
+)
 
 // Tool defines a tool that can be provided to an LLM.
 type Tool struct {
 	Name        string          // Function name
 	Description string          // Human-readable description
 	Parameters  json.RawMessage // JSON Schema for parameters
+	// Kind is function (empty) or video. Video tools are how a realtime
+	// model asks to see the current camera frames.
+	Kind ToolKind
 }
 
 // ToolChoice controls how the model selects tools.

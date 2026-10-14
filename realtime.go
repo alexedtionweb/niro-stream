@@ -9,7 +9,8 @@ import "context"
 //
 // Built-in implementations:
 //   - provider/bedrock [SonicProvider] — Amazon Nova Sonic (16 kHz in, 24 kHz out)
-//   - provider/realtime [Provider]     — OpenAI Realtime API (24 kHz in/out)
+//   - provider/realtime [Provider]     — OpenAI Realtime API (GA, 24 kHz in/out)
+//   - provider/realtime [NewOmni]      — vLLM-Omni /v1/realtime (duplex and turn-based)
 type RealtimeProvider interface {
 	Session(ctx context.Context, cfg RealtimeConfig) (RealtimeSession, error)
 }
@@ -92,17 +93,14 @@ type RealtimeSession interface {
 
 // RealtimeConfig configures a bidirectional speech session.
 type RealtimeConfig struct {
-	// Model identifier. If empty, the provider's default model is used.
-	//   Nova Sonic: "amazon.nova-sonic-v1:0"
-	//   OpenAI:     "gpt-4o-realtime-preview"
+	// Model identifier. Empty omits the field and leaves the server default,
+	// unless the provider was constructed with its own default.
 	Model string
 
 	// SystemPrompt is sent as the initial SYSTEM instruction.
 	SystemPrompt string
 
-	// Voice selects the TTS synthesis voice.
-	//   Nova Sonic: "matthew", "tiffany", "amy", "brian"
-	//   OpenAI:     "alloy", "echo", "fable", "nova", "onyx", "shimmer"
+	// Voice selects the synthesis voice. Empty omits the field.
 	Voice string
 
 	// InputFormat is the MIME type of audio sent via Send.
@@ -122,12 +120,26 @@ type RealtimeConfig struct {
 	ToolChoice ToolChoice
 
 	// VAD configures server-side Voice Activity Detection.
-	// When nil, VAD is not configured; the caller signals turn boundaries
+	// Used when TurnDetection is "server_vad", or when it is empty and VAD is set.
+	// When nil and TurnDetection is empty, the caller signals turn boundaries
 	// manually via Send(ControlFrame(SignalEOT)).
 	VAD *VADConfig
 
+	// TurnDetection selects the session.turn_detection field.
+	//   "" with VAD nil — JSON null; the caller commits turns (single / manual)
+	//   "omit"          — field left out; the server is not asked (duplex)
+	//   "manual"        — JSON null
+	//   "server_vad"    — server VAD, using VAD or provider defaults
+	TurnDetection string
+
 	// Options controls generation parameters (temperature, max tokens, etc.)
 	Options Options
+
+	// Extra carries provider-specific session configuration.
+	// Providers ignore unrecognized types.
+	//
+	//   realtime.SessionConfig  — OpenAI GA knobs and vLLM-Omni duplex fields
+	Extra any
 }
 
 // VADConfig configures server-side Voice Activity Detection.
@@ -137,16 +149,35 @@ type RealtimeConfig struct {
 //   - SignalFlush on speech start (user is talking; clear playback buffer)
 //   - SignalEOT   on speech end   (user stopped talking; model will respond)
 type VADConfig struct {
-	// Threshold is the activation confidence (0.0–1.0).
+	// Mode selects the detector.
+	//   "server_vad"   (default) — energy VAD, lowest latency
+	//   "semantic_vad"           — OpenAI semantic end-of-turn (higher latency)
+	// vLLM-Omni accepts server_vad only.
+	Mode string
+
+	// Eagerness tunes semantic_vad: "low", "medium", "high", or "auto".
+	// Empty uses the server default.
+	Eagerness string
+
+	// Threshold is the activation confidence (0.0–1.0) for server_vad.
 	// Higher values reduce false positives at the cost of onset latency.
-	// Default: 0.5
+	// Zero omits the field so the server default (0.5) applies.
 	Threshold float64
 
 	// PrefixPaddingMs is the pre-speech audio prepended to each utterance
-	// to avoid clipping word onset. Default: 300 ms.
+	// to avoid clipping word onset. Zero omits the field (server default 300 ms).
 	PrefixPaddingMs int
 
 	// SilenceDurationMs is the post-speech silence before turn-end is
-	// triggered. Default: 200 ms.
+	// triggered. Zero omits the field (server default). Lower values cut
+	// latency and increase false end-of-turn.
 	SilenceDurationMs int
+
+	// CreateResponse, when non-nil, overrides the server's automatic
+	// response-on-turn-end behavior. Nil means yes.
+	CreateResponse *bool
+
+	// InterruptResponse, when non-nil, overrides barge-in cancellation of
+	// an in-flight response. Nil means yes. Ignored by vLLM-Omni.
+	InterruptResponse *bool
 }

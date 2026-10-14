@@ -1,28 +1,26 @@
-// Command realtime demonstrates real-time speech-to-speech using the
-// OpenAI Realtime API via the niro.RealtimeProvider interface.
+// Command realtime demonstrates speech-to-speech against a vLLM-Omni server
+// (ws://<host>/v1/realtime) via niro.RealtimeProvider.
 //
 // The demo uses silence frames as synthetic audio input (no microphone required)
 // and prints received transcripts to stdout. Raw PCM audio output is discarded;
 // in production pipe it to your speaker/codec.
 //
-// Prerequisites:
-//
-//	OPENAI_API_KEY environment variable must be set.
-//
 // Run:
 //
-//	OPENAI_API_KEY=sk-... go run ./realtime
+//	VLLM_BASE_URL=http://127.0.0.1:8091 MODEL=<served-model> go run ./realtime
 //
 // Environment variables:
 //
-//	OPENAI_API_KEY   required: your OpenAI API key
-//	MODEL            model ID (default: gpt-4o-realtime-preview)
-//	VOICE            synthesis voice (default: alloy)
-//	CHUNK_MS         audio chunk size in milliseconds (default: 20)
-//	LOG_LEVEL        set to "debug" for verbose output
+//	VLLM_BASE_URL  required: server root (http, https, ws, or wss)
+//	MODEL          required: model id the server is serving
+//	VOICE          optional synthesis voice; omitted when empty
+//	SAMPLE_RATE    optional PCM rate for the audio demo; omitted when empty
+//	VLLM_API_KEY   optional bearer token
+//	CHUNK_MS       audio chunk size in milliseconds (default: 20)
+//	LOG_LEVEL      set to "debug" for verbose output
 //
 // To stream real microphone audio, replace the silence loop in audioTurn with
-// your PCM capture code. Chunks must be 24 kHz 16-bit mono PCM (niro.AudioPCM24k).
+// your PCM capture code and set SAMPLE_RATE to match it.
 package main
 
 import (
@@ -42,9 +40,10 @@ import (
 )
 
 func main() {
-	apiKey := os.Getenv("OPENAI_API_KEY")
-	if apiKey == "" {
-		fmt.Fprintln(os.Stderr, "OPENAI_API_KEY is required")
+	baseURL := os.Getenv("VLLM_BASE_URL")
+	model := os.Getenv("MODEL")
+	if baseURL == "" || model == "" {
+		fmt.Fprintln(os.Stderr, "VLLM_BASE_URL and MODEL are required")
 		os.Exit(1)
 	}
 
@@ -57,13 +56,15 @@ func main() {
 	}
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level})))
 
-	model := os.Getenv("MODEL")
-	if model == "" {
-		model = "gpt-4o-realtime-preview"
-	}
 	voice := os.Getenv("VOICE")
-	if voice == "" {
-		voice = "alloy"
+	var sampleRate int
+	if v := os.Getenv("SAMPLE_RATE"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n <= 0 {
+			fmt.Fprintln(os.Stderr, "SAMPLE_RATE must be a positive integer")
+			os.Exit(1)
+		}
+		sampleRate = n
 	}
 
 	chunkMs := 20
@@ -73,38 +74,57 @@ func main() {
 		}
 	}
 
-	p := realtime.New(apiKey,
-		realtime.WithModel(model),
-		realtime.WithVoice(voice),
-	)
+	opts := []realtime.Option{realtime.WithModel(model)}
+	if voice != "" {
+		opts = append(opts, realtime.WithVoice(voice))
+	}
+	if key := os.Getenv("VLLM_API_KEY"); key != "" {
+		opts = append(opts, realtime.WithAPIKey(key))
+	}
+	p := realtime.NewOmni(baseURL, opts...)
 
-	fmt.Printf("Provider : OpenAI Realtime\nModel    : %s\nVoice    : %s\n\n", model, voice)
+	cfg := niro.RealtimeConfig{Model: model, Voice: voice}
+	if sampleRate > 0 {
+		cfg.InputFormat = pcmMIME(sampleRate)
+		cfg.OutputFormat = cfg.InputFormat
+	}
+
+	fmt.Printf("Provider : vLLM-Omni\nEndpoint : %s\nModel    : %s\n", baseURL, model)
+	if voice != "" {
+		fmt.Printf("Voice    : %s\n", voice)
+	}
+	fmt.Println()
 
 	// ── Demo 1: text turn (no microphone required) ────────────────────────────
 	fmt.Println("=== Text turn ===")
-	if err := textTurn(ctx, p); err != nil {
+	if err := textTurn(ctx, p, cfg); err != nil {
 		slog.Error("text turn failed", "err", err)
 	}
 
 	// ── Demo 2: audio stream with server-side VAD ─────────────────────────────
 	fmt.Println("\n=== Audio stream with server VAD (silence) ===")
-	if err := audioTurn(ctx, p, chunkMs); err != nil {
+	if sampleRate == 0 {
+		fmt.Println("skipped: set SAMPLE_RATE to stream PCM")
+	} else if err := audioTurn(ctx, p, cfg, chunkMs, sampleRate); err != nil {
 		slog.Error("audio turn failed", "err", err)
 	}
 
 	// ── Demo 3: manual turn with tool call ────────────────────────────────────
 	fmt.Println("\n=== Tool calling ===")
-	if err := toolTurn(ctx, p); err != nil {
+	if err := toolTurn(ctx, p, cfg); err != nil {
 		slog.Error("tool turn failed", "err", err)
 	}
 }
 
+func pcmMIME(rate int) string {
+	return fmt.Sprintf("audio/pcm;rate=%d;bits=16;channels=1", rate)
+}
+
 // ── Demo 1: text turn ─────────────────────────────────────────────────────────
 
-func textTurn(ctx context.Context, p niro.RealtimeProvider) error {
-	sess, err := p.Session(ctx, niro.RealtimeConfig{
-		SystemPrompt: "You are a helpful voice assistant. Keep replies to one sentence.",
-	})
+func textTurn(ctx context.Context, p niro.RealtimeProvider, cfg niro.RealtimeConfig) error {
+	cfg.SystemPrompt = "You are a helpful voice assistant. Keep replies to one sentence."
+	sess, err := p.Session(ctx, cfg)
 	if err != nil {
 		return fmt.Errorf("open session: %w", err)
 	}
@@ -131,24 +151,19 @@ func textTurn(ctx context.Context, p niro.RealtimeProvider) error {
 
 // ── Demo 2: audio turn with server VAD ───────────────────────────────────────
 
-// silencePCM returns a zeroed PCM16 frame of the given duration at 24 kHz mono.
-func silencePCM(durationMs int) []byte {
-	// 24 kHz × 16-bit (2 bytes/sample) × 1 channel
-	samples := 24000 * durationMs / 1000
+func silencePCM(durationMs, rate int) []byte {
+	samples := rate * durationMs / 1000
 	return make([]byte, samples*2)
 }
 
-func audioTurn(ctx context.Context, p niro.RealtimeProvider, chunkMs int) error {
-	sess, err := p.Session(ctx, niro.RealtimeConfig{
-		SystemPrompt: "You are a helpful voice assistant. Keep replies to one sentence.",
-		InputFormat:  niro.AudioPCM24k, // 24 kHz PCM16 mono
-		OutputFormat: niro.AudioPCM24k, // 24 kHz PCM16 mono
-		VAD: &niro.VADConfig{
-			Threshold:         0.5,
-			PrefixPaddingMs:   300,
-			SilenceDurationMs: 200,
-		},
-	})
+func audioTurn(ctx context.Context, p niro.RealtimeProvider, cfg niro.RealtimeConfig, chunkMs, rate int) error {
+	cfg.SystemPrompt = "You are a helpful voice assistant. Keep replies to one sentence."
+	cfg.VAD = &niro.VADConfig{
+		Threshold:         0.5,
+		PrefixPaddingMs:   300,
+		SilenceDurationMs: 200,
+	}
+	sess, err := p.Session(ctx, cfg)
 	if err != nil {
 		return fmt.Errorf("open session: %w", err)
 	}
@@ -165,10 +180,11 @@ func audioTurn(ctx context.Context, p niro.RealtimeProvider, chunkMs int) error 
 
 	// Stream ~1 s of silence then manually commit. Real microphone audio would
 	// trigger the VAD and cause the model to respond automatically.
-	chunk := silencePCM(chunkMs)
+	chunk := silencePCM(chunkMs, rate)
 	nChunks := 1000 / chunkMs
+	mime := cfg.InputFormat
 	for i := 0; i < nChunks; i++ {
-		if err := sess.Send(ctx, niro.AudioFrame(chunk, niro.AudioPCM24k)); err != nil {
+		if err := sess.Send(ctx, niro.AudioFrame(chunk, mime)); err != nil {
 			return fmt.Errorf("send audio chunk %d: %w", i, err)
 		}
 		time.Sleep(time.Duration(chunkMs) * time.Millisecond)
@@ -184,18 +200,26 @@ func audioTurn(ctx context.Context, p niro.RealtimeProvider, chunkMs int) error 
 
 // ── Demo 3: tool calling ──────────────────────────────────────────────────────
 
-func toolTurn(ctx context.Context, p niro.RealtimeProvider) error {
+func toolTurn(ctx context.Context, p niro.RealtimeProvider, cfg niro.RealtimeConfig) error {
 	weatherTool := niro.Tool{
 		Name:        "get_weather",
 		Description: "Get the current weather for a city.",
 		Parameters:  json.RawMessage(`{"type":"object","properties":{"city":{"type":"string"}},"required":["city"]}`),
 	}
+	// capture is a video tool: the model calls it when it wants to see
+	// what is happening. Push camera frames into cam as they arrive.
+	captureTool := niro.Tool{
+		Name:        "capture",
+		Description: "Look at the camera and describe what is happening right now.",
+		Kind:        niro.ToolKindVideo,
+	}
+	cam := realtime.NewCaptureBuffer(4)
 
-	sess, err := p.Session(ctx, niro.RealtimeConfig{
-		SystemPrompt: "You are a helpful voice assistant.",
-		Tools:        []niro.Tool{weatherTool},
-		// Disable VAD so we control turn boundaries explicitly.
-	})
+	cfg.SystemPrompt = "You are a helpful voice assistant."
+	cfg.Tools = []niro.Tool{weatherTool, captureTool}
+	cfg.VAD = nil
+	cfg.TurnDetection = "manual"
+	sess, err := p.Session(ctx, cfg)
 	if err != nil {
 		return fmt.Errorf("open session: %w", err)
 	}
@@ -216,11 +240,13 @@ func toolTurn(ctx context.Context, p niro.RealtimeProvider) error {
 				slog.Debug("audio frame", "bytes", len(f.Data))
 			case niro.KindToolCall:
 				fmt.Printf("\n[tool call] %s(%s)\n", f.Tool.Name, string(f.Tool.Args))
-				result := executeWeather(f.Tool)
-				if sendErr := sess.Send(ctx, niro.Frame{
-					Kind:   niro.KindToolResult,
-					Result: result,
-				}); sendErr != nil {
+				var reply niro.Frame
+				if f.Tool.Name == captureTool.Name {
+					reply = realtime.CaptureResult(f.Tool, cam.Snapshot())
+				} else {
+					reply = niro.ToolResultFrame(executeWeather(f.Tool))
+				}
+				if sendErr := sess.Send(ctx, reply); sendErr != nil {
 					slog.Error("send tool result", "err", sendErr)
 				}
 			case niro.KindControl:
@@ -280,7 +306,7 @@ func printRecv(ctx context.Context, stream *niro.Stream) {
 		case niro.KindText:
 			fmt.Print(f.Text)
 		case niro.KindAudio:
-			// In production: write f.Data (24 kHz PCM16 mono) to your speaker.
+			// In production: write f.Data to your speaker. The MIME is f.Mime.
 			slog.Debug("audio frame", "bytes", len(f.Data))
 		case niro.KindControl:
 			switch f.Signal {
