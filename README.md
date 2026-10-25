@@ -976,6 +976,7 @@ niro.SetJSON(&niro.JSONLibrary{
 | [bedrock](examples/bedrock/main.go) | Bedrock chat, multi-turn, tool calling |
 | [hitl](examples/hitl/main.go) | Human-in-the-loop tool approval |
 | [realtime](examples/realtime/main.go) | vLLM-Omni realtime (voice) |
+| [omni](examples/omni/main.go) | vLLM-Omni chat (text, image, video, audio) |
 | [sonic](examples/sonic/main.go) | Bedrock Sonic (realtime audio) |
 | [elevenlabs](examples/elevenlabs/main.go) | ElevenLabs TTS and STT |
 

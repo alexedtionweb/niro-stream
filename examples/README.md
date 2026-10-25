@@ -233,6 +233,21 @@ ffmpeg -i input.wav -f s16le -ac 1 -ar 16000 sample.pcm
 
 ---
 
+### `omni` — vLLM-Omni chat
+
+Streams one completion from a vLLM-Omni server. Text is the default output.
+Set `MODALITIES=text,audio` and `AUDIO_OUT` to keep the talker audio. `IMAGE`,
+`VIDEO`, and `AUDIO` accept a file path or an http(s) URL.
+
+```bash
+VLLM_BASE_URL=http://127.0.0.1:8091 MODEL=<served-model> go run ./omni
+
+VLLM_BASE_URL=http://127.0.0.1:8091 MODEL=<served-model> \
+  IMAGE=./frame.jpg PROMPT="What is in this image?" go run ./omni
+```
+
+---
+
 ## Running all examples
 
 ```bash
