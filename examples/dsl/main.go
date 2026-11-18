@@ -43,13 +43,13 @@ import (
 
 const (
 	defaultWorkflowName = "chat"      // workflow key looked up in workflow.json
-	defaultSessionID    = "session-1"  // session ID for the REPL
-	defaultProvider     = "openai"     // provider when PROVIDER env is unset
+	defaultSessionID    = "session-1" // session ID for the REPL
+	defaultProvider     = "openai"    // provider when PROVIDER env is unset
 
 	defaultOpenAIModel   = "gpt-4o"
 	defaultGeminiModel   = "gemini-2.5-flash"
 	defaultBedrockModel  = "anthropic.claude-3-5-haiku-20241022-v1:0"
-	defaultOllamaModel   = "llama3.2"
+	defaultOllamaModel   = "lfm3-vl:latest"
 	defaultOllamaBaseURL = "http://localhost:11434/v1"
 	openAIBaseURL        = "https://api.openai.com/v1"
 
