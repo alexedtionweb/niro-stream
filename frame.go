@@ -78,6 +78,9 @@ const (
 	CustomReasoning    = "reasoning"     // Alias for thinking (provider-dependent naming)
 	CustomHandoff      = "handoff"       // Tool loop signals a handoff to another agent/workflow
 	CustomHandoffStart = "handoff_start" // Emitted before the handoff target's stream begins
+	CustomSTTMeta      = "stt_meta"      // STT interim/final metadata ([STTMeta] in Data)
+	CustomImagePartial = "image_partial" // Progressive image preview during streaming generation
+	CustomVideoStatus  = "video_status"  // Async video job progress ([VideoStatus] in Data)
 )
 
 // DefaultStreamBuffer is the channel buffer size used by stream tee goroutines
@@ -262,6 +265,8 @@ const (
 	UsageReasoningTokens = "reasoning_tokens"
 	// UsageReasoningCost is the standard key for provider-reported reasoning cost units.
 	UsageReasoningCost = "reasoning_cost"
+	// UsageCostMicros is USD cost × 1e6 (microdollars) when providers report float cost.
+	UsageCostMicros = "cost_micros"
 	// UsageCacheAttempted is 0|1 indicating cache was attempted.
 	UsageCacheAttempted = "cache_attempted"
 	// UsageCacheHit is 0|1 indicating cache hit occurred.

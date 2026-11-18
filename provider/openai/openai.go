@@ -22,11 +22,19 @@
 //	    Model: "gpt-4o",
 //	    Messages: []niro.Message{niro.UserText("Hello")},
 //	})
+//
+//	dec, err := llm.Decide(ctx, &niro.DecisionRequest{
+//	    State: "I was charged twice.",
+//	    Questions: map[string]niro.DecisionQuestion{
+//	        "billing": niro.Noul("Is this a billing issue?", "", ""),
+//	    },
+//	})
 package openai
 
 import (
 	"context"
 	"encoding/json"
+	"net/http"
 	"strings"
 
 	oai "github.com/openai/openai-go"
@@ -56,35 +64,67 @@ import (
 //	})
 type RequestHook func(params *oai.ChatCompletionNewParams)
 
-// Provider implements niro.Provider using the official OpenAI SDK.
+// Provider implements [niro.Provider] and [niro.DecisionProvider] using the
+// official OpenAI SDK (chat) plus native POST /v1/decisions.
 type Provider struct {
-	client oai.Client
-	model  string
-	hooks  []RequestHook
+	client        oai.Client
+	model         string
+	decisionModel string
+	apiKey        string
+	baseURL       string
+	httpClient    *http.Client
+	hooks         []RequestHook
+	decisionHooks []DecisionRequestHook
 }
 
-var _ niro.Provider = (*Provider)(nil)
+var (
+	_ niro.Provider         = (*Provider)(nil)
+	_ niro.DecisionProvider = (*Provider)(nil)
+)
 
 // Option configures a Provider.
 type Option func(*providerConfig)
 
 type providerConfig struct {
-	opts  []option.RequestOption
-	model string
-	hooks []RequestHook
+	opts          []option.RequestOption
+	model         string
+	decisionModel string
+	apiKey        string
+	baseURL       string
+	httpClient    *http.Client
+	hooks         []RequestHook
+	decisionHooks []DecisionRequestHook
 }
 
 // WithBaseURL overrides the API base URL.
 // Use for Azure OpenAI, Ollama, vLLM, or any compatible endpoint.
 func WithBaseURL(url string) Option {
 	return func(c *providerConfig) {
+		c.baseURL = url
 		c.opts = append(c.opts, option.WithBaseURL(url))
 	}
 }
 
-// WithModel sets the default model.
+// WithModel sets the default chat model.
 func WithModel(model string) Option {
 	return func(c *providerConfig) { c.model = model }
+}
+
+// WithDecisionModel sets the default Decisions model (default gpt-6-luna).
+func WithDecisionModel(model string) Option {
+	return func(c *providerConfig) { c.decisionModel = model }
+}
+
+// WithHTTPClient sets the HTTP client used for native Decisions calls.
+func WithHTTPClient(client *http.Client) Option {
+	return func(c *providerConfig) { c.httpClient = client }
+}
+
+// WithDecisionRequestHook registers a hook for native Decisions request bodies.
+func WithDecisionRequestHook(fn DecisionRequestHook) Option {
+	return func(c *providerConfig) {
+		c.decisionHooks = append(c.decisionHooks, fn)
+	}
 }
 
 // WithRequestOption appends a raw SDK request option.
@@ -105,22 +145,39 @@ func WithRequestHook(fn RequestHook) Option {
 
 // New creates an OpenAI provider.
 func New(apiKey string, opts ...Option) *Provider {
-	cfg := &providerConfig{model: "gpt-4o"}
+	cfg := &providerConfig{
+		model:         "gpt-4o",
+		decisionModel: defaultDecisionModel,
+		apiKey:        apiKey,
+		baseURL:       defaultOpenAIBaseURL,
+	}
 	for _, o := range opts {
 		o(cfg)
 	}
 	clientOpts := append([]option.RequestOption{option.WithAPIKey(apiKey)}, cfg.opts...)
 	return &Provider{
-		client: oai.NewClient(clientOpts...),
-		model:  cfg.model,
-		hooks:  cfg.hooks,
+		client:        oai.NewClient(clientOpts...),
+		model:         cfg.model,
+		decisionModel: cfg.decisionModel,
+		apiKey:        cfg.apiKey,
+		baseURL:       cfg.baseURL,
+		httpClient:    cfg.httpClient,
+		hooks:         cfg.hooks,
+		decisionHooks: cfg.decisionHooks,
 	}
 }
 
 // NewFromClient creates a provider from an existing OpenAI SDK client.
 // Use when you need full control over client construction.
+// Native Decisions requires [WithBaseURL]/API key via [New]; without an API
+// key, [Provider.Decide] falls back to [niro.DecideViaChat].
 func NewFromClient(client oai.Client, model string) *Provider {
-	return &Provider{client: client, model: model}
+	return &Provider{
+		client:        client,
+		model:         model,
+		decisionModel: defaultDecisionModel,
+		baseURL:       defaultOpenAIBaseURL,
+	}
 }
 
 // Client returns the underlying OpenAI SDK client.

@@ -86,6 +86,7 @@ Niro uses a **plugin model**: the core (`github.com/alexedtionweb/niro-stream`) 
 | Provider          | Module                                                    | Install                                                          | SDK                                                                           |
 | ----------------- | --------------------------------------------------------- | ---------------------------------------------------------------- | ----------------------------------------------------------------------------- |
 | OpenAI            | `github.com/alexedtionweb/niro-stream/provider/openai`    | `go get github.com/alexedtionweb/niro-stream/provider/openai`    | [openai/openai-go](https://github.com/openai/openai-go)                       |
+| OpenRouter        | `github.com/alexedtionweb/niro-stream/provider/openrouter` | `go get github.com/alexedtionweb/niro-stream/provider/openrouter` | [OpenRouterTeam/go-sdk](https://github.com/OpenRouterTeam/go-sdk)            |
 | Anthropic         | `github.com/alexedtionweb/niro-stream/provider/anthropic` | `go get github.com/alexedtionweb/niro-stream/provider/anthropic` | [anthropics/anthropic-sdk-go](https://github.com/anthropics/anthropic-sdk-go) |
 | Google Gemini     | `github.com/alexedtionweb/niro-stream/provider/google`    | `go get github.com/alexedtionweb/niro-stream/provider/google`    | [googleapis/go-genai](https://github.com/googleapis/go-genai)                 |
 | Google Speech TTS/STT | `github.com/alexedtionweb/niro-stream/provider/googlespeech` | `go get github.com/alexedtionweb/niro-stream/provider/googlespeech` | [cloud.google.com/go/texttospeech](https://pkg.go.dev/cloud.google.com/go/texttospeech/apiv1), [cloud.google.com/go/speech](https://pkg.go.dev/cloud.google.com/go/speech/apiv1) |
@@ -102,6 +103,9 @@ Niro uses a **plugin model**: the core (`github.com/alexedtionweb/niro-stream`) 
 ```go
 // OpenAI — go get github.com/alexedtionweb/niro-stream/provider/openai
 llm := openai.New(os.Getenv("OPENAI_API_KEY"))
+
+// OpenRouter — go get github.com/alexedtionweb/niro-stream/provider/openrouter
+llm := openrouter.New(os.Getenv("OPENROUTER_API_KEY"))
 
 // Anthropic — go get github.com/alexedtionweb/niro-stream/provider/anthropic
 llm := anthropic.New(os.Getenv("ANTHROPIC_API_KEY"))

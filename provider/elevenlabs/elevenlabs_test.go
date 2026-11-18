@@ -67,6 +67,15 @@ func TestNewDefaults(t *testing.T) {
 	if p.model != defaultModel {
 		t.Fatalf("model = %q, want %q", p.model, defaultModel)
 	}
+	if p.sttModel != defaultSTTModel {
+		t.Fatalf("sttModel = %q, want %q", p.sttModel, defaultSTTModel)
+	}
+	if p.sttStreamModel != defaultSTTStreamModel {
+		t.Fatalf("sttStreamModel = %q, want %q", p.sttStreamModel, defaultSTTStreamModel)
+	}
+	if p.commitStrategy != defaultCommitStrategy {
+		t.Fatalf("commitStrategy = %q, want %q", p.commitStrategy, defaultCommitStrategy)
+	}
 	if p.speed != 1.0 {
 		t.Fatalf("speed = %f, want 1.0", p.speed)
 	}
@@ -83,6 +92,8 @@ func TestOptions(t *testing.T) {
 		WithVoice("Bella"),
 		WithModel("turbo_v2"),
 		WithSTTModel("scribe_v2"),
+		WithSTTStreamModel("scribe_v3_live"),
+		WithCommitStrategy("manual"),
 		WithFormat("mp3_44100_128"),
 		WithSpeed(1.5),
 		WithLanguage("de"),
@@ -101,6 +112,9 @@ func TestOptions(t *testing.T) {
 	}
 	if p.voice != "Bella" || p.model != "turbo_v2" || p.sttModel != "scribe_v2" {
 		t.Fatal("voice/model/sttModel not set")
+	}
+	if p.sttStreamModel != "scribe_v3_live" || p.commitStrategy != "manual" {
+		t.Fatal("sttStreamModel/commitStrategy not set")
 	}
 	if p.format != "mp3_44100_128" || p.speed != 1.5 || p.lang != "de" {
 		t.Fatal("format/speed/lang not set")
@@ -501,44 +515,44 @@ func wsEcho(t *testing.T, handler func(conn *websocket.Conn)) *httptest.Server {
 }
 
 func TestTranscribeStreamBasic(t *testing.T) {
-	// WS server that reads 3 audio messages, sends final transcript, closes.
+	// WS server that reads audio chunks, sends committed transcript, closes.
 	var received atomic.Int32
 
 	srv := wsEcho(t, func(conn *websocket.Conn) {
 		defer conn.Close()
+		_ = conn.WriteMessage(websocket.TextMessage, []byte(`{"message_type":"session_started","session_id":"s1"}`))
 		for {
 			_, msg, err := conn.ReadMessage()
 			if err != nil {
 				break
 			}
-			// Validate it's valid JSON with audio_base_64
-			var m map[string]string
+			var m map[string]any
 			if json.Unmarshal(msg, &m) == nil {
-				if _, ok := m["audio_base_64"]; ok {
+				if m["message_type"] == "input_audio_chunk" && m["audio_base_64"] != "" {
 					received.Add(1)
+				}
+				if m["commit"] == true {
+					break
 				}
 			}
 		}
-		// Send final transcript
 		resp, _ := json.Marshal(sttWSResponse{
-			MessageType: "final_transcript",
+			MessageType: "committed_transcript",
 			Text:        "hello world",
-			IsFinal:     true,
 		})
-		conn.WriteMessage(websocket.TextMessage, resp)
-		conn.WriteMessage(
+		_ = conn.WriteMessage(websocket.TextMessage, resp)
+		_ = conn.WriteMessage(
 			websocket.CloseMessage,
 			websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""),
 		)
 	})
 	defer srv.Close()
 
-	// Create audio input stream with 3 frames
 	audioStream, audioEmitter := niro.NewStream(8)
 	go func() {
 		ctx := context.Background()
 		for i := 0; i < 3; i++ {
-			audioEmitter.Emit(ctx, niro.AudioFrame([]byte{byte(i), byte(i)}, niro.AudioPCM16k))
+			_ = audioEmitter.Emit(ctx, niro.AudioFrame([]byte{byte(i), byte(i)}, niro.AudioPCM16k))
 		}
 		audioEmitter.Close()
 	}()
@@ -571,19 +585,29 @@ func TestTranscribeStreamBasic(t *testing.T) {
 		t.Errorf("server received %d audio messages, want 3", received.Load())
 	}
 
-	// We may get the transcript if the server sent it before close
+	found := false
 	for _, f := range frames {
 		if f.Kind != niro.KindText {
 			t.Errorf("kind = %v, want KindText", f.Kind)
 		}
+		if f.Text == "hello world" {
+			found = true
+			meta, ok := f.Custom.Data.(niro.STTMeta)
+			if !ok || !meta.Final {
+				t.Errorf("expected final STTMeta, got %#v", f.Custom)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("missing committed transcript in frames: %+v", frames)
 	}
 }
 
 func TestTranscribeStreamInterimResults(t *testing.T) {
 	srv := wsEcho(t, func(conn *websocket.Conn) {
 		defer conn.Close()
+		_ = conn.WriteMessage(websocket.TextMessage, []byte(`{"message_type":"session_started"}`))
 
-		// Read and discard audio
 		go func() {
 			for {
 				if _, _, err := conn.ReadMessage(); err != nil {
@@ -592,20 +616,19 @@ func TestTranscribeStreamInterimResults(t *testing.T) {
 			}
 		}()
 
-		// Send interim then final
 		time.Sleep(50 * time.Millisecond)
 		msgs := []sttWSResponse{
-			{MessageType: "partial", Text: "hel", IsFinal: false},
-			{MessageType: "partial", Text: "hello", IsFinal: false},
-			{MessageType: "final_transcript", Text: "hello world", IsFinal: true},
+			{MessageType: "partial_transcript", Text: "hel"},
+			{MessageType: "partial_transcript", Text: "hello"},
+			{MessageType: "committed_transcript", Text: "hello world"},
 		}
 		for _, m := range msgs {
 			data, _ := json.Marshal(m)
-			conn.WriteMessage(websocket.TextMessage, data)
+			_ = conn.WriteMessage(websocket.TextMessage, data)
 			time.Sleep(20 * time.Millisecond)
 		}
 
-		conn.WriteMessage(
+		_ = conn.WriteMessage(
 			websocket.CloseMessage,
 			websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""),
 		)
@@ -615,7 +638,7 @@ func TestTranscribeStreamInterimResults(t *testing.T) {
 	audioStream, audioEmitter := niro.NewStream(8)
 	go func() {
 		ctx := context.Background()
-		audioEmitter.Emit(ctx, niro.AudioFrame([]byte{1}, niro.AudioPCM16k))
+		_ = audioEmitter.Emit(ctx, niro.AudioFrame([]byte{1}, niro.AudioPCM16k))
 		time.Sleep(100 * time.Millisecond)
 		audioEmitter.Close()
 	}()
@@ -644,14 +667,19 @@ func TestTranscribeStreamInterimResults(t *testing.T) {
 		t.Fatalf("expected at least 2 frames (interim + final), got %d", len(frames))
 	}
 
-	// Verify we got interim partials and a final
 	var gotInterim, gotFinal bool
 	for _, f := range frames {
 		if f.Text == "hel" || f.Text == "hello" {
 			gotInterim = true
+			if meta, ok := f.Custom.Data.(niro.STTMeta); !ok || meta.Final {
+				t.Errorf("interim frame should have Final=false, got %#v", f.Custom)
+			}
 		}
 		if f.Text == "hello world" {
 			gotFinal = true
+			if meta, ok := f.Custom.Data.(niro.STTMeta); !ok || !meta.Final {
+				t.Errorf("final frame should have Final=true, got %#v", f.Custom)
+			}
 		}
 	}
 	if !gotInterim {
@@ -665,6 +693,7 @@ func TestTranscribeStreamInterimResults(t *testing.T) {
 func TestTranscribeStreamNoInterim(t *testing.T) {
 	srv := wsEcho(t, func(conn *websocket.Conn) {
 		defer conn.Close()
+		_ = conn.WriteMessage(websocket.TextMessage, []byte(`{"message_type":"session_started"}`))
 
 		go func() {
 			for {
@@ -676,16 +705,16 @@ func TestTranscribeStreamNoInterim(t *testing.T) {
 
 		time.Sleep(50 * time.Millisecond)
 		msgs := []sttWSResponse{
-			{MessageType: "partial", Text: "hel", IsFinal: false},
-			{MessageType: "final_transcript", Text: "hello", IsFinal: true},
+			{MessageType: "partial_transcript", Text: "hel"},
+			{MessageType: "committed_transcript", Text: "hello"},
 		}
 		for _, m := range msgs {
 			data, _ := json.Marshal(m)
-			conn.WriteMessage(websocket.TextMessage, data)
+			_ = conn.WriteMessage(websocket.TextMessage, data)
 			time.Sleep(20 * time.Millisecond)
 		}
 
-		conn.WriteMessage(
+		_ = conn.WriteMessage(
 			websocket.CloseMessage,
 			websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""),
 		)
@@ -695,7 +724,7 @@ func TestTranscribeStreamNoInterim(t *testing.T) {
 	audioStream, audioEmitter := niro.NewStream(8)
 	go func() {
 		ctx := context.Background()
-		audioEmitter.Emit(ctx, niro.AudioFrame([]byte{1}, niro.AudioPCM16k))
+		_ = audioEmitter.Emit(ctx, niro.AudioFrame([]byte{1}, niro.AudioPCM16k))
 		time.Sleep(100 * time.Millisecond)
 		audioEmitter.Close()
 	}()
@@ -709,7 +738,7 @@ func TestTranscribeStreamNoInterim(t *testing.T) {
 	stream, err := p.Transcribe(ctx, &niro.STTRequest{
 		AudioStream:    audioStream,
 		InputFormat:    niro.AudioPCM16k,
-		InterimResults: false, // Only finals
+		InterimResults: false,
 	})
 	if err != nil {
 		t.Fatalf("Transcribe: %v", err)
@@ -720,7 +749,6 @@ func TestTranscribeStreamNoInterim(t *testing.T) {
 		t.Fatalf("stream error: %v", err)
 	}
 
-	// Should only have final, no partials
 	for _, f := range frames {
 		if f.Text == "hel" {
 			t.Error("received interim result despite InterimResults=false")
@@ -741,6 +769,7 @@ func TestTranscribeStreamQueryParams(t *testing.T) {
 		if err != nil {
 			return
 		}
+		_ = conn.WriteMessage(websocket.TextMessage, []byte(`{"message_type":"session_started"}`))
 		conn.Close()
 	}))
 	defer srv.Close()
@@ -749,7 +778,7 @@ func TestTranscribeStreamQueryParams(t *testing.T) {
 	audioEmitter.Close()
 
 	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
-	p := New("test-key", WithWSURL(wsURL))
+	p := New("test-key", WithWSURL(wsURL), WithCommitStrategy("vad"))
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -757,7 +786,7 @@ func TestTranscribeStreamQueryParams(t *testing.T) {
 	stream, err := p.Transcribe(ctx, &niro.STTRequest{
 		AudioStream:    audioStream,
 		InputFormat:    niro.AudioPCM16k,
-		Model:          "scribe_v2",
+		Model:          "scribe_v2_realtime",
 		Language:       "fr",
 		InterimResults: true,
 	})
@@ -766,24 +795,27 @@ func TestTranscribeStreamQueryParams(t *testing.T) {
 	}
 	collect(ctx, stream)
 
-	if !strings.Contains(capturedQuery, "model_id=scribe_v2") {
+	if !strings.Contains(capturedQuery, "model_id=scribe_v2_realtime") {
 		t.Errorf("missing model_id: %s", capturedQuery)
 	}
 	if !strings.Contains(capturedQuery, "language_code=fr") {
 		t.Errorf("missing language_code: %s", capturedQuery)
 	}
-	if !strings.Contains(capturedQuery, "enable_partial_transcripts=true") {
-		t.Errorf("missing enable_partial_transcripts: %s", capturedQuery)
+	if !strings.Contains(capturedQuery, "audio_format=pcm_16000") {
+		t.Errorf("missing audio_format: %s", capturedQuery)
+	}
+	if !strings.Contains(capturedQuery, "commit_strategy=vad") {
+		t.Errorf("missing commit_strategy: %s", capturedQuery)
 	}
 }
 
 func TestTranscribeStreamAudioEncoding(t *testing.T) {
-	// Verify that audio frames are sent as base64-encoded JSON.
 	var receivedMsgs []string
 	var mu sync.Mutex
 
 	srv := wsEcho(t, func(conn *websocket.Conn) {
 		defer conn.Close()
+		_ = conn.WriteMessage(websocket.TextMessage, []byte(`{"message_type":"session_started"}`))
 		for {
 			_, msg, err := conn.ReadMessage()
 			if err != nil {
@@ -800,7 +832,7 @@ func TestTranscribeStreamAudioEncoding(t *testing.T) {
 	audioStream, audioEmitter := niro.NewStream(8)
 	go func() {
 		ctx := context.Background()
-		audioEmitter.Emit(ctx, niro.AudioFrame(audioData, niro.AudioPCM16k))
+		_ = audioEmitter.Emit(ctx, niro.AudioFrame(audioData, niro.AudioPCM16k))
 		time.Sleep(50 * time.Millisecond)
 		audioEmitter.Close()
 	}()
@@ -827,21 +859,31 @@ func TestTranscribeStreamAudioEncoding(t *testing.T) {
 		t.Fatal("no messages received by server")
 	}
 
-	// Parse the message
-	var m map[string]string
-	if err := json.Unmarshal([]byte(receivedMsgs[0]), &m); err != nil {
-		t.Fatalf("invalid JSON: %v", err)
+	var chunk sttWSAudioChunk
+	if err := json.Unmarshal([]byte(receivedMsgs[0]), &chunk); err != nil {
+		t.Fatalf("invalid JSON: %v (%s)", err, receivedMsgs[0])
 	}
-	b64, ok := m["audio_base_64"]
-	if !ok {
-		t.Fatal("missing audio_base_64 field")
+	if chunk.MessageType != "input_audio_chunk" {
+		t.Fatalf("message_type = %q", chunk.MessageType)
 	}
-	decoded, err := base64.StdEncoding.DecodeString(b64)
+	if chunk.SampleRate != 16000 {
+		t.Fatalf("sample_rate = %d", chunk.SampleRate)
+	}
+	decoded, err := base64.StdEncoding.DecodeString(chunk.AudioBase64)
 	if err != nil {
 		t.Fatalf("invalid base64: %v", err)
 	}
 	if !bytes.Equal(decoded, audioData) {
 		t.Errorf("decoded = %v, want %v", decoded, audioData)
+	}
+
+	// Last message should be the final commit.
+	var last sttWSAudioChunk
+	if err := json.Unmarshal([]byte(receivedMsgs[len(receivedMsgs)-1]), &last); err != nil {
+		t.Fatalf("invalid commit JSON: %v", err)
+	}
+	if !last.Commit {
+		t.Fatalf("expected final commit message, got %#v", last)
 	}
 }
 

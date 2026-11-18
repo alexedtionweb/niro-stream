@@ -59,12 +59,21 @@ type TTSRequest struct {
 //
 // The returned Stream emits [KindText] frames for transcript segments.
 // Interim (partial) results and final results are both KindText; use
-// [STTMeta] in Frame.Extra or provider conventions to distinguish them.
+// [STTMeta] on Frame.Custom (Type [CustomSTTMeta]) to distinguish them.
 //
-// Built-in: provider/elevenlabs, provider/googlespeech.
+// Built-in: provider/elevenlabs (batch + Scribe realtime), provider/googlespeech.
 // Custom: implement this interface or use [STTFunc].
 type STTProvider interface {
 	Transcribe(ctx context.Context, req *STTRequest) (*Stream, error)
+}
+
+// STTMeta distinguishes interim vs final transcript segments on KindText frames.
+// Providers attach it via Frame.Custom with Type [CustomSTTMeta].
+type STTMeta struct {
+	// Final is true for committed/stable transcript segments.
+	Final bool
+	// Language is a detected or hinted BCP-47/ISO language code when known.
+	Language string
 }
 
 // STTFunc adapts a plain function to the [STTProvider] interface.

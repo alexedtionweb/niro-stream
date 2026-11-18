@@ -17,6 +17,8 @@
 //	    Model: "gpt-4o",
 //	    Messages: []niro.Message{niro.UserText("Hello")},
 //	})
+//
+// Decide uses [niro.DecideViaChat] (JSON chat) — suitable for Ollama.
 package compat
 
 import (
@@ -56,7 +58,10 @@ type Provider struct {
 	headers map[string]string
 }
 
-var _ niro.Provider = (*Provider)(nil)
+var (
+	_ niro.Provider         = (*Provider)(nil)
+	_ niro.DecisionProvider = (*Provider)(nil)
+)
 
 // Option configures a Provider.
 type Option func(*Provider)
@@ -272,7 +277,40 @@ func buildRequest(model string, req *niro.Request) chatRequest {
 		cr.Tools = append(cr.Tools, ct)
 	}
 
+	switch req.ResponseFormat {
+	case "json":
+		cr.ResponseFormat = &chatResponseFormat{Type: "json_object"}
+	case "json_schema":
+		name, schema := splitJSONSchema(req.ResponseSchema)
+		cr.ResponseFormat = &chatResponseFormat{
+			Type: "json_schema",
+			JSONSchema: &chatJSONSchema{
+				Name:   name,
+				Schema: schema,
+				Strict: true,
+			},
+		}
+	}
+
 	return cr
+}
+
+func splitJSONSchema(raw json.RawMessage) (string, json.RawMessage) {
+	if len(raw) == 0 {
+		return "response", raw
+	}
+	var wrap struct {
+		Name   string          `json:"name"`
+		Schema json.RawMessage `json:"schema"`
+	}
+	if err := niro.JSONUnmarshal(raw, &wrap); err == nil && len(wrap.Schema) > 0 {
+		name := wrap.Name
+		if name == "" {
+			name = "response"
+		}
+		return name, wrap.Schema
+	}
+	return "response", raw
 }
 
 func convertMessage(msg niro.Message) chatMessage {
@@ -355,15 +393,28 @@ func audioFormat(mime string) string {
 // --- JSON types ---
 
 type chatRequest struct {
-	Model         string         `json:"model"`
-	Messages      []chatMessage  `json:"messages"`
-	Stream        bool           `json:"stream"`
-	StreamOptions *streamOptions `json:"stream_options,omitempty"`
-	Tools         []chatTool     `json:"tools,omitempty"`
-	MaxTokens     int            `json:"max_tokens,omitempty"`
-	Temperature   *float64       `json:"temperature,omitempty"`
-	TopP          *float64       `json:"top_p,omitempty"`
-	Stop          []string       `json:"stop,omitempty"`
+	Model          string              `json:"model"`
+	Messages       []chatMessage       `json:"messages"`
+	Stream         bool                `json:"stream"`
+	StreamOptions  *streamOptions      `json:"stream_options,omitempty"`
+	Tools          []chatTool          `json:"tools,omitempty"`
+	MaxTokens      int                 `json:"max_tokens,omitempty"`
+	Temperature    *float64            `json:"temperature,omitempty"`
+	TopP           *float64            `json:"top_p,omitempty"`
+	Stop           []string            `json:"stop,omitempty"`
+	ToolChoice     string              `json:"tool_choice,omitempty"`
+	ResponseFormat *chatResponseFormat `json:"response_format,omitempty"`
+}
+
+type chatResponseFormat struct {
+	Type       string          `json:"type"`
+	JSONSchema *chatJSONSchema `json:"json_schema,omitempty"`
+}
+
+type chatJSONSchema struct {
+	Name   string          `json:"name"`
+	Schema json.RawMessage `json:"schema"`
+	Strict bool            `json:"strict,omitempty"`
 }
 
 type streamOptions struct {
