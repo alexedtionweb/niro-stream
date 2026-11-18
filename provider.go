@@ -19,7 +19,7 @@ import (
 //   - Set ResponseMeta via Emitter.SetResponse before closing
 //   - Respect context cancellation
 //
-// Built-in: provider/openai, provider/anthropic, provider/google, provider/bedrock.
+// Built-in: provider/openai, provider/openrouter, provider/anthropic, provider/google, provider/bedrock.
 // Custom: implement this interface or use ProviderFunc.
 type Provider interface {
 	Generate(ctx context.Context, req *Request) (*Stream, error)

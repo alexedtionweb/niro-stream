@@ -24,6 +24,9 @@
 //	go run ./ollama image -model qwen2.5vl -image ./cat.jpg \
 //	    -prompt "Describe this picture in one sentence."
 //
+//	go run ./ollama decide -model gemma4:e2b \
+//	    -state "Checkout shows a blank screen after Pay."
+//
 //	# Audio path: ElevenLabs STT -> Ollama LLM
 //	# Ollama core does not yet accept raw audio in /api/chat, so we
 //	# transcribe first and feed the text into the model.
@@ -66,6 +69,8 @@ func main() {
 		runChat(args)
 	case "image":
 		runImage(args)
+	case "decide":
+		runDecide(args)
 	case "voice", "audio":
 		runVoice(args)
 	case "-h", "--help", "help":
@@ -81,9 +86,10 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "Ollama + niro-stream example")
 	fmt.Fprintln(os.Stderr)
 	fmt.Fprintln(os.Stderr, "Usage:")
-	fmt.Fprintln(os.Stderr, "  go run ./ollama chat  [-model …] [-prompt …]")
-	fmt.Fprintln(os.Stderr, "  go run ./ollama image [-model …] -image PATH [-prompt …]")
-	fmt.Fprintln(os.Stderr, "  go run ./ollama voice [-model …] -in AUDIO_FILE")
+	fmt.Fprintln(os.Stderr, "  go run ./ollama chat   [-model …] [-prompt …]")
+	fmt.Fprintln(os.Stderr, "  go run ./ollama image  [-model …] -image PATH [-prompt …]")
+	fmt.Fprintln(os.Stderr, "  go run ./ollama decide [-model …] [-state …]")
+	fmt.Fprintln(os.Stderr, "  go run ./ollama voice  [-model …] -in AUDIO_FILE")
 	fmt.Fprintln(os.Stderr)
 	fmt.Fprintln(os.Stderr, "Env:")
 	fmt.Fprintln(os.Stderr, "  OLLAMA_BASE_URL    OpenAI-compatible endpoint  (default http://localhost:11434/v1)")
@@ -158,6 +164,59 @@ func runImage(args []string) {
 	}
 
 	streamText(ctx, stream)
+}
+
+// ── decide: typed questions via chat JSON ────────────────────────────────────
+
+func runDecide(args []string) {
+	fs := flag.NewFlagSet("decide", flag.ExitOnError)
+	model := fs.String("model", "gemma4:e2b", "Ollama model tag")
+	state := fs.String("state", "My checkout page shows a blank screen after I click Pay.", "content to evaluate")
+	timeout := fs.Duration("timeout", 2*time.Minute, "overall timeout")
+	_ = fs.Parse(args)
+
+	llm := newOllamaProvider(*model)
+	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
+	defer cancel()
+
+	fmt.Fprintf(os.Stderr, "model=%s\n── decide ──\n", *model)
+	res, err := llm.Decide(ctx, &niro.DecisionRequest{
+		Model: *model,
+		State: *state,
+		Questions: map[string]niro.DecisionQuestion{
+			"is_bug": niro.Noul(
+				"Is the customer reporting a software defect?",
+				"Broken or unexpected product behavior.",
+				"Question or feature request.",
+			),
+			"team": niro.Choice("Which team should own this?", map[string]string{
+				"frontend": "Rendering, layout, or browser issues.",
+				"payments": "Checkout, billing, or payment issues.",
+				"account":  "Login or permissions issues.",
+			}),
+			"urgency": niro.Score(
+				"How urgent is this?",
+				"Can wait",
+				"This week",
+				"Blocking now",
+			),
+		},
+	})
+	if err != nil {
+		fatal(err)
+	}
+	for id, ans := range res.Answers {
+		switch ans.Kind {
+		case niro.DecisionNoul:
+			fmt.Printf("%s: noul=%.3f true=%v\n", id, ans.Noul, ans.True())
+		case niro.DecisionChoice:
+			fmt.Printf("%s: choice=%s\n", id, ans.Choice)
+		case niro.DecisionScore:
+			fmt.Printf("%s: score=%.3f\n", id, ans.Score)
+		default:
+			fmt.Printf("%s: kind=%s\n", id, ans.Kind)
+		}
+	}
 }
 
 // ── voice: ElevenLabs STT → Ollama LLM ───────────────────────────────────────
@@ -245,7 +304,7 @@ func runVoice(args []string) {
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
-func newOllamaProvider(model string) niro.Provider {
+func newOllamaProvider(model string) *compat.Provider {
 	baseURL := strings.TrimSpace(os.Getenv("OLLAMA_BASE_URL"))
 	if baseURL == "" {
 		baseURL = defaultOllamaBaseURL

@@ -27,16 +27,24 @@
 //	    fmt.Print(stream.Frame().Text)
 //	}
 //
-// # STT — streaming (speech-to-text via WebSocket)
+// # STT — streaming via Scribe realtime (WebSocket)
+//
+// Uses wss://api.elevenlabs.io/v1/speech-to-text/realtime with the Scribe
+// realtime models (default [defaultSTTStreamModel]). Audio is sent as
+// input_audio_chunk events; partial_transcript / committed_transcript
+// arrive as KindText frames with [niro.STTMeta] on Frame.Custom.
 //
 //	stt := elevenlabs.New(os.Getenv("ELEVENLABS_API_KEY"))
 //	stream, err := stt.Transcribe(ctx, &niro.STTRequest{
-//	    AudioStream:    micStream,          // *niro.Stream of KindAudio frames
+//	    AudioStream:    micStream, // *niro.Stream of KindAudio frames
 //	    InputFormat:    niro.AudioPCM16k,
 //	    InterimResults: true,
 //	})
 //	for stream.Next(ctx) {
-//	    fmt.Print(stream.Frame().Text) // partial & final transcripts
+//	    fr := stream.Frame()
+//	    if fr.Kind == niro.KindText {
+//	        fmt.Print(fr.Text)
+//	    }
 //	}
 package elevenlabs
 
@@ -60,14 +68,16 @@ import (
 )
 
 const (
-	defaultBaseURL     = "https://api.elevenlabs.io/v1"
-	defaultWSURL       = "wss://api.elevenlabs.io/v1/speech-to-text/realtime"
-	defaultVoice       = "Rachel"
-	defaultModel       = "eleven_multilingual_v2"
-	defaultSTTModel    = "scribe_v1"
-	defaultFormat      = "ogg_opus"
-	readBufSize        = 8192 // 8 KB per read — matches typical TLS record
-	wsHandshakeTimeout = 10 * time.Second
+	defaultBaseURL        = "https://api.elevenlabs.io/v1"
+	defaultWSURL          = "wss://api.elevenlabs.io/v1/speech-to-text/realtime"
+	defaultVoice          = "Rachel"
+	defaultModel          = "eleven_multilingual_v2"
+	defaultSTTModel       = "scribe_v1"           // batch HTTP
+	defaultSTTStreamModel = "scribe_v2_realtime"  // Scribe realtime WebSocket
+	defaultCommitStrategy = "vad"                 // auto-segment for streaming
+	defaultFormat         = "ogg_opus"
+	readBufSize           = 8192 // 8 KB per read — matches typical TLS record
+	wsHandshakeTimeout    = 10 * time.Second
 )
 
 // ── TTS request body ────────────────────────────────────────────────────────
@@ -113,11 +123,22 @@ type sttResponse struct {
 	Text string `json:"text"`
 }
 
-// sttWSResponse is a message received from the streaming STT WebSocket.
+// sttWSResponse is a message received from the Scribe realtime WebSocket.
 type sttWSResponse struct {
+	MessageType  string `json:"message_type"`
+	Text         string `json:"text"`
+	LanguageCode string `json:"language_code"`
+	Error        string `json:"error"`
+	// Legacy / alternate fields kept for test fixtures and older gateways.
+	IsFinal bool `json:"is_final"`
+}
+
+// sttWSAudioChunk is sent to Scribe realtime as input_audio_chunk.
+type sttWSAudioChunk struct {
 	MessageType string `json:"message_type"`
-	Text        string `json:"text"`
-	IsFinal     bool   `json:"is_final"`
+	AudioBase64 string `json:"audio_base_64"`
+	Commit      bool   `json:"commit"`
+	SampleRate  int    `json:"sample_rate,omitempty"`
 }
 
 // ── RequestHook ─────────────────────────────────────────────────────────────
@@ -131,18 +152,20 @@ type RequestHook func(r *http.Request)
 // Provider implements [niro.TTSProvider] and [niro.STTProvider]
 // using the ElevenLabs HTTP and WebSocket APIs.
 type Provider struct {
-	apiKey   string
-	baseURL  string
-	wsURL    string
-	client   *http.Client
-	bp       *pool.BytePool
-	voice    string
-	model    string
-	sttModel string
-	format   string
-	speed    float64
-	lang     string
-	hooks    []RequestHook
+	apiKey         string
+	baseURL        string
+	wsURL          string
+	client         *http.Client
+	bp             *pool.BytePool
+	voice          string
+	model          string
+	sttModel       string
+	sttStreamModel string
+	commitStrategy string
+	format         string
+	speed          float64
+	lang           string
+	hooks          []RequestHook
 }
 
 // compile-time interface checks
@@ -186,9 +209,21 @@ func WithModel(m string) Option {
 	return func(p *Provider) { p.model = m }
 }
 
-// WithSTTModel sets the default STT model.
+// WithSTTModel sets the default batch STT model (HTTP /speech-to-text).
 func WithSTTModel(m string) Option {
 	return func(p *Provider) { p.sttModel = m }
+}
+
+// WithSTTStreamModel sets the default Scribe realtime model
+// (e.g. "scribe_v2_realtime", "scribe_v3_live").
+func WithSTTStreamModel(m string) Option {
+	return func(p *Provider) { p.sttStreamModel = m }
+}
+
+// WithCommitStrategy sets the Scribe realtime commit strategy:
+// "manual", "vad" (default), or "turn_prediction".
+func WithCommitStrategy(s string) Option {
+	return func(p *Provider) { p.commitStrategy = s }
 }
 
 // WithFormat sets the default output format (e.g. "ogg_opus", "mp3_44100_128").
@@ -220,16 +255,18 @@ func WithRequestHook(fn RequestHook) Option {
 //	)
 func New(apiKey string, opts ...Option) *Provider {
 	p := &Provider{
-		apiKey:   apiKey,
-		baseURL:  defaultBaseURL,
-		wsURL:    defaultWSURL,
-		client:   &http.Client{Transport: transport.Default},
-		bp:       pool.DefaultBytePool,
-		voice:    defaultVoice,
-		model:    defaultModel,
-		sttModel: defaultSTTModel,
-		format:   defaultFormat,
-		speed:    1.0,
+		apiKey:         apiKey,
+		baseURL:        defaultBaseURL,
+		wsURL:          defaultWSURL,
+		client:         &http.Client{Transport: transport.Default},
+		bp:             pool.DefaultBytePool,
+		voice:          defaultVoice,
+		model:          defaultModel,
+		sttModel:       defaultSTTModel,
+		sttStreamModel: defaultSTTStreamModel,
+		commitStrategy: defaultCommitStrategy,
+		format:         defaultFormat,
+		speed:          1.0,
 	}
 	for _, o := range opts {
 		o(p)
@@ -356,14 +393,14 @@ func (p *Provider) consumeTTS(ctx context.Context, body io.ReadCloser, out *niro
 // Transcribe implements [niro.STTProvider].
 //
 // Routing:
-//   - If req.AudioStream is set → streaming STT via WebSocket
+//   - If req.AudioStream is set → Scribe realtime WebSocket
 //     (wss://api.elevenlabs.io/v1/speech-to-text/realtime).
-//     The returned Stream emits [niro.KindText] frames as partial
-//     and final transcripts arrive over the connection.
+//     Emits [niro.KindText] frames; [niro.STTMeta] is attached on
+//     Frame.Custom (Type [niro.CustomSTTMeta]).
 //   - Otherwise → batch STT via HTTP POST /v1/speech-to-text.
-//     The returned Stream emits a single [niro.KindText] frame.
+//     Emits a single final [niro.KindText] frame.
 //
-// InterimResults controls whether partial transcripts are emitted
+// InterimResults controls whether partial_transcript events are emitted
 // (WebSocket mode only; ignored for batch).
 func (p *Provider) Transcribe(ctx context.Context, req *niro.STTRequest) (*niro.Stream, error) {
 	if req == nil {
@@ -456,17 +493,22 @@ func (p *Provider) transcribeBatch(ctx context.Context, req *niro.STTRequest) (*
 	return niro.StreamFromSlice([]niro.Frame{niro.TextFrame(text)}), nil
 }
 
-// ── STT: streaming (WebSocket) ──────────────────────────────────────────────
+// ── STT: Scribe realtime (WebSocket) ────────────────────────────────────────
 
 func (p *Provider) transcribeStream(ctx context.Context, req *niro.STTRequest) (*niro.Stream, error) {
 	model := req.Model
 	if model == "" {
-		model = p.sttModel
+		model = p.sttStreamModel
 	}
 	lang := req.Language
 	if lang == "" {
 		lang = p.lang
 	}
+	commitStrategy := p.commitStrategy
+	if commitStrategy == "" {
+		commitStrategy = defaultCommitStrategy
+	}
+	audioFormat, sampleRate := scribeAudioParams(req.InputFormat)
 
 	u, err := url.Parse(p.wsURL)
 	if err != nil {
@@ -477,8 +519,11 @@ func (p *Provider) transcribeStream(ctx context.Context, req *niro.STTRequest) (
 	if lang != "" {
 		q.Set("language_code", lang)
 	}
-	if req.InterimResults {
-		q.Set("enable_partial_transcripts", "true")
+	if audioFormat != "" {
+		q.Set("audio_format", audioFormat)
+	}
+	if commitStrategy != "" {
+		q.Set("commit_strategy", commitStrategy)
 	}
 	u.RawQuery = q.Encode()
 
@@ -499,20 +544,21 @@ func (p *Provider) transcribeStream(ctx context.Context, req *niro.STTRequest) (
 
 	stream, emitter := niro.NewStream(niro.DefaultStreamBuffer)
 	wsCtx, wsCancel := context.WithCancel(ctx)
+	sessionStarted := make(chan struct{})
 
-	// Read loop — receives transcript messages from ElevenLabs.
-	go p.sttReadLoop(wsCtx, conn, emitter, req.InterimResults)
-
-	// Write loop — sends audio frames from the input stream.
-	go p.sttWriteLoop(wsCtx, wsCancel, conn, req.AudioStream, emitter)
+	go p.sttReadLoop(wsCtx, conn, emitter, req.InterimResults, sessionStarted)
+	go p.sttWriteLoop(wsCtx, wsCancel, conn, req.AudioStream, emitter, sampleRate, sessionStarted)
 
 	return stream, nil
 }
 
-// sttReadLoop reads JSON messages from the WebSocket and emits KindText frames.
-func (p *Provider) sttReadLoop(ctx context.Context, conn *websocket.Conn, out *niro.Emitter, interim bool) {
+// sttReadLoop reads Scribe realtime events and emits KindText frames.
+func (p *Provider) sttReadLoop(ctx context.Context, conn *websocket.Conn, out *niro.Emitter, interim bool, sessionStarted chan struct{}) {
 	defer out.Close()
 	defer conn.Close()
+
+	startedOnce := sync.Once{}
+	defer startedOnce.Do(func() { close(sessionStarted) })
 
 	for {
 		select {
@@ -537,33 +583,80 @@ func (p *Provider) sttReadLoop(ctx context.Context, conn *websocket.Conn, out *n
 			continue
 		}
 
-		text := strings.TrimSpace(msg.Text)
-		if text == "" {
+		switch msg.MessageType {
+		case "session_started":
+			startedOnce.Do(func() { close(sessionStarted) })
 			continue
-		}
 
-		isFinal := msg.IsFinal || isFinalMessageType(msg.MessageType)
+		case "partial_transcript", "partial":
+			text := strings.TrimSpace(msg.Text)
+			if text == "" || !interim {
+				continue
+			}
+			if err := out.Emit(ctx, sttTextFrame(text, false, msg.LanguageCode)); err != nil {
+				return
+			}
 
-		if !isFinal && !interim {
-			continue
-		}
+		case "committed_transcript", "final_transcript", "transcript.final", "final":
+			text := strings.TrimSpace(msg.Text)
+			if text == "" {
+				continue
+			}
+			if err := out.Emit(ctx, sttTextFrame(text, true, msg.LanguageCode)); err != nil {
+				return
+			}
 
-		if emitErr := out.Emit(ctx, niro.TextFrame(text)); emitErr != nil {
+		case "auth_error", "quota_exceeded", "transcriber_error", "input_error",
+			"invalid_request", "error", "rate_limited", "unaccepted_terms",
+			"queue_overflow", "resource_exhausted", "session_time_limit_exceeded",
+			"chunk_size_exceeded", "insufficient_audio_activity", "commit_throttled":
+			errMsg := strings.TrimSpace(msg.Error)
+			if errMsg == "" {
+				errMsg = msg.MessageType
+			}
+			out.Error(niro.NewError(niro.ErrCodeProviderError, "scribe: "+errMsg).WithProvider("elevenlabs"))
 			return
+
+		default:
+			// Ignore timestamps/entities/edited/diarized extras and keepalives.
+			if msg.IsFinal {
+				text := strings.TrimSpace(msg.Text)
+				if text == "" {
+					continue
+				}
+				if err := out.Emit(ctx, sttTextFrame(text, true, msg.LanguageCode)); err != nil {
+					return
+				}
+			}
 		}
 	}
 }
 
-// sttWriteLoop reads KindAudio frames from the input stream and sends
-// them as base64-encoded JSON messages over the WebSocket.
-//
-// The audio is base64-encoded into a pre-allocated buffer. The JSON
-// envelope is assembled directly (base64 output is always JSON-safe)
-// to avoid a json.Marshal round-trip per audio frame.
-func (p *Provider) sttWriteLoop(ctx context.Context, cancel context.CancelFunc, conn *websocket.Conn, src *niro.Stream, out *niro.Emitter) {
-	defer cancel()
+// sttWriteLoop sends Scribe input_audio_chunk events, then a final commit.
+func (p *Provider) sttWriteLoop(
+	ctx context.Context,
+	cancel context.CancelFunc,
+	conn *websocket.Conn,
+	src *niro.Stream,
+	out *niro.Emitter,
+	sampleRate int,
+	sessionStarted <-chan struct{},
+) {
+	// Only cancel on hard write failures. A successful commit must leave the
+	// read loop alive so committed_transcript events can still arrive.
+	fail := func(err error) {
+		out.Error(err)
+		cancel()
+	}
 
-	// Pre-allocate base64 buffer. Typical 20ms @ 16kHz PCM frame: 640 bytes → ~856 base64.
+	select {
+	case <-ctx.Done():
+		return
+	case <-sessionStarted:
+	case <-time.After(wsHandshakeTimeout):
+		// Proceed anyway — some test mocks never send session_started.
+	}
+
 	b64Buf := make([]byte, base64.StdEncoding.EncodedLen(readBufSize))
 
 	for src.Next(ctx) {
@@ -578,40 +671,72 @@ func (p *Provider) sttWriteLoop(ctx context.Context, cancel context.CancelFunc, 
 		}
 		base64.StdEncoding.Encode(b64Buf[:needed], f.Data)
 
-		// Assemble JSON directly — base64 is always JSON-safe (no escaping needed).
-		msg := make([]byte, 0, needed+20)
-		msg = append(msg, `{"audio_base_64":"`...)
-		msg = append(msg, b64Buf[:needed]...)
-		msg = append(msg, `"}`...)
-
-		if err := conn.WriteMessage(websocket.TextMessage, msg); err != nil {
+		msg := sttWSAudioChunk{
+			MessageType: "input_audio_chunk",
+			AudioBase64: string(b64Buf[:needed]),
+			Commit:      false,
+			SampleRate:  sampleRate,
+		}
+		raw, err := niro.JSONMarshal(msg)
+		if err != nil {
+			fail(niro.WrapError(niro.ErrCodeStreamError, "marshal", err))
+			return
+		}
+		if err := conn.WriteMessage(websocket.TextMessage, raw); err != nil {
 			if ctx.Err() == nil {
-				out.Error(niro.WrapError(niro.ErrCodeStreamError, "ws write", err))
+				fail(niro.WrapError(niro.ErrCodeStreamError, "ws write", err))
 			}
 			return
 		}
 	}
 
 	if err := src.Err(); err != nil {
-		out.Error(niro.WrapError(niro.ErrCodeStreamError, "audio stream", err))
+		fail(niro.WrapError(niro.ErrCodeStreamError, "audio stream", err))
 		return
 	}
 
-	if err := conn.WriteMessage(
-		websocket.CloseMessage,
-		websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""),
-	); err != nil && ctx.Err() == nil {
-		out.Error(niro.WrapError(niro.ErrCodeStreamError, "ws close", err))
+	// Final commit flushes any remaining uncommitted audio (manual + vad).
+	// Read loop owns conn lifetime so committed_transcript can still arrive.
+	commit, err := niro.JSONMarshal(sttWSAudioChunk{
+		MessageType: "input_audio_chunk",
+		AudioBase64: "",
+		Commit:      true,
+		SampleRate:  sampleRate,
+	})
+	if err != nil {
+		fail(niro.WrapError(niro.ErrCodeStreamError, "marshal", err))
+		return
+	}
+	if err := conn.WriteMessage(websocket.TextMessage, commit); err != nil && ctx.Err() == nil {
+		fail(niro.WrapError(niro.ErrCodeStreamError, "ws commit", err))
 	}
 }
 
-// isFinalMessageType checks known ElevenLabs final transcript message types.
-func isFinalMessageType(t string) bool {
-	switch t {
-	case "final_transcript", "committed_transcript", "transcript.final", "final":
-		return true
+func sttTextFrame(text string, final bool, lang string) niro.Frame {
+	f := niro.TextFrame(text)
+	f.Custom = &niro.ExperimentalFrame{
+		Type: niro.CustomSTTMeta,
+		Data: niro.STTMeta{Final: final, Language: lang},
+	}
+	return f
+}
+
+// scribeAudioParams maps a niro audio MIME to Scribe audio_format + sample_rate.
+func scribeAudioParams(mime string) (format string, sampleRate int) {
+	switch mime {
+	case niro.AudioPCM16k:
+		return "pcm_16000", 16000
+	case niro.AudioPCM24k:
+		return "pcm_24000", 24000
+	case niro.AudioPCM44k:
+		return "pcm_44100", 44100
+	case niro.AudioPCMU8k:
+		return "ulaw_8000", 8000
+	case niro.AudioPCMA8k:
+		return "pcm_8000", 8000
 	default:
-		return false
+		// Safe default for realtime mic capture.
+		return "pcm_16000", 16000
 	}
 }
 

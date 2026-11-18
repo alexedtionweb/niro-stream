@@ -1,6 +1,6 @@
 module github.com/alexedtionweb/niro-stream/examples
 
-go 1.26.0
+go 1.26.10
 
 require (
 	github.com/alexedtionweb/niro-stream v0.0.0
@@ -10,6 +10,7 @@ require (
 	github.com/alexedtionweb/niro-stream/provider/elevenlabs v0.0.0
 	github.com/alexedtionweb/niro-stream/provider/google v0.0.0-00010101000000-000000000000
 	github.com/alexedtionweb/niro-stream/provider/openai v0.0.0
+	github.com/alexedtionweb/niro-stream/provider/openrouter v0.0.0
 	github.com/alexedtionweb/niro-stream/provider/realtime v0.0.0-00010101000000-000000000000
 	github.com/aws/aws-sdk-go-v2/config v1.27.27
 )
@@ -18,6 +19,7 @@ require (
 	cloud.google.com/go v0.116.0 // indirect
 	cloud.google.com/go/auth v0.20.0 // indirect
 	cloud.google.com/go/compute/metadata v0.9.0 // indirect
+	github.com/OpenRouterTeam/go-sdk v0.9.116 // indirect
 	github.com/anthropics/anthropic-sdk-go v1.26.0 // indirect
 	github.com/aws/aws-sdk-go-v2 v1.47.3 // indirect
 	github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.7.22 // indirect
@@ -45,6 +47,7 @@ require (
 	github.com/googleapis/gax-go/v2 v2.22.0 // indirect
 	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/openai/openai-go v0.1.0-beta.10 // indirect
+	github.com/spyzhov/ajson v0.9.6 // indirect
 	github.com/theory/jsonpath v0.11.0 // indirect
 	github.com/tidwall/gjson v1.18.0 // indirect
 	github.com/tidwall/match v1.1.1 // indirect
@@ -76,5 +79,6 @@ replace (
 	github.com/alexedtionweb/niro-stream/provider/elevenlabs => ../provider/elevenlabs
 	github.com/alexedtionweb/niro-stream/provider/google => ../provider/google
 	github.com/alexedtionweb/niro-stream/provider/openai => ../provider/openai
+	github.com/alexedtionweb/niro-stream/provider/openrouter => ../provider/openrouter
 	github.com/alexedtionweb/niro-stream/provider/realtime => ../provider/realtime
 )

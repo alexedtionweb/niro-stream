@@ -11,6 +11,9 @@
 //   - [Processor]: Composable stream transformer (building block in pipe package)
 //   - [Pipeline]: Concurrent chain of Processors (pipe package)
 //   - [Provider]: LLM backend interface (OpenAI, Anthropic, Google, Bedrock, or custom)
+//   - [ImageProvider] / [VideoProvider]: media generation (OpenRouter, or custom)
+//   - [DecisionProvider]: typed decisions — noul/choice/score/box (OpenRouter, OpenAI, compat/Ollama)
+//   - [TTSProvider] / [STTProvider]: speech synthesis and transcription
 //   - [Hook]: Telemetry interface for tracing every generation (hook package)
 //
 // # Quick Start

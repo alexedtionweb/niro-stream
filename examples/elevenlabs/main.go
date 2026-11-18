@@ -190,7 +190,7 @@ func runSTT(args []string) {
 func runSTTStream(args []string) {
 	fs := flag.NewFlagSet("stt-stream", flag.ExitOnError)
 	inPath := fs.String("in", "", "input raw PCM file path (recommended: 16kHz mono s16le)")
-	model := fs.String("model", "", "ElevenLabs STT model id (optional)")
+	model := fs.String("model", "scribe_v2_realtime", "Scribe realtime model id")
 	lang := fs.String("lang", "", "language code hint, e.g. en (optional)")
 	frameBytes := fs.Int("frame-bytes", 640, "bytes per audio frame to send (20ms @ 16kHz mono s16le is 640)")
 	frameDelay := fs.Duration("frame-delay", 20*time.Millisecond, "delay between frames (simulate realtime)")
@@ -253,14 +253,24 @@ func runSTTStream(args []string) {
 
 	for stream.Next(ctx) {
 		fr := stream.Frame()
-		if fr.Kind == niro.KindText {
-			fmt.Print(fr.Text)
+		if fr.Kind != niro.KindText {
+			continue
+		}
+		final := true
+		if fr.Custom != nil && fr.Custom.Type == niro.CustomSTTMeta {
+			if meta, ok := fr.Custom.Data.(niro.STTMeta); ok {
+				final = meta.Final
+			}
+		}
+		if final {
+			fmt.Printf("[final] %s\n", fr.Text)
+		} else {
+			fmt.Printf("[partial] %s\n", fr.Text)
 		}
 	}
 	if err := stream.Err(); err != nil {
 		fatal(err)
 	}
-	fmt.Println()
 }
 
 func inferMIMEFromPath(path string) string {
